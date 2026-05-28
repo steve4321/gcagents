@@ -106,16 +106,23 @@ class CompanyState(BaseModel):
 ### 工作流图 (`orchestrator/graph/pipeline.py`)
 
 ```
-扫描 ──▶ 评估 ──▶ 设计 ──▶ 美术 ──▶ 开发 ──▶ QA ──▶ 构建 ──▶ 部署 ──▶ 完成
-                                  ▲         │
-                                  │         │ (失败且<3次)
-                                  └─────────┘
+收集反馈 ──▶ 扫描 ──▶ 评估 ──┬─▶ 设计 ──▶ 美术 ──▶ 开发 ──▶ QA ──▶ 构建 ──▶ 部署 ──▶ 存版本 ──▶ 完成
+                            │                                    ▲         │
+                            │                                    │         │ (失败且<3次)
+                            ├─▶ 更新 ◀───────────────────────────┘         │
+                            │       │                                      │
+                            │       └─▶ 开发（跳过设计/美术）───────────────┘
+                            │
+                            └─▶ 重新扫描 / 休眠
 ```
 
 **关键路由逻辑**：
 
-- **评估后**：如果分数 ≥ 0.6 且 genre 未重复 → 进入设计；否则重新扫描或等待
+- **收集反馈**：每个周期开始时，先从 itch.io 游戏页面抓取用户评论，AI 分类为 bug/feature/praise/question
+- **评估后**：如果存在 ≥2 条未处理的 bug/feature 反馈 → MODE_UPDATE 进入更新流程；否则按评分决定设计/重新扫描/休眠
+- **更新流程**：跳过设计和美术阶段，直接进入开发修复
 - **QA 后**：如果通过 → 构建；如果失败且重试 < 3 次 → 回开发修复；否则终止
+- **存版本**：部署后自动在 `game_versions` 表记录 GDD 快照和版本号
 - **Agent 日志包装器**：`_logged_node()` 自动记录每个节点的起止时间、耗时、状态到数据库
 
 ### 执行入口 (`orchestrator/main.py`)
@@ -150,6 +157,9 @@ python3 -m orchestrator.main scan   # 仅执行市场扫描
 
 - 读取 `market_insights`，按 `market_opportunity_score` 排序
 - 通过 `_get_completed_genres()` 查询数据库已做过的 genre，避免重复
+- **反馈驱动更新**：通过 `_find_project_to_update()` 检查已上线项目的未处理反馈
+  - 如果 ≥2 条 bug/feature 反馈 → 路由到 MODE_UPDATE（跳过设计/美术，直接修复）
+  - 否则按评分决定是否启动新项目
 - 评分 > 0.6 则生成 `GameProposal` 并进入设计阶段
 - 评分不足则继续扫描或进入休眠
 
@@ -164,9 +174,23 @@ python3 -m orchestrator.main scan   # 仅执行市场扫描
 
 ### 4. 美术师 (`agents/dev/artist/`)
 
-**设计意图**：连接 ComfyUI（Stable Diffusion）生成像素艺术资产。
+通过 **ComfyUI + Stable Diffusion 1.5** 生成游戏美术资产。
 
-**现实情况**：本地 ComfyUI 未部署，自动降级为 Phaser 内置形状渲染（矩形、圆形、多边形），不需要外部资源文件。
+**核心组件**：
+- `comfyui_client.py` — ComfyUI HTTP API 客户端（queue → poll → download）
+- `sprite_generator.py` — 角色精灵、背景、UI 图标生成器
+- `workflows.py` — SD 1.5 工作流定义（含 VAE 连接，兼容 ComfyUI v1.44+）
+
+**资产类型**：
+| 类型 | 分辨率 | 用途 |
+|---|---|---|
+| 背景图 | 800×600 | 菜单、游戏、结算场景背景 |
+| 角色精灵 | 64×64 | 玩家、NPC 角色 |
+| UI 图标 | 32×32 | 道具、能力、金币等 |
+
+**性能**：RTX 3060 首次生成 ~391s（模型加载），后续 ~10s/张。
+
+**集成方式**：生成的 PNG 放入游戏 `public/assets/`，BootScene 通过 `this.load.image()` 加载，场景用 `this.add.image()` 替代 `this.add.rectangle()` 矩形占位符。
 
 ### 5. 程序员 (`agents/dev/programmer/`)
 
@@ -179,6 +203,8 @@ generate_game_code(gdd, project_dir, config, build_error="")
 - 接收 GDD，用 Jinja2 模板 + AI 生成完整游戏源码
 - 强制约束：`import * as Phaser from 'phaser'`（Phaser 4 ESM 无默认导出）
 - **构建重试机制**：如果 `build_error` 参数非空，自动将错误信息追加到 AI prompt 中，让 AI 修复后重新生成
+- **分析埋点**：在生成的游戏代码中注入 `navigator.sendBeacon` 调用，上报 `game_start`/`game_over` 事件（含分数、游戏时长）
+- **磁盘管理**：构建完成后自动删除 `node_modules/`，npm 缓存保证后续安装速度
 - 生成后自动执行 `npm install && npm run build`
 - 使用 `project-dir-timestamp` 模式避免目录冲突
 
@@ -214,10 +240,13 @@ generate_game_code(gdd, project_dir, config, build_error="")
 |---|---|---|
 | `agent_logs` | 每个 Agent 节点的执行日志 | node_name, status, duration_ms, error |
 | `orchestrator_state` | 管道状态快照 | phase, errors, updated_at |
-| `game_projects` | 游戏项目记录 | name, genre, status, gdd, itch_url |
+| `game_projects` | 游戏项目记录 | name, genre, status, gdd, itch_url, current_version, feedback_count |
 | `market_signals` | 原始市场信号 | source, genre, title, score, captured_at |
 | `market_reports` | AI 市场分析报告 | signals_count, opportunities_json, raw_analysis |
 | `company_memory` | 公司长期记忆 | category, title, content, importance |
+| `game_feedback` | 用户反馈（itch.io 评论抓取）| project_id, category, content, processed, post_id |
+| `game_versions` | 版本快照 | project_id, version, gdd_snapshot, changelog |
+| `game_metrics` | 游戏遥测数据 | project_id, event_type, score, play_time |
 
 ### 写入时机
 
@@ -227,6 +256,9 @@ generate_game_code(gdd, project_dir, config, build_error="")
 | 市场扫描完成 | `market_signals` + `market_reports` |
 | 管道阶段变更 | `orchestrator_state` + `game_projects` |
 | CEO 决策 | `game_projects`（更新状态） |
+| 部署完成 | `game_versions`（版本号 + GDD 快照） |
+| 反馈收集 | `game_feedback`（itch.io 评论 + AI 分类） |
+| 游戏运行 | `game_metrics`（分析事件埋点上报） |
 
 ---
 
@@ -248,6 +280,9 @@ Dashboard 运行在独立进程（FastAPI + 静态 HTML/CSS/JS），与管道解
 | `/api/pipeline/history` | GET | 管道历史快照 |
 | `/api/memory` | GET | 公司记忆 |
 | `/api/gdd/{id}` | GET | 项目 GDD 详情 |
+| `/api/analytics/event` | POST | 游戏遥测事件（game_start/game_over） |
+| `/api/feedback/{id}` | GET | 项目反馈列表 + 分类统计 |
+| `/api/projects/live` | GET | 已上线项目列表 |
 | `/games-preview/{name}/dist/` | GET | 游戏预览静态文件 |
 
 ### 前端功能
@@ -283,8 +318,9 @@ Dashboard 运行在独立进程（FastAPI + 静态 HTML/CSS/JS），与管道解
 ### 为什么游戏用 Phaser 4？
 
 - **Web 原生**：无插件、无下载，浏览器直接运行
+- **纯单机**：游戏代码无服务器依赖，无网络请求，离线可玩
 - **TypeScript 支持**：AI 生成代码类型安全
-- **内置形状渲染**：无美术资产也能制作可玩游戏
+- **ComfyUI 美术集成**：通过 SD 1.5 生成真实游戏资产替代矩形占位符
 - **Vite 构建**：现代打包工具，输出为单 HTML5 文件
 
 ---
@@ -294,32 +330,37 @@ Dashboard 运行在独立进程（FastAPI + 静态 HTML/CSS/JS），与管道解
 ```
 gcagents/
 ├── orchestrator/           # 核心编排 (LangGraph)
-│   ├── graph/pipeline.py   #   状态机构建 + 节点注册
-│   ├── nodes/ceo.py        #   CEO 评估 + 路由决策
-│   ├── state.py            #   全局状态定义
-│   ├── persistence.py      #   SQLite 持久化
+│   ├── graph/pipeline.py   #   状态机构建 + 反馈循环 + MODE_UPDATE 路由
+│   ├── nodes/ceo.py        #   CEO 评估 + 反馈驱动更新决策
+│   ├── state.py            #   全局状态定义（含 UPDATING 阶段）
+│   ├── persistence.py      #   SQLite 持久化（含反馈/版本/指标表）
 │   └── main.py             #   CLI 入口
 ├── agents/                 # AI Agent 实现
 │   ├── research/           #   市场研究
 │   │   ├── scanner.py      #     多源扫描
 │   │   ├── analyzer.py     #     AI 分析
-│   │   ├── sources/        #     各数据源适配器
+│   │   └── sources/        #     各数据源适配器
 │   ├── dev/                #   游戏开发
 │   │   ├── designer/       #     GDD 生成
-│   │   ├── artist/         #     美术生成 (ComfyUI)
-│   │   ├── programmer/     #     代码生成 (DeepSeek)
+│   │   ├── artist/         #     美术生成 (ComfyUI SD 1.5)
+│   │   │   ├── comfyui_client.py  # ComfyUI HTTP 客户端
+│   │   │   ├── sprite_generator.py # 精灵/背景/图标生成
+│   │   │   └── workflows.py       # SD 1.5 工作流定义
+│   │   ├── programmer/     #     代码生成 (DeepSeek + 分析埋点)
 │   │   ├── qa/             #     质量测试
 │   │   └── builder/        #     Vite 构建
 │   └── ops/                #   运维部署
-│       └── deployer/       #     itch.io 发布
+│       ├── deployer/       #     itch.io 发布
+│       └── analytics/      #     数据分析
+│           └── feedback_collector.py  # itch.io 评论抓取 + AI 分类
 ├── dashboard/web/          # 监控面板
-│   ├── api_server.py       #   FastAPI 后端
+│   ├── api_server.py       #   FastAPI 后端（含分析/反馈 API）
 │   ├── index.html          #   前端 HTML
 │   ├── app.js              #   前端逻辑
 │   └── style.css           #   样式
 ├── shared/                 # 共享模块
 │   ├── config.py           #   配置加载 (pydantic-settings)
-│   └── models.py           #   数据模型
+│   └── models.py           #   数据模型（含 FeedbackCategory, GameVersion 等）
 ├── config/                 # 配置文件
 │   ├── agents.yaml         #   Agent 与模型映射
 │   └── sources.yaml        #   市场数据源配置
@@ -344,6 +385,11 @@ gcagents/
 | 最近 | Dashboard 一键运行按钮 + 游戏 iframe 预览 |
 | 最近 | 修复 Butler 部署（移除交互式 login，直接用 API key） |
 | 最近 | 管道全流程验证通过 |
+| 最近 | ComfyUI 美术管线：SD 1.5 生成背景/角色/UI 图标，接入游戏代码 |
+| 最近 | 反馈闭环：itch.io 评论抓取 → AI 分类 → CEO 路由 MODE_UPDATE |
+| 最近 | 分析埋点：游戏运行时上报 game_start/game_over 事件 |
+| 最近 | 版本管理：部署后自动存 GDD 快照 + 版本号 |
+| 最近 | 已发布游戏集成 ComfyUI 真实美术资源（pixel-parkour-prodigy v1.3.0）|
 
 ---
 
@@ -363,7 +409,7 @@ BUTLER_USERNAME=kingsman666    # itch.io 用户名
 - Python 3.11+
 - Node.js 18+ (游戏构建)
 - Butler CLI v15+ (itch.io 部署，可选)
-- ComfyUI + Stable Diffusion (美术生成，可选)
+- ComfyUI + Stable Diffusion 1.5 (美术生成，需 GPU)
 
 ### 启动
 
