@@ -251,6 +251,59 @@ async def check_pipeline_status():
     return {"running": False, "status": status, "exit_code": ret}
 
 
+# ── Analytics ─────────────────────────────────────────────────────────────────
+
+@app.post("/api/analytics/event")
+async def receive_analytics(game: str = "", event: str = "", score: float = 0, play_time: int = 0):
+    from orchestrator.persistence import save_game_metric, _get_engine
+    from sqlalchemy import text
+    try:
+        engine = _get_engine()
+        async with AsyncSession(engine) as db:
+            row = await db.execute(
+                text("SELECT id FROM game_projects WHERE name = :name"),
+                {"name": game},
+            )
+            row = row.fetchone()
+            if row:
+                pid = row[0]
+                await save_game_metric(pid, f"event_{event}", 1)
+                if score > 0:
+                    await save_game_metric(pid, "last_score", score)
+                if play_time > 0:
+                    await save_game_metric(pid, "avg_session_s", play_time)
+    except Exception:
+        pass
+    return {"ok": True}
+
+
+# ── Feedback API ──────────────────────────────────────────────────────────────
+
+@app.get("/api/feedback/{project_id}")
+async def list_feedback(project_id: int, unprocessed_only: bool = False):
+    from orchestrator.persistence import _get_engine
+    from sqlalchemy import text
+    engine = _get_engine()
+    async with AsyncSession(engine) as db:
+        if unprocessed_only:
+            rows = await db.execute(
+                text("SELECT * FROM game_feedback WHERE project_id = :pid AND processed = 0 ORDER BY posted_at DESC"),
+                {"pid": project_id},
+            )
+        else:
+            rows = await db.execute(
+                text("SELECT * FROM game_feedback WHERE project_id = :pid ORDER BY posted_at DESC LIMIT 50"),
+                {"pid": project_id},
+            )
+        return [dict(r._mapping) for r in rows.fetchall()]
+
+
+@app.get("/api/projects/live")
+async def list_live_projects():
+    from orchestrator.persistence import get_live_projects
+    return await get_live_projects()
+
+
 # ── Game Preview Static Files ─────────────────────────────────────────────────
 
 games_output = config.games_output_dir
