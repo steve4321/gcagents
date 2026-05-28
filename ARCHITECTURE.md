@@ -2,9 +2,13 @@
 
 ## 概述
 
-GCAgents 是一个完全自主运行的 AI 游戏公司系统。它像一家真实的游戏公司一样运作：研究市场趋势 → 评估机会 → 设计方案 → 开发代码 → 质量测试 → 构建发布 → 部署上线。整个过程**零人工干预**，所有决策和产出均由 AI Agent 驱动。
+GCAgents 是一个多项目并行运作的 AI 游戏公司系统。它像一家真实的游戏公司一样运作：CEO 统一调度多个项目，每个项目独立推进（调研、设计、开发、测试），重要决策必须经过人类批准。12 个市场数据源提供情报支撑，Dashboard 实时展示项目看板、任务监控和决策卡片。
 
-**核心理念**：用 AI Agent 模拟游戏公司组织架构，每一个员工角色对应一个 Agent 节点，通过 LangGraph 状态机编排协作流程。
+**核心理念**：
+- 用 AI Agent 模拟游戏公司组织架构，CEO 作为调度大脑管理多个并行项目
+- **重要决策必须人类批准**：新项目启动、发布上线、项目取消、预算超限、方向调整
+- 12 个市场数据源（itch.io/Reddit/SteamSpy/TikTok/YouTube 等）提供跨源关联分析
+- 每个项目有独立的生命周期和进度，互不阻塞
 
 ---
 
@@ -14,37 +18,34 @@ GCAgents 是一个完全自主运行的 AI 游戏公司系统。它像一家真�
 ┌──────────────────────────────────────────────────────────────────────┐
 │                         GCAgents System                              │
 │                                                                      │
-│  ┌─────────────┐     ┌─────────────────────────────────────────┐    │
-│  │   CLI / API  │────▶│         LangGraph State Machine          │    │
-│  │  (入口)      │     │                                          │    │
-│  └─────────────┘     │  ┌──────┐  ┌────────┐  ┌───────────┐    │    │
-│                      │  │ Scan │─▶│Evaluate│─▶│  Design   │    │    │
-│  ┌─────────────┐     │  └──────┘  └────────┘  └─────┬─────┘    │    │
-│  │  Dashboard   │────▶│         ┌────────┐          │          │    │
-│  │  (FastAPI +  │     │  ◀─────│   QA   │◀─────┐   │          │    │
-│  │   HTML/CSS + │     │  │     └────────┘      │   ▼          │    │
-│  │   WebSocket) │     │  │     ┌──────────┐    │ ┌────────┐   │    │
-│  └─────────────┘     │  │     │  Build   │    │ │  Art   │   │    │
-│                      │  │     └────┬─────┘    │ └────┬───┘   │    │
-│  ┌─────────────┐     │  │          ▼          │     │       │    │
-│  │   SQLite DB  │◀────│  │     ┌──────────┐    │     ▼       │    │
-│  │  (持久化)    │     │  │     │  Deploy  │    │ ┌────────┐   │    │
-│  └─────────────┘     │  │     └──────────┘    │ │ CFO    │   │    │
-│                      │  └──────────────────────┼ │ Check  │   │    │
-│  ┌─────────────┐     │                         ▼ └───┬────┘   │    │
-│  │ Executive    │     │                    ┌──────────┐ │       │    │
-│  │ Chat (WS)   │────▶│                    │ Develop  │◀┘       │    │
-│  │ CEO/CFO/COO │     │                    └──────────┘         │    │
-│  └─────────────┘     └─────────────────────────────────────────┘    │
+│  ┌─────────────────────────────────────────────────────────────┐     │
+│  │                    CEO Scheduler (调度大脑)                   │     │
+│  │  每个 tick: 处理指令 → 检查决策点 → 推进项目 → 执行任务      │     │
+│  └────────┬──────────┬──────────┬──────────┬───────────────────┘     │
+│           │          │          │          │                          │
+│     ┌─────▼───┐ ┌────▼────┐ ┌──▼───┐ ┌───▼────┐                     │
+│     │Project A│ │Project B│ │Proj C│ │ Market │                     │
+│     │ 开发中  │ │ 设计中  │ │待批准│ │ 扫描器 │                     │
+│     └────┬────┘ └────┬────┘ └──┬───┘ └───┬────┘                     │
+│          │           │         │         │                           │
+│  ┌───────▼───────────▼─────────▼─────────▼───────────────────┐      │
+│  │                     Task Queue (任务队列)                   │      │
+│  │  scan | design | art_gen | develop | qa | build | deploy  │      │
+│  └────────────────────────────────────────────────────────────┘      │
 │                                                                      │
-│  ┌────────────────────────────────────────────────────────────┐     │
-│  │                      AI Models                              │     │
-│  │  ┌───────────┐  ┌───────────┐  ┌───────────────────────┐   │     │
-│  │  │ glm-4-flash│  │deepseek-  │  │  Phaser 4 + Vite     │   │     │
-│  │  │(免费·分析) │  │coder      │  │  (游戏运行时)        │   │     │
-│  │  └───────────┘  │(代码生成)  │  └───────────────────────┘   │     │
-│  │                 └───────────┘                                │     │
-│  └────────────────────────────────────────────────────────────┘     │
+│  ┌─────────────┐     ┌────────────────────────────────────────┐     │
+│  │  Dashboard   │     │           AI Models                    │     │
+│  │  项目看板     │     │  ┌──────────┐ ┌──────────┐           │     │
+│  │  任务监控     │     │  │glm-4-flash│ │deepseek- │           │     │
+│  │  决策卡片     │     │  │(分析/设计)│ │coder     │           │     │
+│  │  市场趋势     │     │  └──────────┘ │(代码生成)│           │     │
+│  │  高管对话     │     │               └──────────┘           │     │
+│  └─────────────┘     └────────────────────────────────────────┘     │
+│                                                                      │
+│  ┌─────────────┐     ┌────────────────────────────────────────┐     │
+│  │  SQLite DB   │     │  12 Market Sources                     │     │
+│  │  持久化      │     │  itch · reddit · steam · youtube · ... │     │
+│  └─────────────┘     └────────────────────────────────────────┘     │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -52,13 +53,14 @@ GCAgents 是一个完全自主运行的 AI 游戏公司系统。它像一家真�
 
 | 层 | 技术 | 用途 |
 |---|---|---|
-| 编排引擎 | **LangGraph** (Python) | 状态机构建、节点路由、条件跳转 |
+| 编排引擎 | **CEO Scheduler** (Python async tick loop) | 多项目并行调度、决策门控、任务队列管理 |
 | AI 分析 | **glm-4-flash** (智谱免费) | 市场分析、游戏设计、评估决策 |
 | AI 代码 | **deepseek-coder** | 生成 Phaser 4 + TypeScript 游戏源码 |
 | 美术生成 | **ComfyUI + SD 1.5** (本地 GPU) | AI 生成游戏美术资产（背景/角色/UI 图标） |
 | 游戏运行 | **Phaser 4 + TypeScript + Vite** | 生成 Web 小游戏（加载并显示 ComfyUI 美术资产） |
-| 监控面板 | **FastAPI + 原生 HTML/CSS/JS + WebSocket** | 实时查看公司运营状态 + 高管聊天 + 事件流 |
-| 持久化 | **SQLite + SQLAlchemy (async)** | Agent 日志、市场信号、项目数据、财务、聊天、事件 |
+| 监控面板 | **FastAPI + 原生 HTML/CSS/JS** | 项目看板、任务监控、决策卡片、高管对话、市场趋势 |
+| 市场情报 | **12 个数据源** (itch/Reddit/SteamSpy/TikTok/YouTube/...) | 跨源关联分析、趋势追踪、竞品密度 |
+| 持久化 | **SQLite + SQLAlchemy (async)** | 项目、决策、任务、财务、聊天、事件 |
 | 部署 | **Butler CLI** | 推送到 itch.io |
 
 ---
@@ -83,60 +85,72 @@ GCAgents 是一个完全自主运行的 AI 游戏公司系统。它像一家真�
 
 ---
 
-## 核心工作流 — LangGraph 状态机
+## 核心工作流 — 多项目调度器
 
-系统以 `CompanyState` 作为全局状态，通过 LangGraph 的 `StateGraph` 编排节点。
+系统有两种运行模式：**经典线性管道**（LangGraph）和**多项目调度器**（推荐）。
 
-### 状态定义 (`orchestrator/state.py`)
+### 模式 1: 多项目调度器（推荐）
+
+CEO 作为调度大脑，每个 tick 处理所有项目的一步操作：
+
+```
+每个 tick (默认 300s):
+┌─────────────────────────────────────────────────┐
+│ 1. 处理人类指令 (从 chat 读取)                    │
+│ 2. 检查决策点 — 跳过等待人类的项目                │
+│ 3. 定期市场扫描 (每 10 ticks)                     │
+│ 4. 推进各项目:                                    │
+│    backlog → [人类批准] → scanning → designing    │
+│    → developing → testing → building              │
+│    → [人类批准] → publishing → live               │
+│ 5. 从任务队列取一个任务执行                        │
+│ 6. 根据执行结果更新项目状态                        │
+│ 7. 生成主动汇报到 chat                            │
+└─────────────────────────────────────────────────┘
+```
+
+**5 类决策门控（必须人类批准）**：
+
+| 决策类型 | 触发条件 | 示例 |
+|---------|---------|------|
+| 新项目启动 | 市场扫描发现机会 | "发现3个机会，推荐A，启动？" |
+| 项目发布 | QA 通过 | "项目A测试通过，发布到itch.io？" |
+| 项目取消 | QA 连续失败 3 次 | "项目C连续失败，取消？" |
+| 预算超限 | 开发前预算检查 | "项目B预算达80%，继续？" |
+| 方向调整 | 市场变化 | "建议调整B方向？" |
+
+### 模式 2: 经典线性管道（兼容）
+
+保留原有 13 节点 LangGraph 管道，单项目线性执行。
+
+### 项目状态定义 (`shared/models.py`)
 
 ```python
-class CompanyState(BaseModel):
-    phase: PipelinePhase           # 当前阶段
-    market_insights: list[dict]    # 市场分析结果
-    current_proposal: GameProposal # CEO 选中的项目提案
-    gdd: dict | None               # 游戏设计文档
-    game_code_path: str | None     # 生成的游戏代码路径
-    build_path: str | None         # 构建输出路径
-    itch_url: str | None           # 部署 URL
-    qa_results: dict | None        # QA 测试结果
-    errors: list[str]              # 错误列表
-    retry_count: int               # 重试计数
+class ProjectPhase(str, Enum):
+    BACKLOG = "backlog"        # 待启动
+    SCANNING = "scanning"      # 市场调研中
+    DESIGNING = "designing"    # 设计中
+    DEVELOPING = "developing"  # 开发中
+    TESTING = "testing"        # 测试中
+    BUILDING = "building"      # 构建中
+    PUBLISHING = "publishing"  # 发布中
+    LIVE = "live"              # 已上线
+    PAUSED = "paused"          # 已暂停
+    CANCELLED = "cancelled"    # 已取消
 ```
-
-### 工作流图 (`orchestrator/graph/pipeline.py`)
-
-```
-COO检查 ──▶ 收集反馈 ──▶ 扫描 ──▶ 评估 ──┬─▶ 设计 ──▶ 美术 ──▶ CFO检查 ──▶ 开发 ──▶ QA ──▶ 构建 ──▶ 部署 ──▶ 存版本 ──▶ 完成
-                                          │                                    ▲         │
-                                          │                                    │         │ (失败且<3次)
-                                          ├─▶ 更新 ◀───────────────────────────┘         │
-                                          │       │                                      │
-                                          │       └─▶ CFO检查 ──▶ 开发（跳过设计/美术）──┘
-                                          │
-                                          └─▶ 重新扫描 / 休眠
-```
-
-**关键路由逻辑**：
-
-- **收集反馈**：每个周期开始时，先从 itch.io 游戏页面抓取用户评论，AI 分类为 bug/feature/praise/question
-- **评估后**：如果存在 ≥2 条未处理的 bug/feature 反馈 → MODE_UPDATE 进入更新流程；否则按评分决定设计/重新扫描/休眠
-- **更新流程**：跳过设计和美术阶段，直接进入开发修复
-- **QA 后**：如果通过 → 构建；如果失败且重试 < 3 次 → 回开发修复；否则终止
-- **存版本**：部署后自动在 `game_versions` 表记录 GDD 快照和版本号
-- **Agent 日志包装器**：`_logged_node()` 自动记录每个节点的起止时间、耗时、状态到数据库
-- **COO 健康检查**：管道入口处检查错误数量，≥3 个错误时暂停管道
-- **CFO 预算检查**：在开发（最贵步骤）前检查月度和项目预算，超预算则终止管道
 
 ### 执行入口 (`orchestrator/main.py`)
 
 ```bash
+# 多项目调度器（推荐）
+python3 -m orchestrator.main run-scheduler              # 启动调度器，默认 300s/tick
+python3 -m orchestrator.main run-scheduler --interval 60 # 1 分钟一个 tick
+
+# 经典模式（兼容）
 python3 -m orchestrator.main run              # 完整运行一个周期
-python3 -m orchestrator.main run-forever       # 24/7 模式，循环运行，间隔 3600s
-python3 -m orchestrator.main run-forever --interval 600  # 每 10 分钟运行一次
+python3 -m orchestrator.main run-forever       # 24/7 模式，循环运行
 python3 -m orchestrator.main scan             # 仅执行市场扫描
 ```
-
-**24/7 模式**：`run-forever` 命令在循环中重复执行完整周期，每个周期结束后等待可配置的间隔时间（默认 3600s），然后自动开始下一周期。Ctrl+C 安全停止。
 
 ---
 
@@ -144,18 +158,29 @@ python3 -m orchestrator.main scan             # 仅执行市场扫描
 
 ### 1. 市场扫描器 (`agents/research/scanner.py`)
 
-从多个数据源采集游戏市场信号：
+从 **12 个数据源**采集游戏市场信号：
 
 ```
 数据源:
-├── itch.io RSS feeds    — 最新热门游戏趋势
-├── Reddit (gamedev, webgames, casual) — 社区讨论热度
-├── StatKraken API       — 平台排行榜数据 (当前不可用)
-├── Google Play          — 移动端趋势 (依赖 google_play_scraper)
-└── App Store            — iOS 趋势
+├── itch.io RSS        — 最新/热门/免费游戏 RSS
+├── itch.io API        — 按标签搜索游戏详情
+├── Reddit             — r/webgames, r/incremental_games, r/idle_games 等社区
+├── StatKraken         — CrazyGames/Poki/Newgrounds 排行榜
+├── Google Play        — 移动端分类排行榜
+├── App Store          — iOS 免费游戏榜
+├── SteamSpy           — Steam 独立游戏数据（免费 API，按标签查询）
+├── X/Twitter          — 游戏话题趋势
+├── YouTube Gaming     — 游戏视频趋势 RSS
+├── Product Hunt       — 游戏类新品
+├── TikTok             — 游戏标签热门
+└── PlugPlay           — Web 游戏平台
 ```
 
-**数据流**：原始信号 → `analyze_signals()` 调用 glm-4-flash 分析 → 输出 `market_insights`（含评分、genre、差异化建议）
+**增强分析能力**：
+- **跨源关联**：同一 genre 在多个数据源同时出现时提升可信度
+- **竞品密度**：统计每个 genre 的已有游戏数量
+- **趋势方向**：判断 rising/stable/declining
+- **机会评分**：`score = trend_strength × (1 - competition) × market_size`
 
 ### 2. CEO (`orchestrator/nodes/ceo.py`)
 
@@ -289,13 +314,15 @@ generate_game_code(gdd, project_dir, config, build_error="")
 
 | 表 | 用途 | 关键字段 |
 |---|---|---|
+| `projects` | 多项目编排（项目看板） | id, name, genre, phase, progress, awaiting_decision |
+| `decisions` | 决策门控（人类审批） | id, project_id, decision_type, question, status, human_response |
+| `tasks` | 任务队列（异步执行） | id, project_id, task_type, status, progress, error |
 | `agent_logs` | 每个 Agent 节点的执行日志 | node_name, status, duration_ms, error |
-| `orchestrator_state` | 管道状态快照 | phase, errors, updated_at |
-| `game_projects` | 游戏项目记录 | name, genre, status, gdd, itch_url, current_version, feedback_count |
-| `market_signals` | 原始市场信号 | source, genre, title, score, captured_at |
+| `game_projects` | 游戏项目记录 | name, genre, status, gdd, itch_url, current_version |
+| `market_signals` | 原始市场信号（12 源） | source, genre, title, score, captured_at |
 | `market_reports` | AI 市场分析报告 | signals_count, opportunities_json, raw_analysis |
 | `company_memory` | 公司长期记忆 | category, title, content, importance |
-| `game_feedback` | 用户反馈（itch.io 评论抓取）| project_id, category, content, processed, post_id |
+| `game_feedback` | 用户反馈（itch.io 评论抓取）| project_id, category, content, processed |
 | `game_versions` | 版本快照 | project_id, version, gdd_snapshot, changelog |
 | `game_metrics` | 游戏遥测数据 | project_id, event_type, score, play_time |
 | `api_usage_logs` | LLM 调用追踪 | model, agent_name, total_tokens, estimated_cost_usd |
@@ -307,66 +334,77 @@ generate_game_code(gdd, project_dir, config, build_error="")
 
 | 事件 | 写入内容 |
 |---|---|
+| 项目阶段变更 | `projects` 更新 phase/progress |
+| 决策创建/解决 | `decisions` 记录人类决策 |
+| 任务执行 | `tasks` 记录状态/进度/结果 |
 | 每个节点执行完成 | `agent_logs` 写入耗时 + 状态 |
 | 每次LLM调用 | `api_usage_logs` 写入 token 用量 + 成本 |
 | 市场扫描完成 | `market_signals` + `market_reports` |
 | 管道阶段变更 | `orchestrator_state` + `game_projects` |
-| CEO 决策 | `game_projects`（更新状态） |
 | 部署完成 | `game_versions`（版本号 + GDD 快照） |
 | 反馈收集 | `game_feedback`（itch.io 评论 + AI 分类） |
 | 游戏运行 | `game_metrics`（分析事件埋点上报） |
-| 财务操作 | `finance_budgets`（预算设置/更新）、`event_logs`（财务事件） |
-| 高管聊天 | `chat_messages`（用户消息 + Agent 回复） |
-| 所有重要事件 | `event_logs`（公司级别事件，WebSocket 实时推送） |
+| 财务操作 | `finance_budgets` + `event_logs` |
+| 高管聊天/决策 | `chat_messages`（含决策卡片） |
+| 所有重要事件 | `event_logs` |
 
 ---
 
 ## Dashboard 监控
 
-Dashboard 运行在独立进程（FastAPI + 静态 HTML/CSS/JS + WebSocket），与管道解耦。
+Dashboard 运行在独立进程（FastAPI + 静态 HTML/CSS/JS），与管道解耦。
 
 ### API 端点
 
 | 路径 | 方法 | 用途 |
 |---|---|---|
-| `/api/status` | GET | 当前状态、阶段、活跃项目 |
-| `/api/agents` | GET | 各 Agent 执行统计 |
-| `/api/pipeline/run` | POST | 触发管道运行 |
+| **项目管理** | | |
+| `/api/orchestrator/projects` | GET | 多项目列表（看板数据） |
+| `/api/orchestrator/projects/{id}` | GET | 单项目详情 |
+| `/api/projects/{id}/pause` | POST | 暂停项目 |
+| `/api/projects/{id}/resume` | POST | 恢复项目 |
+| `/api/projects/{id}/cancel` | POST | 取消项目 |
+| **决策门控** | | |
+| `/api/decisions` | GET | 待处理决策列表 |
+| `/api/decisions/{id}/respond` | POST | 回复决策（approve/reject/discuss） |
+| **任务监控** | | |
+| `/api/orchestrator/tasks` | GET | 任务列表（支持按项目过滤） |
+| **经典管道** | | |
+| `/api/pipeline/run` | POST | 触发单次管道运行 |
+| `/api/pipeline/run-forever` | POST | 启动 24/7 模式 |
+| `/api/pipeline/stop` | POST | 停止运行中的管道 |
 | `/api/pipeline/status` | GET | 管道进程状态 |
+| `/api/pipeline/history` | GET | 管道历史快照 |
+| **数据查询** | | |
+| `/api/status` | GET | 当前系统状态 |
+| `/api/agents` | GET | 各 Agent 执行统计 |
 | `/api/market/report` | GET | 最新市场分析报告 |
 | `/api/market/latest` | GET | 最新市场信号 |
 | `/api/projects` | GET | 游戏项目列表 |
-| `/api/pipeline/history` | GET | 管道历史快照 |
 | `/api/memory` | GET | 公司记忆 |
 | `/api/gdd/{id}` | GET | 项目 GDD 详情 |
-| `/api/analytics/event` | POST | 游戏遥测事件（game_start/game_over） |
-| `/api/feedback/{id}` | GET | 项目反馈列表 + 分类统计 |
+| `/api/events` | GET | 事件日志查询 |
+| `/api/feedback/{id}` | GET | 项目反馈列表 |
 | `/api/projects/live` | GET | 已上线项目列表 |
-| `/ws/events` | WebSocket | 实时事件流推送 |
-| `/api/events` | GET | 事件日志查询（支持 type 筛选） |
-| `/api/chat/send` | POST | 发送高管聊天消息（CEO/CFO/COO） |
+| `/api/analytics/event` | POST | 游戏遥测事件 |
+| **对话与财务** | | |
+| `/api/chat/send` | POST | 发送高管聊天消息 |
 | `/api/chat/history` | GET | 聊天历史记录 |
-| `/api/finance/budget` | POST | 设置预算（月度/项目） |
-| `/api/finance/summary` | GET | 财务摘要（用量+预算） |
-| `/games-preview/{name}/dist/` | GET | 游戏预览静态文件 |
+| `/api/finance/budget` | POST | 设置预算 |
+| `/api/finance/summary` | GET | 财务摘要 |
 
 ### 前端功能
 
-- **Executive Chat** — 与 CEO/CFO/COO 高管对话，发送指令和查询
-- **Company Event Log** — 终端风格实时滚动日志，WebSocket 推送公司所有事件
-- **Agent Monitor** — 8 个 Agent 的执行状态和统计数据
-- **Pipeline Timeline** — 可视化管道进度
-- **Market Report** — AI 分析结果与原始信号
+- **Project Board** — 看板式项目面板（Backlog → Design → Dev → Test → Build → Live），每项目独立进度
+- **Task Monitor** — 任务监控列表，实时显示状态/进度/耗时
+- **Executive Chat** — 与 CEO/CFO/COO 高管对话，含决策卡片（批准/拒绝/讨论按钮）
+- **Market Trends** — 市场趋势面板，来源健康度、趋势方向、跨源确认
+- **Company Event Log** — 终端风格实时滚动日志
+- **Agent Monitor** — 各 Agent 执行状态
 - **Active Games** — 构建的游戏列表，支持 iframe 预览
 - **Company Memory** — 长期记忆
-- **Run Pipeline** 一键按钮 — 后台启动管道，自动轮询进度
-
-### 事件总线 (`orchestrator/event_bus.py`)
-
-所有 Agent 通过 `emit()` 函数发射事件，自动双写到 DB 和 WebSocket：
-- 写入 `event_logs` 表持久化
-- 通过 Dashboard WebSocket `/ws/events` 实时推送到前端
-- Dashboard 未运行时静默忽略（不影响管道）
+- **24/7 Mode Toggle** — 一键启停 24/7 运行模式
+- **Run Pipeline Button** — 一键启动管道
 
 ---
 
@@ -403,45 +441,45 @@ Dashboard 运行在独立进程（FastAPI + 静态 HTML/CSS/JS + WebSocket），
 
 ```
 gcagents/
-├── orchestrator/           # 核心编排 (LangGraph)
-│   ├── graph/pipeline.py   #   状态机构建 + 反馈循环 + CFO/COO 集成
-│   ├── nodes/ceo.py        #   CEO 评估 + 反馈驱动 + 用户指令处理
-│   ├── nodes/cfo.py        #   CFO 预算预检 + 财务报告
-│   ├── nodes/coo.py        #   COO 管道健康检查 + 运营指令处理
-│   ├── event_bus.py        #   统一事件发射（DB + WebSocket 双写）
-│   ├── state.py            #   全局状态定义（含 UPDATING 阶段）
-│   ├── persistence.py      #   SQLite 持久化（含财务/聊天/事件表）
-│   └── main.py             #   CLI 入口
+├── orchestrator/           # 核心编排
+│   ├── scheduler.py        #   CEO 多项目调度器（tick-based）
+│   ├── task_queue.py       #   任务队列（SQLite-backed）
+│   ├── decision_gate.py    #   决策门控（5 类人类审批）
+│   ├── graph/pipeline.py   #   经典线性管道（LangGraph，兼容）
+│   ├── nodes/ceo.py        #   CEO 评估（经典模式）
+│   ├── nodes/cfo.py        #   CFO 预算预检
+│   ├── nodes/coo.py        #   COO 健康检查
+│   ├── event_bus.py        #   统一事件发射
+│   ├── state.py            #   全局状态定义
+│   ├── persistence.py      #   SQLite 持久化（含 projects/decisions/tasks 表）
+│   └── main.py             #   CLI 入口（run/run-forever/run-scheduler/scan）
 ├── agents/                 # AI Agent 实现
-│   ├── research/           #   市场研究
+│   ├── research/           #   市场研究（12 个数据源）
 │   │   ├── scanner.py      #     多源扫描
-│   │   ├── analyzer.py     #     AI 分析
-│   │   └── sources/        #     各数据源适配器
+│   │   ├── analyzer.py     #     增强分析（跨源关联/竞品密度/趋势方向）
+│   │   └── sources/        #     12 个数据源适配器
+│   │       └── fetchers.py #       itch/reddit/steam/youtube/tiktok/...
 │   ├── dev/                #   游戏开发
 │   │   ├── designer/       #     GDD 生成
 │   │   ├── artist/         #     美术生成 (ComfyUI SD 1.5)
-│   │   │   ├── comfyui_client.py  # ComfyUI HTTP 客户端
-│   │   │   ├── sprite_generator.py # 精灵/背景/图标生成
-│   │   │   └── workflows.py       # SD 1.5 工作流定义
-│   │   ├── programmer/     #     代码生成 (DeepSeek + 分析埋点)
+│   │   ├── programmer/     #     代码生成 (DeepSeek)
 │   │   ├── qa/             #     质量测试
 │   │   └── builder/        #     Vite 构建
 │   └── ops/                #   运维部署
 │       ├── deployer/       #     itch.io 发布
-│       └── analytics/      #     数据分析
-│           └── feedback_collector.py  # itch.io 评论抓取 + AI 分类
+│       └── analytics/      #     数据分析 + 反馈收集
 ├── dashboard/web/          # 监控面板
-│   ├── api_server.py       #   FastAPI 后端（含 WebSocket + 聊天 + 事件 + 财务 API）
-│   ├── index.html          #   前端 HTML（含聊天面板 + 事件日志）
-│   ├── app.js              #   前端逻辑（含 WebSocket 实时事件流）
+│   ├── api_server.py       #   FastAPI 后端（35 个 API 端点）
+│   ├── index.html          #   前端（项目看板/任务监控/决策卡片/市场趋势）
+│   ├── app.js              #   前端逻辑
 │   └── style.css           #   样式
 ├── shared/                 # 共享模块
 │   ├── config.py           #   配置加载 (pydantic-settings)
-│   ├── models.py           #   数据模型（含 FinanceBudget, ChatMessage, EventLog）
+│   ├── models.py           #   数据模型（ProjectState/DecisionPoint/TaskRecord + 原有模型）
 │   └── llm_client.py       #   统一 LLM 客户端（token 追踪 + 成本记录 + 重试退避）
 ├── config/                 # 配置文件
 │   ├── agents.yaml         #   Agent 与模型映射
-│   └── sources.yaml        #   市场数据源配置
+│   └── sources.yaml        #   12 个市场数据源配置
 ├── data/                   # 运行数据 (gitignored)
 │   ├── gcagents.db         #   SQLite 数据库
 │   └── games/              #   生成游戏项目
@@ -455,26 +493,11 @@ gcagents/
 | 日期 | 变更 |
 |---|---|
 | 初始 | 基础框架搭建：LangGraph 状态机、市场扫描、代码生成 |
-| 迭代 | 添加 CEO 决策、QA 循环、Build 阶段 |
-| 迭代 | Dashboard 监控面板 v1（5 个 Section） |
-| 迭代 | 字段名规范化（score→market_opportunity_score） |
-| 迭代 | DeepSeek max_tokens 提升至 16384，解决 JSON 截断 |
-| 迭代 | 构建重试闭环：QA 捕获 stderr→Developer 带错误重生成 |
-| 最近 | Dashboard 一键运行按钮 + 游戏 iframe 预览 |
-| 最近 | 修复 Butler 部署（移除交互式 login，直接用 API key） |
-| 最近 | 管道全流程验证通过 |
-| 最近 | ComfyUI 美术管线：SD 1.5 生成背景/角色/UI 图标，接入游戏代码 |
-| 最近 | 反馈闭环：itch.io 评论抓取 → AI 分类 → CEO 路由 MODE_UPDATE |
-| 最近 | 分析埋点：游戏运行时上报 game_start/game_over 事件 |
-| 最近 | 版本管理：部署后自动存 GDD 快照 + 版本号 |
-| 最近 | 已发布游戏集成 ComfyUI 真实美术资源（pixel-parkour-prodigy v1.3.0）|
-| 最近 | 统一 LLM 客户端：token 追踪 + 成本记录 + 指数退避重试 |
-| 最近 | CFO Agent：月度/项目预算管控 + 开发前预算预检 |
-| 最近 | COO Agent：管道健康检查 + 运营指令处理 |
-| 最近 | CEO 升级：聊天指令处理（genre 指令/停止/反馈）|
-| 最近 | Dashboard 高管聊天面板（CEO/CFO/COO）|
-| 最近 | 公司事件日志：终端风格实时滚动 + WebSocket 推送 |
-| 最近 | 财务 API：预算设置 + 用量摘要 + 成本追踪 |
+| 迭代 | Dashboard 监控面板、CEO 决策、QA 循环、Build 阶段 |
+| 迭代 | ComfyUI 美术管线、反馈闭环、版本管理、分析埋点 |
+| 迭代 | 统一 LLM 客户端、CFO/COO Agent、高管聊天面板、财务 API |
+| 迭代 | 24/7 运行模式、Dashboard 启停按钮 |
+| **当前** | **多项目编排重构**：CEO 调度器、决策门控（5 类）、任务队列、12 市场数据源、项目看板、任务监控、决策卡片、市场趋势面板 |
 
 ---
 
@@ -499,8 +522,13 @@ BUTLER_USERNAME=kingsman666    # itch.io 用户名
 ### 启动
 
 ```bash
-# 完整运行一次
+# 多项目调度器（推荐）
+python3 -m orchestrator.main run-scheduler
+python3 -m orchestrator.main run-scheduler --interval 60
+
+# 经典模式
 python3 -m orchestrator.main run
+python3 -m orchestrator.main run-forever
 
 # 仅市场扫描
 python3 -m orchestrator.main scan
