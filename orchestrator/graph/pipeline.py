@@ -14,7 +14,11 @@ from agents.dev.programmer.agent import develop_game
 from agents.dev.qa.qa_agent import run_qa
 from agents.dev.builder.build_agent import build_game
 from agents.ops.deployer.itch_deployer import deploy_to_itch
-from orchestrator.persistence import save_pipeline_state, save_market_signals, save_agent_log, ensure_tables
+from agents.ops.analytics.feedback_collector import collect_feedback
+from orchestrator.persistence import (
+    save_agent_log, ensure_tables,
+    save_game_version, get_latest_version, mark_feedback_processed, get_unprocessed_feedback,
+)
 
 
 def _logged_node(fn, node_name: str, phase: str):
@@ -39,9 +43,62 @@ def _logged_node(fn, node_name: str, phase: str):
     return wrapper
 
 
+async def _save_version(state: CompanyState) -> dict:
+    pid = state.current_project_id
+    if not pid:
+        return {}
+    old_ver = await get_latest_version(pid)
+    parts = old_ver.split(".")
+    try:
+        new_ver = f"{parts[0]}.{int(parts[1]) + 1}.0" if len(parts) >= 2 else "1.0.0"
+    except (ValueError, IndexError):
+        new_ver = "1.0.0"
+    await save_game_version(
+        project_id=pid,
+        version=new_ver,
+        gdd_snapshot=state.gdd or {},
+        changelog=f"Auto-update to v{new_ver}",
+        build_size=0,
+    )
+    return {}
+
+
+async def _collect_feedback(state: CompanyState) -> dict:
+    logger.info("Pipeline: collecting feedback from live projects")
+    await collect_feedback()
+    return {}
+
+
+async def _update_from_feedback(state: CompanyState) -> dict:
+    pid = state.current_project_id
+    if not pid:
+        state.phase = PipelinePhase.SCANNING
+        return {"phase": PipelinePhase.SCANNING.value}
+
+    feedback = await get_unprocessed_feedback(pid)
+    if not feedback:
+        state.phase = PipelinePhase.SCANNING
+        return {"phase": PipelinePhase.SCANNING.value}
+
+    fids = [f["id"] for f in feedback]
+    bugs = [f for f in feedback if f.get("category") == "bug"]
+    features = [f for f in feedback if f.get("category") == "feature"]
+
+    summary = f"Feedback-driven update: {len(bugs)} bugs, {len(features)} features"
+    logger.info(f"Updating project {pid}: {summary}")
+
+    await mark_feedback_processed(fids)
+    return {
+        "phase": PipelinePhase.DEVELOPING.value,
+        "gdd": state.gdd or {},
+        "errors": [],
+    }
+
+
 def build_company_graph() -> StateGraph:
     graph = StateGraph(CompanyState)
 
+    graph.add_node("collect_feedback", _collect_feedback)
     graph.add_node("scan", scan_market)
     graph.add_node("evaluate", _logged_node(ceo_evaluate, "evaluate", "evaluating"))
     graph.add_node("design", _logged_node(design_game, "design", "designing"))
@@ -50,8 +107,12 @@ def build_company_graph() -> StateGraph:
     graph.add_node("qa", _logged_node(run_qa, "qa", "testing"))
     graph.add_node("build", _logged_node(build_game, "build", "building"))
     graph.add_node("deploy", _logged_node(deploy_to_itch, "deploy", "publishing"))
+    graph.add_node("version", _save_version)
+    graph.add_node("update", _update_from_feedback)
 
-    graph.set_entry_point("scan")
+    graph.set_entry_point("collect_feedback")
+
+    graph.add_edge("collect_feedback", "scan")
 
     graph.add_edge("scan", "evaluate")
 
@@ -61,7 +122,17 @@ def build_company_graph() -> StateGraph:
         {
             "scan": "scan",
             "design": "design",
+            "update": "update",
             "idle": END,
+        },
+    )
+
+    graph.add_conditional_edges(
+        "update",
+        _route_after_update,
+        {
+            "develop": "develop",
+            "scan": "scan",
         },
     )
 
@@ -80,7 +151,8 @@ def build_company_graph() -> StateGraph:
     )
 
     graph.add_edge("build", "deploy")
-    graph.add_edge("deploy", END)
+    graph.add_edge("deploy", "version")
+    graph.add_edge("version", END)
 
     return graph
 
@@ -88,9 +160,17 @@ def build_company_graph() -> StateGraph:
 def _route_after_evaluation(state: CompanyState) -> str:
     if state.phase == PipelinePhase.DESIGNING:
         return "design"
+    if state.phase == PipelinePhase.UPDATING:
+        return "update"
     if state.phase == PipelinePhase.SCANNING:
         return "scan"
     return "idle"
+
+
+def _route_after_update(state: CompanyState) -> str:
+    if state.phase == PipelinePhase.DEVELOPING:
+        return "develop"
+    return "scan"
 
 
 async def create_company_app():
