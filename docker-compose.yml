@@ -1,0 +1,67 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: gcagents
+      POSTGRES_USER: gcagents
+      POSTGRES_PASSWORD: gcagents_dev
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./infra/db/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gcagents"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  comfyui:
+    image: ghcr.io/ai-dock/comfyui:latest
+    ports:
+      - "8188:8188"
+    environment:
+      CLI_ARGS: "--listen 0.0.0.0 --preview-method auto"
+    volumes:
+      - comfyui_models:/opt/ComfyUI/models
+      - comfyui_output:/opt/ComfyUI/output
+      - ./infra/comfyui/workflows:/opt/ComfyUI/user/workflows
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    profiles:
+      - gpu
+
+  chromadb:
+    image: chromadb/chroma:latest
+    ports:
+      - "8000:8000"
+    volumes:
+      - chromadata:/chroma/chroma
+    environment:
+      ANONYMIZED_TELEMETRY: "FALSE"
+
+volumes:
+  pgdata:
+  redisdata:
+  comfyui_models:
+  comfyui_output:
+  chromadata:

@@ -1,0 +1,70 @@
+models:
+  deepseek:
+    provider: openai_compatible
+    base_url: "https://api.deepseek.com"
+    model: "deepseek-chat"
+    api_key_env: "DEEPSEEK_API_KEY"
+    roles: [ceo, researcher, programmer, qa, analytics]
+
+  deepseek_coder:
+    provider: openai_compatible
+    base_url: "https://api.deepseek.com"
+    model: "deepseek-coder"
+    api_key_env: "DEEPSEEK_API_KEY"
+    roles: [lead_programmer]
+
+  glm:
+    provider: zhipuai
+    model: "glm-4"
+    api_key_env: "ZHIPU_API_KEY"
+    roles: [designer, writer]
+
+  art:
+    provider: comfyui
+    base_url: "http://localhost:8188"
+    model: "stable-diffusion-xl"
+
+  audio:
+    provider: suno
+    api_key_env: "SUNO_API_KEY"
+
+agents:
+  ceo:
+    model_role: ceo
+    max_retries: 3
+
+  market_scanner:
+    schedule: "0 6 * * *"  # daily at 6am
+    sources:
+      - itch_rss
+      - statkraken
+      - google_play
+      - reddit
+      - app_store
+
+  game_designer:
+    model_role: designer
+
+  art_director:
+    comfyui_url: "http://localhost:8188"
+
+  lead_programmer:
+    model_role: lead_programmer
+    phaser_version: "4"
+
+  qa_agent:
+    model_role: qa
+    playwright_headless: true
+
+  deploy_agent:
+    itch_username: ""
+    itch_api_key_env: "BUTLER_API_KEY"
+
+  analytics_agent:
+    model_role: analytics
+    report_schedule: "0 9 * * 1"  # weekly monday 9am
+
+deployment:
+  games_output_dir: "./data/games"
+  build_dir: "./data/builds"
+  dashboard_port: 3000

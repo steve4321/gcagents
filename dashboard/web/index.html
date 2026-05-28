@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GCAgents - Mission Control</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="dashboard-header">
+  <div class="header-left">
+    <h1><span class="accent">&#9654;</span> GCAgents</h1>
+    <span class="subtitle">Autonomous Game Company &mdash; Mission Control</span>
+  </div>
+  <div class="header-right">
+    <span class="last-update">Last update: <time id="lastUpdateTime">--</time></span>
+    <button id="refreshBtn" class="btn-icon" title="Refresh now">&#x21bb;</button>
+  </div>
+</header>
+
+<main class="dashboard-grid">
+  <section id="statusSection" class="card">
+    <h2><span class="status-dot" id="statusDot"></span> System Status</h2>
+    <div id="statusContent" class="card-body">
+      <div class="loader"></div>
+    </div>
+  </section>
+
+  <section id="pipelineSection" class="card card-wide">
+    <h2>Project Pipeline</h2>
+    <div id="pipelineContent" class="card-body">
+      <div class="loader"></div>
+    </div>
+  </section>
+
+  <section id="marketSection" class="card card-wide">
+    <h2>Market Scanner</h2>
+    <div id="marketContent" class="card-body">
+      <div class="loader"></div>
+    </div>
+  </section>
+
+  <section id="projectsSection" class="card card-wide">
+    <h2>Active Games</h2>
+    <div id="projectsContent" class="card-body">
+      <div class="loader"></div>
+    </div>
+  </section>
+
+  <section id="memorySection" class="card card-wide">
+    <h2>Company Memory</h2>
+    <div id="memoryContent" class="card-body">
+      <div class="loader"></div>
+    </div>
+  </section>
+</main>
+
+<footer class="dashboard-footer">
+  <p>GCAgents &mdash; Autonomous AI Game Development Studio</p>
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>

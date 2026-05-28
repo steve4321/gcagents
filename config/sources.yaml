@@ -1,0 +1,91 @@
+sources:
+  itch_rss:
+    type: rss
+    feeds:
+      - "https://itch.io/games/newest.xml"
+      - "https://itch.io/games/top-rated.xml"
+      - "https://itch.io/games/free.xml"
+    rate_limit_per_second: 1
+
+  itch_api:
+    type: rest
+    base_url: "https://api.itch.io"
+    auth_type: bearer
+    api_key_env: "ITCH_API_KEY"
+    endpoints:
+      game_search: "/games/search"
+      game_detail: "/games/{id}"
+
+  statkraken:
+    type: rest
+    base_url: "https://api.statkraken.com"
+    auth_type: none
+    cache_ttl_seconds: 300
+    platforms:
+      - crazygames
+      - poki
+      - newgrounds
+    endpoints:
+      trending: "/platforms/{platform}/items?trending=true"
+      top_rated: "/platforms/{platform}/items?sort=rating"
+
+  google_play:
+    type: scraper
+    package: "google-play-scraper"
+    categories:
+      - GAME_PUZZLE
+      - GAME_CASUAL
+      - GAME_ARCADE
+      - GAME_SIMULATION
+      - GAME_STRATEGY
+    charts:
+      - topselling_free
+      - topgrossing
+    throttle_per_second: 5
+
+  app_store:
+    type: rest
+    base_url: "https://itunes.apple.com"
+    auth_type: none
+    rate_limit_per_minute: 15
+    endpoints:
+      search: "/search?term={query}&media=software&entity=software&country=us"
+      top_charts: "/rss/topfreeapplications/limit=100/genre=6014/json"
+
+  reddit:
+    type: json_feed
+    auth_type: oauth2
+    base_url: "https://oauth.reddit.com"
+    api_key_env: "REDDIT_CLIENT_ID"
+    api_secret_env: "REDDIT_CLIENT_SECRET"
+    user_agent: "gcagents/0.1 by gcagents_bot"
+    subreddits:
+      - webgames
+      - incremental_games
+      - idle_games
+      - HTML5
+      - indiegaming
+      - gamedev
+    endpoints:
+      top: "/r/{subreddit}/top.json?limit=50&t=week"
+      hot: "/r/{subreddit}/hot.json?limit=25"
+
+  plugplay:
+    type: rest
+    base_url: "https://plugplay.games/api"
+    auth_type: none
+    endpoints:
+      games: "?format=json"
+
+  x_trends:
+    type: rest
+    base_url: "https://api.x.com/2"
+    auth_type: bearer
+    api_key_env: "X_BEARER_TOKEN"
+    gaming_woeids:
+      - 1       # worldwide
+      - 23424977  # US
+      - 23424856  # Japan
+      - 23424975  # UK
+    endpoints:
+      trends: "/trends/by/woeid/{woeid}"
