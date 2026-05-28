@@ -1266,6 +1266,58 @@ body {
 }
 
 /* ============================================
+   24/7 Mode Toggle Button
+   ============================================ */
+.forever-toggle-btn {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  background: transparent;
+  border: 1px solid var(--border-accent);
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  white-space: nowrap;
+}
+
+.forever-toggle-btn:hover {
+  background: var(--accent-purple-dim);
+  border-color: var(--accent-purple);
+  color: var(--accent-purple);
+}
+
+.forever-toggle-btn.active {
+  background: var(--accent-green-dim);
+  border-color: var(--accent-green);
+  color: var(--accent-green);
+  font-weight: 600;
+}
+
+.forever-toggle-btn.active::before {
+  content: '';
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  background: var(--accent-green);
+  border-radius: 50%;
+  animation: pulse-dot 2s ease-in-out infinite;
+}
+
+.forever-toggle-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.85); }
+}
+
+/* ============================================
    Preview Modal
    ============================================ */
 .preview-modal {

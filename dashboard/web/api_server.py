@@ -20,6 +20,7 @@ engine = create_async_engine(config.db_url, echo=False)
 
 # Track running pipeline process
 _pipeline_process: subprocess.Popen | None = None
+_forever_process: subprocess.Popen | None = None
 
 # Track connected WebSocket clients for event broadcasting
 _event_clients: set[WebSocket] = set()
@@ -252,17 +253,80 @@ async def trigger_pipeline():
     return {"status": "started", "message": "Pipeline started"}
 
 
+@app.post("/api/pipeline/run-forever")
+async def trigger_forever(interval: int = 3600):
+    global _forever_process
+    if _forever_process is not None and _forever_process.poll() is None:
+        return {"status": "already_running", "message": "24/7 mode is already running"}
+
+    _forever_process = subprocess.Popen(
+        [sys.executable, "-m", "orchestrator.main", "run-forever",
+         "--interval", str(interval)],
+        cwd=ROOT_DIR,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    logger.info(f"24/7 mode started (pid={_forever_process.pid}, interval={interval}s)")
+    return {"status": "started", "mode": "forever", "message": "24/7 mode started"}
+
+
+@app.post("/api/pipeline/stop")
+async def stop_pipeline():
+    global _pipeline_process, _forever_process
+    stopped = []
+
+    if _pipeline_process is not None and _pipeline_process.poll() is None:
+        _pipeline_process.terminate()
+        try:
+            _pipeline_process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            _pipeline_process.kill()
+        stopped.append("pipeline")
+        _pipeline_process = None
+
+    if _forever_process is not None and _forever_process.poll() is None:
+        _forever_process.terminate()
+        try:
+            _forever_process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            _forever_process.kill()
+        stopped.append("24/7 mode")
+        _forever_process = None
+
+    if stopped:
+        logger.info(f"Stopped: {', '.join(stopped)}")
+        return {"status": "stopped", "stopped": stopped}
+    return {"status": "idle", "message": "Nothing was running"}
+
+
 @app.get("/api/pipeline/status")
 async def check_pipeline_status():
-    global _pipeline_process
-    if _pipeline_process is None:
-        return {"running": False, "status": "idle"}
-    ret = _pipeline_process.poll()
-    if ret is None:
-        return {"running": True, "status": "running"}
-    status = "completed" if ret == 0 else "failed"
-    _pipeline_process = None
-    return {"running": False, "status": status, "exit_code": ret}
+    global _pipeline_process, _forever_process
+
+    forever_running = (
+        _forever_process is not None and _forever_process.poll() is None
+    )
+    single_running = (
+        _pipeline_process is not None and _pipeline_process.poll() is None
+    )
+
+    if forever_running:
+        return {"running": True, "mode": "forever", "forever_running": True,
+                "status": "running"}
+    if single_running:
+        return {"running": True, "mode": "single", "forever_running": False,
+                "status": "running"}
+
+    # Single pipeline may have just finished — check exit code
+    if _pipeline_process is not None:
+        ret = _pipeline_process.poll()
+        status = "completed" if ret == 0 else "failed"
+        _pipeline_process = None
+        return {"running": False, "mode": "idle", "forever_running": False,
+                "status": status, "exit_code": ret}
+
+    return {"running": False, "mode": "idle", "forever_running": False,
+            "status": "idle"}
 
 
 # ── Analytics ─────────────────────────────────────────────────────────────────

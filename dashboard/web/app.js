@@ -4,6 +4,7 @@ const PIPELINE_POLL_INTERVAL = 3000;
 const PIPELINE_FAST_REFRESH = 5000;
 let pipelineRunning = false;
 let pipelineStatusInterval = null;
+let foreverActive = false;
 const PIPELINE_PHASES = [
   { id: 'scan', label: 'Scan', icon: 'scan' },
   { id: 'evaluate', label: 'Evaluate', icon: 'evaluate' },
@@ -509,7 +510,7 @@ async function triggerPipeline() {
     await fetchJSON(`${API_BASE}/pipeline/run`);
   } catch {
     btn.classList.remove('running');
-    btn.textContent = '▶ Run Pipeline';
+    btn.textContent = '▶ Run';
     pipelineRunning = false;
     return;
   }
@@ -519,12 +520,62 @@ async function triggerPipeline() {
   checkPipelineStatus();
 }
 
+async function toggleForever() {
+  const btn = $('#foreverToggleBtn');
+  if (!btn) return;
+
+  if (foreverActive) {
+    // Stop forever mode
+    btn.disabled = true;
+    btn.textContent = 'Stopping...';
+    try {
+      await fetchJSON(`${API_BASE}/pipeline/stop`, { method: 'POST' });
+    } catch { /* ignore */ }
+    foreverActive = false;
+    btn.classList.remove('active');
+    btn.textContent = '⟳ 24/7 OFF';
+    btn.disabled = false;
+  } else {
+    // Start forever mode
+    btn.disabled = true;
+    btn.textContent = 'Starting...';
+    try {
+      await fetchJSON(`${API_BASE}/pipeline/run-forever?interval=3600`, { method: 'POST' });
+      foreverActive = true;
+      btn.classList.add('active');
+      btn.textContent = '● 24/7 ON';
+    } catch {
+      btn.textContent = '⟳ 24/7 OFF';
+    }
+    btn.disabled = false;
+  }
+}
+
 async function checkPipelineStatus() {
   const btn = $('#runPipelineBtn');
+  const foreverBtn = $('#foreverToggleBtn');
   if (!btn) return;
 
   try {
     const status = await fetchJSON(`${API_BASE}/pipeline/status`);
+
+    if (foreverBtn) {
+      foreverActive = status.forever_running;
+      if (foreverActive) {
+        foreverBtn.classList.add('active');
+        foreverBtn.textContent = '● 24/7 ON';
+      } else {
+        foreverBtn.classList.remove('active');
+        foreverBtn.textContent = '⟳ 24/7 OFF';
+      }
+    }
+
+    if (status.mode === 'forever') {
+      btn.classList.add('running');
+      btn.textContent = 'Running...';
+      pipelineRunning = true;
+      return;
+    }
 
     if (!status.running) {
       if (pipelineStatusInterval) {
@@ -539,17 +590,17 @@ async function checkPipelineStatus() {
         btn.textContent = '✓ Done';
         setTimeout(() => {
           btn.classList.remove('completed');
-          btn.textContent = '▶ Run Pipeline';
+          btn.textContent = '▶ Run';
         }, 3000);
       } else if (status.status === 'failed') {
         btn.classList.add('failed');
         btn.textContent = '✗ Failed';
         setTimeout(() => {
           btn.classList.remove('failed');
-          btn.textContent = '▶ Run Pipeline';
+          btn.textContent = '▶ Run';
         }, 5000);
       } else {
-        btn.textContent = '▶ Run Pipeline';
+        btn.textContent = '▶ Run';
       }
 
       refreshAll();
@@ -756,6 +807,11 @@ function init() {
   const runPipelineBtn = $('#runPipelineBtn');
   if (runPipelineBtn) {
     runPipelineBtn.addEventListener('click', triggerPipeline);
+  }
+
+  const foreverToggleBtn = $('#foreverToggleBtn');
+  if (foreverToggleBtn) {
+    foreverToggleBtn.addEventListener('click', toggleForever);
   }
 
   const previewCloseBtn = $('#previewCloseBtn');
