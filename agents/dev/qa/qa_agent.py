@@ -57,7 +57,17 @@ def _check_build_exists(project_dir: Path) -> bool:
 
 
 def _try_build(project_dir: Path) -> tuple[bool, str]:
+    import shutil
     try:
+        install = subprocess.run(
+            ["npm", "install"],
+            cwd=str(project_dir),
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        if install.returncode != 0:
+            return False, install.stderr or "npm install failed"
         result = subprocess.run(
             ["npm", "run", "build"],
             cwd=str(project_dir),
@@ -70,6 +80,8 @@ def _try_build(project_dir: Path) -> tuple[bool, str]:
         return False, result.stderr or result.stdout or "Build failed with no output"
     except Exception as e:
         return False, str(e)
+    finally:
+        shutil.rmtree(project_dir / "node_modules", ignore_errors=True)
 
 
 def _check_project_structure(project_dir: Path) -> tuple[bool, list[str]]:

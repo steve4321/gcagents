@@ -33,6 +33,7 @@ Rules:
 - Include basic game loop: start → play → end
 - Add keyboard/mouse/touch controls
 - Use window.__TEST__ = { ready: false, state: () => ({...}) } for test access
+- Include basic gameplay analytics: call `navigator.sendBeacon('/api/analytics/event', new URLSearchParams({ game: '{game_name}', event: 'game_start' }))` when the game starts, and report 'game_over' with final score and 'play_time' in seconds when the game ends. This is non-blocking and should NOT impact gameplay.
 
 Return a JSON object mapping file paths to file contents:
 {"src/main.ts": "...", "src/game/scenes/GameScene.ts": "...", ...}"""
@@ -57,13 +58,15 @@ async def generate_game_code(gdd: dict, project_dir: Path, config: AppConfig, bu
         logger.error("No AI API key configured")
         return project_dir
 
+    game_title = gdd.get("title", "game")
     user_prompt = f"""Generate a complete Phaser 4 + TypeScript game based on this GDD:
 
 {json.dumps(gdd, indent=2)}
 
 Generate ALL source files as a JSON object mapping file paths to file contents.
 The game must be playable and fun. Use Phaser shapes/text for visuals (no external assets).
-Include the window.__TEST__ interface for automated testing."""
+Include the window.__TEST__ interface for automated testing.
+Include basic gameplay analytics: call `navigator.sendBeacon('/api/analytics/event', new URLSearchParams({{ game: '{game_title}', event: 'game_start' }}))` on game start, and report 'game_over' with score and 'play_time' on game end. Keep analytics non-blocking."""
 
     messages = [
         {"role": "system", "content": PROGRAMMER_SYSTEM_PROMPT},
@@ -178,13 +181,17 @@ export default defineConfig({
 
 
 def _install_and_build(project_dir: Path) -> None:
+    import shutil
     import subprocess
 
     try:
         subprocess.run(["npm", "install"], cwd=str(project_dir), capture_output=True, timeout=120, check=True)
         logger.info("npm install completed")
+        subprocess.run(["npm", "run", "build"], cwd=str(project_dir), capture_output=True, timeout=120)
     except (subprocess.CalledProcessError, FileNotFoundError) as e:
-        logger.warning(f"npm install skipped: {e}")
+        logger.warning(f"npm install/build skipped: {e}")
+    finally:
+        shutil.rmtree(project_dir / "node_modules", ignore_errors=True)
 
 
 def _parse_code_files(text: str) -> dict[str, str]:
