@@ -4,9 +4,9 @@ from collections import Counter
 from datetime import datetime
 
 from loguru import logger
-from openai import AsyncOpenAI
 
 from shared.config import AppConfig
+from shared.llm_client import llm
 from shared.models import MarketSignal
 
 
@@ -22,16 +22,14 @@ async def analyze_signals(
     prompt = _build_analysis_prompt(signals, genre_counts)
 
     if config.zhipu_api_key:
-        client = AsyncOpenAI(api_key=config.zhipu_api_key, base_url="https://open.bigmodel.cn/api/paas/v4")
         model = "glm-4-flash"
     elif config.deepseek_api_key:
-        client = AsyncOpenAI(api_key=config.deepseek_api_key, base_url="https://api.deepseek.com")
         model = "deepseek-chat"
     else:
         logger.error("No AI API key configured (need ZHIPU_API_KEY or DEEPSEEK_API_KEY)")
         return [], ""
 
-    response = await client.chat.completions.create(
+    analysis_text, usage = await llm.chat_completion(
         model=model,
         messages=[
             {"role": "system", "content": ANALYST_SYSTEM_PROMPT},
@@ -39,9 +37,9 @@ async def analyze_signals(
         ],
         temperature=0.7,
         max_tokens=2000,
+        agent_name="analyzer",
+        project_name="",
     )
-
-    analysis_text = response.choices[0].message.content or ""
 
     opportunities = _parse_opportunities(analysis_text)
     logger.info(f"Identified {len(opportunities)} market opportunities")

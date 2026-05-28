@@ -5,13 +5,13 @@ import json
 import httpx
 from bs4 import BeautifulSoup
 from loguru import logger
-from openai import AsyncOpenAI
 
 from orchestrator.persistence import (
     get_live_projects,
     save_feedback,
 )
 from shared.config import load_config
+from shared.llm_client import llm
 
 
 _FEEDBACK_CATEGORIES = ["bug", "feature", "praise", "question", "other"]
@@ -68,22 +68,19 @@ def _parse_itch_comments(html: str, base_url: str) -> list[dict]:
     return comments
 
 
-async def _categorize_feedback(text: str, config) -> tuple[str, str, str]:
+async def _categorize_feedback(text: str, config, project_name: str = "") -> tuple[str, str, str]:
     if not config.zhipu_api_key:
         return "other", "no AI key", text[:200]
 
-    client = AsyncOpenAI(
-        api_key=config.zhipu_api_key,
-        base_url="https://open.bigmodel.cn/api/paas/v4",
-    )
     try:
-        resp = await client.chat.completions.create(
+        raw, usage = await llm.chat_completion(
             model="glm-4-flash",
             messages=[{"role": "user", "content": _CATEGORIZE_PROMPT.format(text=text[:1000])}],
             temperature=0.1,
             max_tokens=300,
+            agent_name="feedback_collector",
+            project_name=project_name,
         )
-        raw = resp.choices[0].message.content or ""
         raw = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
         data = json.loads(raw)
         category = data.get("category", "other")
@@ -122,7 +119,7 @@ async def collect_feedback() -> dict:
             logger.info(f"Found {len(comments)} comments on {project['name']}")
 
             for comment in comments:
-                category, reason, summary = await _categorize_feedback(comment["text"], config)
+                category, reason, summary = await _categorize_feedback(comment["text"], config, project_name=project['name'])
                 saved = await save_feedback(
                     project_id=project_id,
                     post_id=comment["post_id"],

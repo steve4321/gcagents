@@ -102,3 +102,36 @@ class CompanyMemory(BaseModel):
     content: dict
     importance: float = 0.5
     created_at: datetime = datetime.now()
+
+
+class FinanceBudget(BaseModel):
+    id: int | None = None
+    category: str
+    budget_type: str = "monthly"
+    budget_limit_usd: float
+    spent_usd: float = 0.0
+    period_start: str | None = None
+    period_end: str | None = None
+    is_active: bool = True
+    created_at: datetime = datetime.now()
+
+
+class ChatMessage(BaseModel):
+    id: int | None = None
+    role: str
+    content: str
+    agent_name: str = ""
+    metadata: dict = {}
+    created_at: datetime = datetime.now()
+
+
+class EventLog(BaseModel):
+    id: int | None = None
+    event_type: str
+    severity: str = "info"
+    title: str
+    detail: str = ""
+    source_agent: str = ""
+    project_name: str = ""
+    metadata: dict = {}
+    created_at: datetime = datetime.now()

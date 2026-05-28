@@ -6,7 +6,7 @@ import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from loguru import logger
@@ -20,6 +20,20 @@ engine = create_async_engine(config.db_url, echo=False)
 
 # Track running pipeline process
 _pipeline_process: subprocess.Popen | None = None
+
+# Track connected WebSocket clients for event broadcasting
+_event_clients: set[WebSocket] = set()
+
+
+async def broadcast_event(event_data: dict):
+    """Send event to all connected WebSocket clients."""
+    disconnected: set[WebSocket] = set()
+    for ws in _event_clients:
+        try:
+            await ws.send_json({"type": "event", "data": event_data})
+        except Exception:
+            disconnected.add(ws)
+    _event_clients.difference_update(disconnected)
 
 
 @asynccontextmanager
@@ -302,6 +316,95 @@ async def list_feedback(project_id: int, unprocessed_only: bool = False):
 async def list_live_projects():
     from orchestrator.persistence import get_live_projects
     return await get_live_projects()
+
+
+# ── WebSocket Event Stream ─────────────────────────────────────────────────────
+
+@app.websocket("/ws/events")
+async def events_websocket(websocket: WebSocket):
+    await websocket.accept()
+    _event_clients.add(websocket)
+    try:
+        from orchestrator.persistence import get_recent_events
+        events = await get_recent_events(limit=50)
+        for event in reversed(events):
+            await websocket.send_json({"type": "event", "data": event})
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        pass
+    finally:
+        _event_clients.discard(websocket)
+
+
+# ── Chat API ───────────────────────────────────────────────────────────────────
+
+@app.post("/api/chat/send")
+async def send_chat_message(message: dict):
+    content = message.get("content", "").strip()
+    target_agent = message.get("target_agent", "ceo").strip().lower()
+
+    if not content:
+        raise HTTPException(400, "Message content is required")
+
+    if target_agent not in ("ceo", "cfo", "coo"):
+        raise HTTPException(400, "Target must be ceo, cfo, or coo")
+
+    from orchestrator.persistence import save_chat_message, log_event
+
+    await save_chat_message(
+        role="user",
+        content=content,
+        agent_name=target_agent,
+        metadata={"target_agent": target_agent, "processed": False},
+    )
+
+    await log_event(
+        event_type="system",
+        severity="info",
+        title=f"User message to {target_agent.upper()}",
+        detail=content[:200],
+        source_agent="dashboard",
+    )
+
+    return {"status": "sent", "target": target_agent}
+
+
+@app.get("/api/chat/history")
+async def get_chat_history_api(limit: int = 100):
+    from orchestrator.persistence import get_chat_history
+    return await get_chat_history(limit)
+
+
+# ── Events API ─────────────────────────────────────────────────────────────────
+
+@app.get("/api/events")
+async def get_events(limit: int = 200, event_type: str = ""):
+    from orchestrator.persistence import get_recent_events
+    return await get_recent_events(limit, event_type)
+
+
+# ── Finance API ────────────────────────────────────────────────────────────────
+
+@app.post("/api/finance/budget")
+async def set_budget(budget: dict):
+    from orchestrator.persistence import set_budget as db_set_budget, log_event
+
+    category = budget.get("category", "monthly")
+    budget_type = budget.get("budget_type", "monthly")
+    limit_usd = budget.get("budget_limit_usd", 0)
+
+    await db_set_budget(category, budget_type, limit_usd)
+    await log_event("finance", "info", f"Budget set: {category} ${limit_usd}", source_agent="dashboard")
+    return {"status": "ok"}
+
+
+@app.get("/api/finance/summary")
+async def get_finance_summary(days: int = 30):
+    from orchestrator.persistence import get_usage_summary, get_active_budgets
+    summary = await get_usage_summary(days)
+    budgets = await get_active_budgets()
+    return {"usage": summary, "budgets": budgets}
 
 
 # ── Game Preview Static Files ─────────────────────────────────────────────────

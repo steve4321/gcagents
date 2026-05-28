@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+from datetime import datetime, timezone
+
 from loguru import logger
 
 from shared.config import load_config
@@ -53,7 +56,124 @@ async def _find_project_to_update() -> dict | None:
     return None
 
 
+async def _process_ceo_instructions(state: CompanyState) -> dict:
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+
+    from shared.llm_client import llm
+
+    from orchestrator.persistence import get_pending_instructions, log_event
+
+    instructions = await get_pending_instructions("ceo")
+    if not instructions:
+        return {}
+
+    updates: dict = {}
+    forced_genre: str | None = None
+
+    for instruction in instructions[:5]:
+        content = instruction.get("content", "")
+        if not content:
+            continue
+
+        try:
+            response, usage = await llm.chat_completion(
+                model="glm-4-flash",
+                messages=[
+                    {"role": "system", "content": (
+                        "You are processing user instructions for an autonomous game company CEO. "
+                        "Classify the user's intent and extract key information. "
+                        "Respond in JSON format:\n"
+                        '{"intent": "direction" | "question" | "feedback" | "stop", '
+                        '"genre": "extracted_genre_or_null", '
+                        '"summary": "brief_summary"}'
+                    )},
+                    {"role": "user", "content": content},
+                ],
+                max_tokens=200,
+                temperature=0.1,
+                agent_name="ceo",
+            )
+
+            try:
+                parsed = json.loads(response)
+            except json.JSONDecodeError:
+                parsed = {"intent": "feedback", "genre": None, "summary": content[:100]}
+
+            intent = parsed.get("intent", "feedback")
+            genre = parsed.get("genre")
+            summary = parsed.get("summary", content[:100])
+
+        except Exception as e:
+            logger.warning(f"CEO: Failed to process instruction: {e}")
+            intent = "feedback"
+            genre = None
+            summary = content[:100]
+
+        if intent == "direction" and genre:
+            config = load_config()
+            engine = create_async_engine(config.db_url, echo=False)
+            async with AsyncSession(engine) as db:
+                await db.execute(
+                    text("""
+                        INSERT INTO company_memory (category, title, content, importance, created_at)
+                        VALUES ('directive', 'user_genre_directive', :content, 0.9, :now)
+                    """),
+                    {
+                        "content": json.dumps({"genre": genre, "instruction": content, "source": "user_chat"}),
+                        "now": datetime.now(timezone.utc).isoformat(),
+                    },
+                )
+                await db.commit()
+            await engine.dispose()
+
+            forced_genre = genre
+            await log_event(
+                "pipeline", "info",
+                f"CEO received user directive: make {genre} game",
+                detail=content[:200], source_agent="ceo",
+            )
+
+        elif intent == "stop":
+            await log_event(
+                "pipeline", "warning",
+                "CEO received stop instruction from user",
+                detail=content[:200], source_agent="ceo",
+            )
+            updates["phase"] = PipelinePhase.IDLE
+
+        elif intent == "question":
+            await log_event("system", "info", f"CEO question: {summary}", source_agent="ceo")
+
+        else:
+            await log_event("system", "info", f"CEO user feedback: {summary}", source_agent="ceo")
+
+        config = load_config()
+        engine = create_async_engine(config.db_url, echo=False)
+        async with AsyncSession(engine) as db:
+            metadata = json.loads(instruction.get("metadata_json", instruction.get("metadata", "{}")))
+            if isinstance(metadata, str):
+                metadata = json.loads(metadata)
+            metadata["processed"] = True
+            await db.execute(
+                text("UPDATE chat_messages SET metadata_json = :meta WHERE id = :mid"),
+                {"meta": json.dumps(metadata), "mid": instruction["id"]},
+            )
+            await db.commit()
+        await engine.dispose()
+
+    if forced_genre and not updates.get("phase"):
+        updates["_forced_genre"] = forced_genre
+
+    return updates
+
+
 async def ceo_evaluate(state: CompanyState) -> dict:
+    instruction_updates = await _process_ceo_instructions(state)
+
+    if instruction_updates.get("phase") == PipelinePhase.IDLE:
+        return {"phase": PipelinePhase.IDLE}
+
     update_target = await _find_project_to_update()
     if update_target:
         logger.info(
@@ -84,6 +204,15 @@ async def ceo_evaluate(state: CompanyState) -> dict:
     if not novel:
         logger.info("CEO: All top genres already produced, picking best anyway")
         novel = opportunities
+
+    forced_genre = instruction_updates.get("_forced_genre")
+    if forced_genre:
+        forced_matches = [o for o in novel if o.get("genre", "").lower() == forced_genre.lower()]
+        if forced_matches:
+            novel = forced_matches
+            logger.info(f"CEO: User directed genre '{forced_genre}', filtering to {len(forced_matches)} matches")
+        else:
+            logger.info(f"CEO: User directed genre '{forced_genre}', but no matching opportunities found")
 
     top_opportunity = max(novel, key=lambda x: x.get("market_opportunity_score", x.get("score", 0)))
     threshold = 0.6

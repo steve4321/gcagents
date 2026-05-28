@@ -5,9 +5,9 @@ from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader
 from loguru import logger
-from openai import AsyncOpenAI
 
 from shared.config import AppConfig
+from shared.llm_client import llm
 
 
 PROGRAMMER_SYSTEM_PROMPT = """You are an expert Phaser 4 + TypeScript game developer.
@@ -47,11 +47,9 @@ async def generate_game_code(gdd: dict, project_dir: Path, config: AppConfig, bu
     _scaffold_project(project_dir)
 
     if config.deepseek_api_key:
-        client = AsyncOpenAI(api_key=config.deepseek_api_key, base_url="https://api.deepseek.com")
         model = "deepseek-coder"
         max_tokens = 16384
     elif config.zhipu_api_key:
-        client = AsyncOpenAI(api_key=config.zhipu_api_key, base_url="https://open.bigmodel.cn/api/paas/v4")
         model = "glm-4-flash"
         max_tokens = 8192
     else:
@@ -79,14 +77,16 @@ Include basic gameplay analytics: call `navigator.sendBeacon('/api/analytics/eve
             "content": f"The previous build FAILED with this error. Fix the code:\n\n{build_error[:2000]}\n\nReturn ALL source files again with the fixes applied.",
         })
 
-    response = await client.chat.completions.create(
+    response = await llm.chat_completion(
         model=model,
         messages=messages,
         temperature=0.4,
         max_tokens=max_tokens,
+        agent_name="programmer",
+        project_name=gdd.get("title", "unknown"),
     )
 
-    text = response.choices[0].message.content or ""
+    text = response[0]
     files = _parse_code_files(text)
 
     src_dir = project_dir / "src"

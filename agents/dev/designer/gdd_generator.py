@@ -3,9 +3,9 @@ from __future__ import annotations
 import json
 
 from loguru import logger
-from openai import AsyncOpenAI
 
 from shared.config import AppConfig
+from shared.llm_client import llm
 from shared.models import GameProposal
 
 
@@ -61,10 +61,8 @@ async def generate_gdd(proposal: GameProposal, config: AppConfig) -> dict:
     logger.info(f"Generating GDD for: {proposal.name} ({proposal.genre})")
 
     if config.zhipu_api_key:
-        client = AsyncOpenAI(api_key=config.zhipu_api_key, base_url="https://open.bigmodel.cn/api/paas/v4")
         model = "glm-4-flash"
     elif config.deepseek_api_key:
-        client = AsyncOpenAI(api_key=config.deepseek_api_key, base_url="https://api.deepseek.com")
         model = "deepseek-chat"
     else:
         logger.error("No AI API key configured")
@@ -82,8 +80,7 @@ Market Score: {proposal.market_opportunity_score}
 
 Generate a complete, detailed GDD. Make the game fun and engaging for web play."""
 
-
-    response = await client.chat.completions.create(
+    text, usage = await llm.chat_completion(
         model=model,
         messages=[
             {"role": "system", "content": DESIGNER_SYSTEM_PROMPT},
@@ -91,9 +88,9 @@ Generate a complete, detailed GDD. Make the game fun and engaging for web play."
         ],
         temperature=0.8,
         max_tokens=3000,
+        agent_name="designer",
+        project_name=proposal.name,
     )
-
-    text = response.choices[0].message.content or ""
     gdd = _parse_gdd(text)
     logger.info(f"GDD generated: {gdd.get('title', 'untitled')} with {len(gdd.get('scenes', []))} scenes")
 

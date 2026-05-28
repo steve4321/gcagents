@@ -28,6 +28,50 @@
       </div>
     </header>
 
+    <section id="chatSection" class="section">
+      <div class="section-header">
+        <div class="section-title">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/>
+          </svg>
+          Executive Chat
+        </div>
+        <svg class="section-toggle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="6 9 12 15 18 9"/>
+        </svg>
+      </div>
+      <div class="section-content" id="chatContent">
+        <div class="chat-tabs">
+          <button class="chat-tab active" data-agent="ceo">CEO</button>
+          <button class="chat-tab" data-agent="cfo">CFO</button>
+          <button class="chat-tab" data-agent="coo">COO</button>
+        </div>
+        <div class="chat-messages" id="chatMessages"></div>
+        <div class="chat-input-area">
+          <input type="text" id="chatInput" class="chat-input" placeholder="Send a message...">
+          <button id="chatSendBtn" class="chat-send-btn">Send</button>
+        </div>
+      </div>
+    </section>
+
+    <section id="eventLogSection" class="section">
+      <div class="section-header">
+        <div class="section-title">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="4 17 10 11 4 5"/>
+            <line x1="12" y1="19" x2="20" y2="19"/>
+          </svg>
+          Company Event Log
+        </div>
+        <svg class="section-toggle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="6 9 12 15 18 9"/>
+        </svg>
+      </div>
+      <div class="section-content" id="eventLogContent">
+        <div class="event-log" id="eventLogContainer"></div>
+      </div>
+    </section>
+
     <section id="agentsSection" class="section">
       <div class="section-header">
         <div class="section-title">

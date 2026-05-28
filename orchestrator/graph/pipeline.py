@@ -7,6 +7,8 @@ from loguru import logger
 
 from orchestrator.state import CompanyState, PipelinePhase
 from orchestrator.nodes.ceo import ceo_evaluate, route_after_qa
+from orchestrator.nodes.cfo import cfo_budget_check
+from orchestrator.nodes.coo import coo_health_check
 from agents.research.scanner import scan_market
 from agents.dev.designer.agent import design_game
 from agents.dev.artist.art_node import generate_art
@@ -98,11 +100,13 @@ async def _update_from_feedback(state: CompanyState) -> dict:
 def build_company_graph() -> StateGraph:
     graph = StateGraph(CompanyState)
 
+    graph.add_node("coo_check", _logged_node(coo_health_check, "coo_check", "operating"))
     graph.add_node("collect_feedback", _collect_feedback)
     graph.add_node("scan", scan_market)
     graph.add_node("evaluate", _logged_node(ceo_evaluate, "evaluate", "evaluating"))
     graph.add_node("design", _logged_node(design_game, "design", "designing"))
     graph.add_node("art", _logged_node(generate_art, "art", "designing"))
+    graph.add_node("cfo_check", _logged_node(cfo_budget_check, "cfo_check", "developing"))
     graph.add_node("develop", _logged_node(develop_game, "develop", "developing"))
     graph.add_node("qa", _logged_node(run_qa, "qa", "testing"))
     graph.add_node("build", _logged_node(build_game, "build", "building"))
@@ -110,7 +114,9 @@ def build_company_graph() -> StateGraph:
     graph.add_node("version", _save_version)
     graph.add_node("update", _update_from_feedback)
 
-    graph.set_entry_point("collect_feedback")
+    graph.set_entry_point("coo_check")
+
+    graph.add_edge("coo_check", "collect_feedback")
 
     graph.add_edge("collect_feedback", "scan")
 
@@ -131,13 +137,21 @@ def build_company_graph() -> StateGraph:
         "update",
         _route_after_update,
         {
-            "develop": "develop",
+            "cfo_check": "cfo_check",
             "scan": "scan",
         },
     )
 
     graph.add_edge("design", "art")
-    graph.add_edge("art", "develop")
+    graph.add_edge("art", "cfo_check")
+    graph.add_conditional_edges(
+        "cfo_check",
+        _route_after_cfo_check,
+        {
+            "develop": "develop",
+            "abort": END,
+        },
+    )
     graph.add_edge("develop", "qa")
 
     graph.add_conditional_edges(
@@ -169,8 +183,14 @@ def _route_after_evaluation(state: CompanyState) -> str:
 
 def _route_after_update(state: CompanyState) -> str:
     if state.phase == PipelinePhase.DEVELOPING:
-        return "develop"
+        return "cfo_check"
     return "scan"
+
+
+def _route_after_cfo_check(state: CompanyState) -> str:
+    if state.errors and any("budget" in e.lower() for e in state.errors):
+        return "abort"
+    return "develop"
 
 
 async def create_company_app():

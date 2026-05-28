@@ -579,6 +579,168 @@ function closePreview() {
   setTimeout(() => { iframe.src = ''; }, 300);
 }
 
+let chatTarget = 'ceo';
+let chatHistory = [];
+
+async function renderChat() {
+  const container = $('#chatMessages');
+  if (!container) return;
+
+  try {
+    const messages = await fetchJSON(`${API_BASE}/chat/history?limit=100`);
+    chatHistory = messages.filter(m => m.agent_name === chatTarget);
+    container.innerHTML = '';
+
+    chatHistory.forEach(msg => {
+      const isUser = msg.role === 'user';
+      const roleClass = msg.agent_name ? msg.agent_name.toLowerCase() : 'system';
+      container.innerHTML += `
+        <div class="chat-message ${isUser ? 'user' : 'agent'}">
+          <span class="chat-message-role ${roleClass}">${isUser ? 'You' : (msg.agent_name || 'Agent')}</span>
+          <div class="chat-message-bubble">${escapeHtml(msg.content)}</div>
+        </div>
+      `;
+    });
+
+    container.scrollTop = container.scrollHeight;
+
+    $$('.chat-tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        $$('.chat-tab').forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+        chatTarget = tab.dataset.agent;
+        renderChat();
+      });
+    });
+
+    const sendBtn = $('#chatSendBtn');
+    if (sendBtn) {
+      sendBtn.onclick = sendChatMessage;
+    }
+
+    const chatInput = $('#chatInput');
+    if (chatInput) {
+      chatInput.onkeydown = (e) => {
+        if (e.key === 'Enter') sendChatMessage();
+      };
+    }
+
+  } catch (err) {
+    container.innerHTML = '<div class="error-state"><div class="error-message">Failed to load chat</div></div>';
+  }
+}
+
+async function sendChatMessage() {
+  const input = $('#chatInput');
+  const container = $('#chatMessages');
+  if (!input || !container) return;
+
+  const content = input.value.trim();
+  if (!content) return;
+
+  const roleClass = chatTarget;
+  container.innerHTML += `
+    <div class="chat-message user">
+      <span class="chat-message-role ${roleClass}">You</span>
+      <div class="chat-message-bubble">${escapeHtml(content)}</div>
+    </div>
+  `;
+  container.scrollTop = container.scrollHeight;
+  input.value = '';
+
+  try {
+    await fetchJSON(`${API_BASE}/chat/send`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content, target_agent: chatTarget }),
+    });
+    await renderChat();
+  } catch (err) {
+    container.innerHTML += `
+      <div class="chat-message user">
+        <span class="chat-message-role ${roleClass}">Error</span>
+        <div class="chat-message-bubble" style="color:var(--accent-red)">Failed to send message</div>
+      </div>
+    `;
+  }
+}
+
+let eventSocket = null;
+let eventFallbackInterval = null;
+
+function connectEventStream() {
+  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const wsUrl = `${protocol}//${location.host}/ws/events`;
+
+  try {
+    eventSocket = new WebSocket(wsUrl);
+
+    eventSocket.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.type === 'event') {
+          appendEventLine(data.data);
+        }
+      } catch {}
+    };
+
+    eventSocket.onerror = () => {
+      if (!eventFallbackInterval) {
+        eventFallbackInterval = setInterval(loadEvents, 10000);
+      }
+    };
+
+    eventSocket.onclose = () => {
+      if (!eventFallbackInterval) {
+        eventFallbackInterval = setInterval(loadEvents, 10000);
+      }
+    };
+  } catch {
+    if (!eventFallbackInterval) {
+      eventFallbackInterval = setInterval(loadEvents, 10000);
+    }
+  }
+}
+
+async function loadEvents() {
+  const container = $('#eventLogContainer');
+  if (!container) return;
+
+  try {
+    const events = await fetchJSON(`${API_BASE}/events?limit=200`);
+    container.innerHTML = '';
+    events.reverse().forEach(e => appendEventLine(e));
+  } catch (err) {
+    container.innerHTML = '<div class="error-state"><div class="error-message">Failed to load events</div></div>';
+  }
+}
+
+function appendEventLine(event) {
+  const container = $('#eventLogContainer');
+  if (!container) return;
+
+  const time = event.created_at
+    ? new Date(event.created_at).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+    : '--:--:--';
+  const line = document.createElement('div');
+  line.className = 'event-line';
+  line.innerHTML = `
+    <span class="event-time">${time}</span>
+    <span class="event-type-badge event-type-${event.event_type || 'system'}">${event.event_type || 'system'}</span>
+    <span class="event-severity severity-${event.severity || 'info'}">●</span>
+    <span class="event-title">${escapeHtml(event.title || '')}</span>
+    ${event.detail ? `<span class="event-detail"> — ${escapeHtml(event.detail).slice(0, 120)}</span>` : ''}
+  `;
+  container.appendChild(line);
+  container.scrollTop = container.scrollHeight;
+}
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
 async function refreshAll() {
   const btn = $('.refresh-btn');
   if (btn) {
@@ -592,6 +754,8 @@ async function refreshAll() {
     renderMarket(),
     renderProjects(),
     renderMemory(),
+    renderChat(),
+    loadEvents(),
   ]);
 
   if (btn) {
@@ -629,6 +793,10 @@ function init() {
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') closePreview();
   });
+
+  connectEventStream();
+  renderChat();
+  loadEvents();
 
   refreshAll();
 
