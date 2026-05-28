@@ -5,7 +5,7 @@ from copy import deepcopy
 CHARACTER_SPRITE_WORKFLOW: dict = {
     "1": {
         "class_type": "CheckpointLoaderSimple",
-        "inputs": {"ckpt_name": "sd_xl_base_1.0.safetensors"},
+        "inputs": {"ckpt_name": "v1-5-pruned-emaonly.safetensors"},
     },
     "2": {
         "class_type": "CLIPTextEncode",
@@ -36,7 +36,7 @@ CHARACTER_SPRITE_WORKFLOW: dict = {
     },
     "6": {
         "class_type": "VAEDecode",
-        "inputs": {"samples": ["5", 0]},
+        "inputs": {"samples": ["5", 0], "vae": ["1", 2]},
     },
     "7": {
         "class_type": "SaveImage",
@@ -47,7 +47,7 @@ CHARACTER_SPRITE_WORKFLOW: dict = {
 BACKGROUND_WORKFLOW: dict = {
     "1": {
         "class_type": "CheckpointLoaderSimple",
-        "inputs": {"ckpt_name": "sd_xl_base_1.0.safetensors"},
+        "inputs": {"ckpt_name": "v1-5-pruned-emaonly.safetensors"},
     },
     "2": {
         "class_type": "CLIPTextEncode",
@@ -78,7 +78,7 @@ BACKGROUND_WORKFLOW: dict = {
     },
     "6": {
         "class_type": "VAEDecode",
-        "inputs": {"samples": ["5", 0]},
+        "inputs": {"samples": ["5", 0], "vae": ["1", 2]},
     },
     "7": {
         "class_type": "SaveImage",
@@ -89,7 +89,7 @@ BACKGROUND_WORKFLOW: dict = {
 UI_ELEMENT_WORKFLOW: dict = {
     "1": {
         "class_type": "CheckpointLoaderSimple",
-        "inputs": {"ckpt_name": "sd_xl_base_1.0.safetensors"},
+        "inputs": {"ckpt_name": "v1-5-pruned-emaonly.safetensors"},
     },
     "2": {
         "class_type": "CLIPTextEncode",
@@ -120,7 +120,7 @@ UI_ELEMENT_WORKFLOW: dict = {
     },
     "6": {
         "class_type": "VAEDecode",
-        "inputs": {"samples": ["5", 0]},
+        "inputs": {"samples": ["5", 0], "vae": ["1", 2]},
     },
     "7": {
         "class_type": "SaveImage",
