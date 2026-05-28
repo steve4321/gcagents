@@ -55,36 +55,29 @@ GCAgents 是一个完全自主运行的 AI 游戏公司系统。它像一家真�
 | 编排引擎 | **LangGraph** (Python) | 状态机构建、节点路由、条件跳转 |
 | AI 分析 | **glm-4-flash** (智谱免费) | 市场分析、游戏设计、评估决策 |
 | AI 代码 | **deepseek-coder** | 生成 Phaser 4 + TypeScript 游戏源码 |
-| 游戏运行 | **Phaser 4 + TypeScript + Vite** | 生成 Web 小游戏 |
+| 美术生成 | **ComfyUI + SD 1.5** (本地 GPU) | AI 生成游戏美术资产（背景/角色/UI 图标） |
+| 游戏运行 | **Phaser 4 + TypeScript + Vite** | 生成 Web 小游戏（加载并显示 ComfyUI 美术资产） |
 | 监控面板 | **FastAPI + 原生 HTML/CSS/JS + WebSocket** | 实时查看公司运营状态 + 高管聊天 + 事件流 |
 | 持久化 | **SQLite + SQLAlchemy (async)** | Agent 日志、市场信号、项目数据、财务、聊天、事件 |
 | 部署 | **Butler CLI** | 推送到 itch.io |
 
 ---
 
-## AI 模型策略
+## AI 模型与工具策略
 
-出于**成本优化**考虑，系统对不同任务使用不同的 AI 模型：
+系统使用三类 AI 能力，各司其职：
 
-```
-                ┌──────────────────┐
-                │   市场扫描       │ ← glm-4-flash (免费)
-                ├──────────────────┤
-                │   CEO 评估       │ ← glm-4-flash (免费)
-                ├──────────────────┤
-                │   GDD 设计       │ ← glm-4-flash (免费)
-                ├──────────────────┤
-                │   代码生成       │ ← deepseek-coder (付费)
-                ├──────────────────┤
-                │   QA 分析        │ ← glm-4-flash (免费)
-                ├──────────────────┤
-                │   财务分析        │ ← glm-4-flash (免费)
-                ├──────────────────┤
-                │   指令处理        │ ← glm-4-flash (免费)
-                └──────────────────┘
-```
+| 工具 | 用途 | 成本 |
+|---|---|---|
+| **glm-4-flash** | 市场分析、游戏设计、评估决策、指令分类 | 免费 |
+| **deepseek-coder** | 生成 Phaser 4 + TypeScript 游戏源码 | ~$0.0015/1K tokens |
+| **ComfyUI + SD 1.5** | 生成游戏美术资产（背景/角色/UI 图标），运行在本地 GPU | 免费（本地推理） |
 
-**统一 LLM 客户端**：所有 AI 调用通过 `shared/llm_client.py` 集中管理，自动追踪 token 用量和成本，3 次指数退避重试（HTTP 429/500/502/503）。每次调用自动写入 `api_usage_logs` 表。
+**关键决策**：
+- **ComfyUI** 是美术资产生成工具，不是游戏引擎。它输出 PNG 图片。
+- **Phaser** 是游戏运行时引擎，负责加载 ComfyUI 生成的图片并运行游戏逻辑。
+- 分析/设计类任务使用免费模型，只有代码生成使用付费模型。
+- 所有 LLM 调用通过统一客户端 `shared/llm_client.py` 管理，自动追踪 token 和成本。
 
 **关键决策**：分析/设计类任务使用免费模型（文字理解即可），只有代码生成使用付费模型。在 `config/agents.yaml` 中按 role 配置模型映射。
 
@@ -211,7 +204,9 @@ python3 -m orchestrator.main scan   # 仅执行市场扫描
 
 ### 4. 美术师 (`agents/dev/artist/`)
 
-通过 **ComfyUI + Stable Diffusion 1.5** 生成游戏美术资产。
+通过 **ComfyUI + Stable Diffusion 1.5** 生成游戏美术资产。**ComfyUI 不是游戏引擎**，它是美术资产生成工具——生成的 PNG 图片由 Phaser 游戏引擎加载使用。
+
+**ComfyUI 的角色**：接到 GDD 中的美术需求 → 调用本地 ComfyUI API → SD 1.5 生成 PNG → 放入游戏 `public/assets/` → Phaser 通过 `this.load.image()` / `this.add.image()` 加载显示。
 
 **核心组件**：
 - `comfyui_client.py` — ComfyUI HTTP API 客户端（queue → poll → download）
@@ -227,11 +222,25 @@ python3 -m orchestrator.main scan   # 仅执行市场扫描
 
 **性能**：RTX 3060 首次生成 ~391s（模型加载），后续 ~10s/张。
 
-**集成方式**：生成的 PNG 放入游戏 `public/assets/`，BootScene 通过 `this.load.image()` 加载，场景用 `this.add.image()` 替代 `this.add.rectangle()` 矩形占位符。
+**集成方式**：生成的 PNG 放入游戏 `public/assets/`，Phaser 的 BootScene 通过 `this.load.image()` 加载，场景用 `this.add.image()` 替代 `this.add.rectangle()` 矩形占位符。
+
+**ComfyUI 与 Phaser 的关系**：
+```
+ComfyUI (生成美术)                    Phaser (游戏运行时)
+┌─────────────────┐                 ┌──────────────────────┐
+│ GDD 美术需求     │                 │ BootScene            │
+│      ↓          │                 │   this.load.image()  │
+│ SD 1.5 推理     │  →  PNG 文件 →  │ GameScene            │
+│ (RTX 3060 GPU)  │     写入磁盘    │   this.add.image()   │
+│      ↓          │                 │ 玩家控制/碰撞/动画    │
+│ PNG 输出        │                 └──────────────────────┘
+└─────────────────┘
+```
+ComfyUI 负责"画画"，Phaser 负责"运行游戏"，两者是上下游协作关系。
 
 ### 5. 程序员 (`agents/dev/programmer/`)
 
-调用 **deepseek-coder** 生成完整的 Phaser 4 + TypeScript 游戏代码：
+调用 **deepseek-coder** 生成完整的 **Phaser 4**（预览版）+ TypeScript 游戏代码。Phaser 是游戏运行时引擎，负责场景管理、玩家输入、碰撞检测、动画——ComfyUI 生成的美术资产在 Phaser 中加载和显示。
 
 ```
 generate_game_code(gdd, project_dir, config, build_error="")
@@ -239,6 +248,7 @@ generate_game_code(gdd, project_dir, config, build_error="")
 
 - 接收 GDD，用 Jinja2 模板 + AI 生成完整游戏源码
 - 强制约束：`import * as Phaser from 'phaser'`（Phaser 4 ESM 无默认导出）
+- 游戏代码引用 ComfyUI 生成的美术资产路径（`assets/bg_menu.png`、`assets/player.png` 等），运行时通过 Phaser 加载
 - **构建重试机制**：如果 `build_error` 参数非空，自动将错误信息追加到 AI prompt 中，让 AI 修复后重新生成
 - **分析埋点**：在生成的游戏代码中注入 `navigator.sendBeacon` 调用，上报 `game_start`/`game_over` 事件（含分数、游戏时长）
 - **磁盘管理**：构建完成后自动删除 `node_modules/`，npm 缓存保证后续安装速度
