@@ -15,3 +15,5 @@ data/reports/
 .DS_Store
 *.log
 data/*.db
+comfyui/
+.playwright-mcp/
