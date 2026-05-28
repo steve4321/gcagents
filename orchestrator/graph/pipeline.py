@@ -75,12 +75,12 @@ async def _update_from_feedback(state: CompanyState) -> dict:
     pid = state.current_project_id
     if not pid:
         state.phase = PipelinePhase.SCANNING
-        return {"phase": PipelinePhase.SCANNING.value}
+        return {"phase": PipelinePhase.SCANNING}
 
     feedback = await get_unprocessed_feedback(pid)
     if not feedback:
         state.phase = PipelinePhase.SCANNING
-        return {"phase": PipelinePhase.SCANNING.value}
+        return {"phase": PipelinePhase.SCANNING}
 
     fids = [f["id"] for f in feedback]
     bugs = [f for f in feedback if f.get("category") == "bug"]
@@ -91,7 +91,7 @@ async def _update_from_feedback(state: CompanyState) -> dict:
 
     await mark_feedback_processed(fids)
     return {
-        "phase": PipelinePhase.DEVELOPING.value,
+        "phase": PipelinePhase.DEVELOPING,
         "gdd": state.gdd or {},
         "errors": [],
     }

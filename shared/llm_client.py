@@ -79,7 +79,8 @@ class LLMClient:
                 )
                 await asyncio.sleep(delay)
 
-        assert response is not None  # guaranteed by retry logic
+        if response is None:
+            raise RuntimeError(f"LLM call failed for model={model} after retries")
 
         usage = response.usage
         prompt_tokens = usage.prompt_tokens if usage else 0
@@ -100,7 +101,7 @@ class LLMClient:
         }
 
         try:
-            from orchestrator.persistence import log_api_usage
+            from orchestrator.persistence import log_api_usage, record_spend
 
             await log_api_usage(
                 model=model,
@@ -111,6 +112,11 @@ class LLMClient:
                 total_tokens=total_tokens,
                 estimated_cost_usd=cost_usd,
             )
+
+            if cost_usd > 0:
+                await record_spend("monthly", cost_usd)
+                if project_name:
+                    await record_spend(project_name, cost_usd)
         except Exception as e:
             logger.warning(f"Failed to log API usage: {e}")
 

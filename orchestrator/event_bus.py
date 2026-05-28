@@ -26,21 +26,4 @@ async def emit(
 
     logger.info(f"[EVENT] [{event_type}] [{severity}] {title}")
 
-    try:
-        from dashboard.web.api_server import broadcast_event
-        import asyncio
-
-        asyncio.create_task(broadcast_event({
-            "id": event_id,
-            "event_type": event_type,
-            "severity": severity,
-            "title": title,
-            "detail": detail,
-            "source_agent": source_agent,
-            "project_name": project_name,
-            "created_at": "",
-        }))
-    except Exception:
-        pass
-
     return event_id

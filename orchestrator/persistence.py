@@ -670,7 +670,7 @@ async def get_chat_history(limit: int = 100) -> list[dict]:
     engine = _get_engine()
     async with AsyncSession(engine) as db:
         rows = await db.execute(
-            text("SELECT * FROM chat_messages ORDER BY created_at DESC LIMIT :lim"),
+            text("SELECT * FROM chat_messages ORDER BY created_at ASC LIMIT :lim"),
             {"lim": limit},
         )
         return [dict(r._mapping) for r in rows.fetchall()]

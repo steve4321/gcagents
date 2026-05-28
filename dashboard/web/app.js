@@ -26,11 +26,8 @@ const AGENTS = [
   { id: 'deploy', name: 'Deployer', icon: 'M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 19l3 3m0 0l3-3m-3 3V10' },
 ];
 
-const $ = (sel) => document.querySelector(sel);
-const $$ = (sel) => document.querySelectorAll(sel);
-
 function $(sel) { return document.querySelector(sel); }
-function $$(sel) { return document.querySelectorAll(sel); }
+function $$(sel) { return document.querySelectorAll(sel); } }
 
 function fmtRelativeTime(isoString) {
   if (!isoString) return '--';
@@ -107,8 +104,8 @@ function showEmpty(el, message, icon) {
   `;
 }
 
-async function fetchJSON(url) {
-  const res = await fetch(url);
+async function fetchJSON(url, options) {
+  const res = await fetch(url, options);
   if (!res.ok) {
     const body = await res.text().catch(() => '');
     throw new Error(`${res.status} ${res.statusText}${body ? ': ' + body.slice(0, 100) : ''}`);
@@ -665,41 +662,13 @@ async function sendChatMessage() {
   }
 }
 
-let eventSocket = null;
-let eventFallbackInterval = null;
+let lastEventId = 0;
+let eventPollInterval = null;
 
-function connectEventStream() {
-  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const wsUrl = `${protocol}//${location.host}/ws/events`;
-
-  try {
-    eventSocket = new WebSocket(wsUrl);
-
-    eventSocket.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        if (data.type === 'event') {
-          appendEventLine(data.data);
-        }
-      } catch {}
-    };
-
-    eventSocket.onerror = () => {
-      if (!eventFallbackInterval) {
-        eventFallbackInterval = setInterval(loadEvents, 10000);
-      }
-    };
-
-    eventSocket.onclose = () => {
-      if (!eventFallbackInterval) {
-        eventFallbackInterval = setInterval(loadEvents, 10000);
-      }
-    };
-  } catch {
-    if (!eventFallbackInterval) {
-      eventFallbackInterval = setInterval(loadEvents, 10000);
-    }
-  }
+function startEventPolling() {
+  if (eventPollInterval) return;
+  loadEvents();
+  eventPollInterval = setInterval(loadEvents, 5000);
 }
 
 async function loadEvents() {
@@ -708,11 +677,15 @@ async function loadEvents() {
 
   try {
     const events = await fetchJSON(`${API_BASE}/events?limit=200`);
-    container.innerHTML = '';
-    events.reverse().forEach(e => appendEventLine(e));
-  } catch (err) {
-    container.innerHTML = '<div class="error-state"><div class="error-message">Failed to load events</div></div>';
-  }
+    if (!events || events.length === 0) return;
+
+    const maxId = Math.max(...events.map(e => e.id || 0));
+    if (maxId > lastEventId) {
+      const newEvents = events.filter(e => (e.id || 0) > lastEventId);
+      newEvents.forEach(e => appendEventLine(e));
+      lastEventId = maxId;
+    }
+  } catch {}
 }
 
 function appendEventLine(event) {
@@ -794,7 +767,7 @@ function init() {
     if (e.key === 'Escape') closePreview();
   });
 
-  connectEventStream();
+  startEventPolling();
   renderChat();
   loadEvents();
 

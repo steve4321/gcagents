@@ -5,7 +5,6 @@ from datetime import datetime, timezone
 
 from loguru import logger
 
-from shared.config import load_config
 from shared.models import GameProposal
 
 from orchestrator.state import CompanyState, PipelinePhase
@@ -13,26 +12,27 @@ from orchestrator.state import CompanyState, PipelinePhase
 
 async def _get_completed_genres() -> set[str]:
     from sqlalchemy import text
-    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+    from sqlalchemy.ext.asyncio import AsyncSession
 
-    config = load_config()
-    engine = create_async_engine(config.db_url, echo=False)
+    from orchestrator.persistence import _get_engine
+
+    engine = _get_engine()
     genres = set()
     async with AsyncSession(engine) as db:
         rows = await db.execute(text("SELECT DISTINCT genre FROM game_projects"))
         for row in rows.fetchall():
             if row.genre:
                 genres.add(row.genre.lower())
-    await engine.dispose()
     return genres
 
 
 async def _find_project_to_update() -> dict | None:
     from sqlalchemy import text
-    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+    from sqlalchemy.ext.asyncio import AsyncSession
 
-    config = load_config()
-    engine = create_async_engine(config.db_url, echo=False)
+    from orchestrator.persistence import _get_engine
+
+    engine = _get_engine()
     async with AsyncSession(engine) as db:
         rows = await db.execute(
             text("""
@@ -49,7 +49,6 @@ async def _find_project_to_update() -> dict | None:
             """)
         )
         row = rows.fetchone()
-    await engine.dispose()
 
     if row:
         return {"id": row.id, "name": row.name, "itch_url": row.itch_url, "unprocessed_count": row.unprocessed_count}
@@ -58,16 +57,17 @@ async def _find_project_to_update() -> dict | None:
 
 async def _process_ceo_instructions(state: CompanyState) -> dict:
     from sqlalchemy import text
-    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+    from sqlalchemy.ext.asyncio import AsyncSession
 
     from shared.llm_client import llm
 
-    from orchestrator.persistence import get_pending_instructions, log_event
+    from orchestrator.persistence import _get_engine, get_pending_instructions, log_event
 
     instructions = await get_pending_instructions("ceo")
     if not instructions:
         return {}
 
+    engine = _get_engine()
     updates: dict = {}
     forced_genre: str | None = None
 
@@ -111,8 +111,6 @@ async def _process_ceo_instructions(state: CompanyState) -> dict:
             summary = content[:100]
 
         if intent == "direction" and genre:
-            config = load_config()
-            engine = create_async_engine(config.db_url, echo=False)
             async with AsyncSession(engine) as db:
                 await db.execute(
                     text("""
@@ -125,7 +123,6 @@ async def _process_ceo_instructions(state: CompanyState) -> dict:
                     },
                 )
                 await db.commit()
-            await engine.dispose()
 
             forced_genre = genre
             await log_event(
@@ -148,19 +145,18 @@ async def _process_ceo_instructions(state: CompanyState) -> dict:
         else:
             await log_event("system", "info", f"CEO user feedback: {summary}", source_agent="ceo")
 
-        config = load_config()
-        engine = create_async_engine(config.db_url, echo=False)
         async with AsyncSession(engine) as db:
-            metadata = json.loads(instruction.get("metadata_json", instruction.get("metadata", "{}")))
-            if isinstance(metadata, str):
-                metadata = json.loads(metadata)
+            metadata_raw = instruction.get("metadata_json", "{}")
+            if isinstance(metadata_raw, str):
+                metadata = json.loads(metadata_raw)
+            else:
+                metadata = metadata_raw
             metadata["processed"] = True
             await db.execute(
                 text("UPDATE chat_messages SET metadata_json = :meta WHERE id = :mid"),
                 {"meta": json.dumps(metadata), "mid": instruction["id"]},
             )
             await db.commit()
-        await engine.dispose()
 
     if forced_genre and not updates.get("phase"):
         updates["_forced_genre"] = forced_genre
