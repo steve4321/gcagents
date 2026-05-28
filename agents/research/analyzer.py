@@ -59,6 +59,9 @@ For each opportunity, provide a JSON object with these exact fields:
 - target_platforms: ["itch.io", "web"]
 - differentiation: What makes this different from existing games
 - reference_games: List of 2-3 similar successful games
+- competition_analysis: Brief assessment of competition density for this genre (low/medium/high)
+- source_agreement_score: Float 0.0-1.0 indicating how many independent sources agree on this trend
+- trend_direction: One of "rising", "stable", or "declining"
 
 Return ONLY a JSON array of 3 objects, no other text."""
 
@@ -67,6 +70,14 @@ def _build_analysis_prompt(signals: list[MarketSignal], genre_counts: Counter) -
     top_genres = genre_counts.most_common(10)
     top_titles = sorted(signals, key=lambda s: s.score, reverse=True)[:15]
 
+    genre_sources: dict[str, set[str]] = {}
+    for s in signals:
+        if s.genre:
+            genre_sources.setdefault(s.genre, set()).add(s.source)
+
+    title_counts: Counter = Counter(s.title for s in signals)
+    title_overlap = [(t, c) for t, c in title_counts.most_common(10) if c > 1]
+
     lines = [
         f"Market data collected at {datetime.now().isoformat()}",
         f"Total signals: {len(signals)}",
@@ -74,7 +85,20 @@ def _build_analysis_prompt(signals: list[MarketSignal], genre_counts: Counter) -
         "## Top Genres",
     ]
     for genre, count in top_genres:
-        lines.append(f"- {genre}: {count} mentions")
+        sources_list = genre_sources.get(genre, set())
+        source_agreement = len(sources_list) / max(len(set(s.source for s in signals)), 1)
+        lines.append(f"- {genre}: {count} mentions (sources: {', '.join(sorted(sources_list))}, agreement: {source_agreement:.0%})")
+
+    lines.append("")
+    lines.append("## Cross-Source Genre Correlation")
+    for genre, sources in sorted(genre_sources.items(), key=lambda x: -len(x[1]))[:8]:
+        if len(sources) >= 2:
+            lines.append(f"- {genre}: confirmed by {len(sources)} sources ({', '.join(sorted(sources))})")
+
+    lines.append("")
+    lines.append("## Competition Density")
+    for genre, count in top_genres[:5]:
+        lines.append(f"- {genre}: {count} competing titles detected")
 
     lines.append("")
     lines.append("## Top Trending Games")
@@ -83,8 +107,15 @@ def _build_analysis_prompt(signals: list[MarketSignal], genre_counts: Counter) -
         if s.data.get("tags"):
             lines.append(f"  tags: {', '.join(s.data['tags'][:5])}")
 
+    if title_overlap:
+        lines.append("")
+        lines.append("## Multi-Source Title Mentions")
+        for title, count in title_overlap:
+            lines.append(f'- "{title}" found in {count} sources')
+
     lines.append("")
-    lines.append("Identify the best 3 game opportunities based on this data.")
+    lines.append("Identify the best 3 game opportunities based on this data. "
+                 "Consider cross-source agreement, competition density, and trend direction.")
 
     return "\n".join(lines)
 
@@ -122,6 +153,9 @@ _FIELD_MAP = {
     "platform": "target_platforms",
     "reference_games_list": "reference_games",
     "game_name": "name",
+    "competition": "competition_analysis",
+    "agreement_score": "source_agreement_score",
+    "trend": "trend_direction",
 }
 
 
@@ -132,4 +166,10 @@ def _normalize_opportunities(opportunities: list[dict]) -> list[dict]:
                 opp[new_key] = opp.pop(old_key)
         if "target_platforms" not in opp:
             opp["target_platforms"] = ["itch.io", "web"]
+        if "competition_analysis" not in opp:
+            opp["competition_analysis"] = "medium"
+        if "source_agreement_score" not in opp:
+            opp["source_agreement_score"] = 0.5
+        if "trend_direction" not in opp:
+            opp["trend_direction"] = "stable"
     return opportunities

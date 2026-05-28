@@ -471,6 +471,72 @@ async def get_finance_summary(days: int = 30):
     return {"usage": summary, "budgets": budgets}
 
 
+@app.get("/api/decisions")
+async def list_decisions():
+    from orchestrator.decision_gate import get_pending
+    decisions = await get_pending()
+    return [d.model_dump() for d in decisions]
+
+
+@app.post("/api/decisions/{decision_id}/respond")
+async def respond_decision(decision_id: str, response: str = ""):
+    from orchestrator.decision_gate import resolve
+    result = await resolve(decision_id, response)
+    if not result:
+        raise HTTPException(404, "Decision not found")
+    return result.model_dump()
+
+
+@app.get("/api/orchestrator/projects")
+async def list_orchestrator_projects():
+    from orchestrator.persistence import get_all_projects
+    projects = await get_all_projects()
+    return [p.model_dump() for p in projects]
+
+
+@app.get("/api/orchestrator/projects/{project_id}")
+async def get_orchestrator_project(project_id: str):
+    from orchestrator.persistence import get_project
+    project = await get_project(project_id)
+    if not project:
+        raise HTTPException(404, "Project not found")
+    return project.model_dump()
+
+
+@app.get("/api/orchestrator/tasks")
+async def list_tasks(project_id: str = ""):
+    from orchestrator.persistence import get_pending_tasks, get_project_tasks
+    if project_id:
+        tasks = await get_project_tasks(project_id)
+    else:
+        tasks = await get_pending_tasks()
+    return [t.model_dump() for t in tasks]
+
+
+@app.post("/api/projects/{project_id}/pause")
+async def pause_project(project_id: str):
+    from orchestrator.persistence import update_project_phase
+    await update_project_phase(project_id, "paused")
+    return {"status": "paused"}
+
+
+@app.post("/api/projects/{project_id}/resume")
+async def resume_project(project_id: str):
+    from orchestrator.persistence import get_project, update_project_phase
+    project = await get_project(project_id)
+    if not project:
+        raise HTTPException(404, "Project not found")
+    await update_project_phase(project_id, "backlog")
+    return {"status": "resumed"}
+
+
+@app.post("/api/projects/{project_id}/cancel")
+async def cancel_project(project_id: str):
+    from orchestrator.persistence import update_project_phase
+    await update_project_phase(project_id, "cancelled")
+    return {"status": "cancelled"}
+
+
 # ── Game Preview Static Files ─────────────────────────────────────────────────
 
 games_output = config.games_output_dir

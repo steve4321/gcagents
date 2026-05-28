@@ -132,6 +132,54 @@ async def ensure_tables():
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
             )
         """))
+        await db.execute(text("""
+            CREATE TABLE IF NOT EXISTS projects (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                genre TEXT DEFAULT '',
+                phase TEXT NOT NULL DEFAULT 'backlog',
+                progress REAL DEFAULT 0.0,
+                proposal TEXT,
+                gdd TEXT,
+                code_path TEXT,
+                art_status TEXT DEFAULT 'pending',
+                qa_result TEXT,
+                itch_url TEXT,
+                version TEXT DEFAULT '0.0.0',
+                awaiting_decision TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        """))
+        await db.execute(text("""
+            CREATE TABLE IF NOT EXISTS decisions (
+                id TEXT PRIMARY KEY,
+                project_id TEXT,
+                decision_type TEXT NOT NULL,
+                question TEXT NOT NULL,
+                options TEXT NOT NULL DEFAULT '[]',
+                context TEXT DEFAULT '{}',
+                status TEXT NOT NULL DEFAULT 'pending',
+                human_response TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                resolved_at TEXT
+            )
+        """))
+        await db.execute(text("""
+            CREATE TABLE IF NOT EXISTS tasks (
+                id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL,
+                task_type TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                progress REAL DEFAULT 0.0,
+                params TEXT DEFAULT '{}',
+                result TEXT,
+                error TEXT,
+                started_at TEXT,
+                completed_at TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        """))
         # Add columns to game_projects if missing (idempotent migration)
         for col_sql in [
             "ALTER TABLE game_projects ADD COLUMN current_version TEXT DEFAULT '0.0.0'",
@@ -741,3 +789,346 @@ async def get_recent_events(limit: int = 200, event_type: str = "") -> list[dict
                 {"lim": limit},
             )
         return [dict(r._mapping) for r in rows.fetchall()]
+
+
+# ── Projects (multi-project) ──────────────────────────────────────────────────
+
+async def save_project(project) -> str:
+    engine = _get_engine()
+    async with AsyncSession(engine) as db:
+        now = datetime.now(timezone.utc).isoformat()
+        existing = await db.execute(
+            text("SELECT id FROM projects WHERE id = :id"),
+            {"id": project.id},
+        )
+        if existing.fetchone():
+            await db.execute(
+                text("""
+                    UPDATE projects SET name=:name, genre=:genre, phase=:phase,
+                        progress=:progress, proposal=:proposal, gdd=:gdd,
+                        code_path=:code_path, art_status=:art_status,
+                        qa_result=:qa_result, itch_url=:itch_url,
+                        version=:version, awaiting_decision=:awaiting_decision,
+                        updated_at=:updated_at
+                    WHERE id=:id
+                """),
+                {
+                    "id": project.id,
+                    "name": project.name,
+                    "genre": project.genre,
+                    "phase": project.phase.value if hasattr(project.phase, "value") else project.phase,
+                    "progress": project.progress,
+                    "proposal": json.dumps(project.proposal) if project.proposal else None,
+                    "gdd": json.dumps(project.gdd) if project.gdd else None,
+                    "code_path": project.code_path,
+                    "art_status": project.art_status,
+                    "qa_result": json.dumps(project.qa_result) if project.qa_result else None,
+                    "itch_url": project.itch_url,
+                    "version": project.version,
+                    "awaiting_decision": project.awaiting_decision,
+                    "updated_at": now,
+                },
+            )
+        else:
+            await db.execute(
+                text("""
+                    INSERT INTO projects (id, name, genre, phase, progress, proposal, gdd,
+                        code_path, art_status, qa_result, itch_url, version,
+                        awaiting_decision, created_at, updated_at)
+                    VALUES (:id, :name, :genre, :phase, :progress, :proposal, :gdd,
+                        :code_path, :art_status, :qa_result, :itch_url, :version,
+                        :awaiting_decision, :created_at, :updated_at)
+                """),
+                {
+                    "id": project.id,
+                    "name": project.name,
+                    "genre": project.genre,
+                    "phase": project.phase.value if hasattr(project.phase, "value") else project.phase,
+                    "progress": project.progress,
+                    "proposal": json.dumps(project.proposal) if project.proposal else None,
+                    "gdd": json.dumps(project.gdd) if project.gdd else None,
+                    "code_path": project.code_path,
+                    "art_status": project.art_status,
+                    "qa_result": json.dumps(project.qa_result) if project.qa_result else None,
+                    "itch_url": project.itch_url,
+                    "version": project.version,
+                    "awaiting_decision": project.awaiting_decision,
+                    "created_at": now,
+                    "updated_at": now,
+                },
+            )
+        await db.commit()
+        return project.id
+
+
+async def get_project(project_id: str):
+    engine = _get_engine()
+    async with AsyncSession(engine) as db:
+        row = await db.execute(
+            text("SELECT * FROM projects WHERE id = :id"),
+            {"id": project_id},
+        )
+        result = row.fetchone()
+        if not result:
+            return None
+        return _row_to_project(dict(result._mapping))
+
+
+async def get_all_projects() -> list:
+    engine = _get_engine()
+    async with AsyncSession(engine) as db:
+        rows = await db.execute(
+            text("SELECT * FROM projects ORDER BY updated_at DESC")
+        )
+        return [_row_to_project(dict(r._mapping)) for r in rows.fetchall()]
+
+
+async def get_projects_by_phase(phase: str) -> list:
+    engine = _get_engine()
+    async with AsyncSession(engine) as db:
+        rows = await db.execute(
+            text("SELECT * FROM projects WHERE phase = :phase ORDER BY updated_at DESC"),
+            {"phase": phase},
+        )
+        return [_row_to_project(dict(r._mapping)) for r in rows.fetchall()]
+
+
+async def update_project_phase(project_id: str, phase: str, progress: float | None = None) -> None:
+    engine = _get_engine()
+    async with AsyncSession(engine) as db:
+        now = datetime.now(timezone.utc).isoformat()
+        if progress is not None:
+            await db.execute(
+                text("UPDATE projects SET phase=:phase, progress=:progress, updated_at=:now WHERE id=:id"),
+                {"phase": phase, "progress": progress, "now": now, "id": project_id},
+            )
+        else:
+            await db.execute(
+                text("UPDATE projects SET phase=:phase, updated_at=:now WHERE id=:id"),
+                {"phase": phase, "now": now, "id": project_id},
+            )
+        await db.commit()
+
+
+def _row_to_project(d: dict):
+    from shared.models import ProjectState, ProjectPhase
+    return ProjectState(
+        id=d["id"],
+        name=d["name"],
+        genre=d.get("genre", ""),
+        phase=ProjectPhase(d.get("phase", "backlog")),
+        progress=d.get("progress", 0.0),
+        proposal=json.loads(d["proposal"]) if d.get("proposal") else None,
+        gdd=json.loads(d["gdd"]) if d.get("gdd") else None,
+        code_path=d.get("code_path"),
+        art_status=d.get("art_status", "pending"),
+        qa_result=json.loads(d["qa_result"]) if d.get("qa_result") else None,
+        itch_url=d.get("itch_url"),
+        version=d.get("version", "0.0.0"),
+        awaiting_decision=d.get("awaiting_decision"),
+        created_at=d.get("created_at", datetime.now(timezone.utc).isoformat()),
+        updated_at=d.get("updated_at", datetime.now(timezone.utc).isoformat()),
+    )
+
+
+# ── Decisions ────────────────────────────────────────────────────────────────
+
+async def save_decision(decision) -> str:
+    engine = _get_engine()
+    async with AsyncSession(engine) as db:
+        now = datetime.now(timezone.utc).isoformat()
+        await db.execute(
+            text("""
+                INSERT INTO decisions (id, project_id, decision_type, question,
+                    options, context, status, human_response, created_at, resolved_at)
+                VALUES (:id, :project_id, :decision_type, :question,
+                    :options, :context, :status, :human_response, :created_at, :resolved_at)
+            """),
+            {
+                "id": decision.id,
+                "project_id": decision.project_id,
+                "decision_type": decision.decision_type.value if hasattr(decision.decision_type, "value") else decision.decision_type,
+                "question": decision.question,
+                "options": json.dumps(decision.options),
+                "context": json.dumps(decision.context),
+                "status": decision.status.value if hasattr(decision.status, "value") else decision.status,
+                "human_response": decision.human_response,
+                "created_at": now,
+                "resolved_at": decision.resolved_at.isoformat() if decision.resolved_at else None,
+            },
+        )
+        await db.commit()
+        return decision.id
+
+
+async def get_pending_decisions() -> list:
+    engine = _get_engine()
+    async with AsyncSession(engine) as db:
+        rows = await db.execute(
+            text("SELECT * FROM decisions WHERE status = 'pending' ORDER BY created_at DESC")
+        )
+        return [_row_to_decision(dict(r._mapping)) for r in rows.fetchall()]
+
+
+async def get_decision_by_id(decision_id: str):
+    engine = _get_engine()
+    async with AsyncSession(engine) as db:
+        row = await db.execute(
+            text("SELECT * FROM decisions WHERE id = :id"),
+            {"id": decision_id},
+        )
+        result = row.fetchone()
+        if not result:
+            return None
+        return _row_to_decision(dict(result._mapping))
+
+
+async def get_project_decisions(project_id: str) -> list:
+    engine = _get_engine()
+    async with AsyncSession(engine) as db:
+        rows = await db.execute(
+            text("SELECT * FROM decisions WHERE project_id = :pid ORDER BY created_at DESC"),
+            {"pid": project_id},
+        )
+        return [_row_to_decision(dict(r._mapping)) for r in rows.fetchall()]
+
+
+async def resolve_decision(decision_id: str, response: str, status: str = "approved") -> None:
+    engine = _get_engine()
+    async with AsyncSession(engine) as db:
+        now = datetime.now(timezone.utc).isoformat()
+        await db.execute(
+            text("UPDATE decisions SET status=:status, human_response=:response, resolved_at=:now WHERE id=:id"),
+            {"status": status, "response": response, "now": now, "id": decision_id},
+        )
+        await db.commit()
+
+
+def _row_to_decision(d: dict):
+    from shared.models import DecisionPoint, DecisionType, DecisionStatus
+    return DecisionPoint(
+        id=d["id"],
+        project_id=d.get("project_id"),
+        decision_type=DecisionType(d.get("decision_type", "new_project")),
+        question=d["question"],
+        options=json.loads(d.get("options", "[]")),
+        context=json.loads(d.get("context", "{}")),
+        status=DecisionStatus(d.get("status", "pending")),
+        human_response=d.get("human_response"),
+        created_at=d.get("created_at", datetime.now(timezone.utc).isoformat()),
+        resolved_at=d.get("resolved_at"),
+    )
+
+
+# ── Tasks ──────────────────────────────────────────────────────────────────────
+
+async def save_task(task) -> str:
+    engine = _get_engine()
+    async with AsyncSession(engine) as db:
+        now = datetime.now(timezone.utc).isoformat()
+        await db.execute(
+            text("""
+                INSERT INTO tasks (id, project_id, task_type, status, progress,
+                    params, result, error, started_at, completed_at, created_at)
+                VALUES (:id, :project_id, :task_type, :status, :progress,
+                    :params, :result, :error, :started_at, :completed_at, :created_at)
+            """),
+            {
+                "id": task.id,
+                "project_id": task.project_id,
+                "task_type": task.task_type,
+                "status": task.status.value if hasattr(task.status, "value") else task.status,
+                "progress": task.progress,
+                "params": json.dumps(task.params),
+                "result": json.dumps(task.result) if task.result else None,
+                "error": task.error,
+                "started_at": task.started_at.isoformat() if task.started_at else None,
+                "completed_at": task.completed_at.isoformat() if task.completed_at else None,
+                "created_at": now,
+            },
+        )
+        await db.commit()
+        return task.id
+
+
+async def get_task(task_id: str):
+    engine = _get_engine()
+    async with AsyncSession(engine) as db:
+        row = await db.execute(
+            text("SELECT * FROM tasks WHERE id = :id"),
+            {"id": task_id},
+        )
+        result = row.fetchone()
+        if not result:
+            return None
+        return _row_to_task(dict(result._mapping))
+
+
+async def get_project_tasks(project_id: str) -> list:
+    engine = _get_engine()
+    async with AsyncSession(engine) as db:
+        rows = await db.execute(
+            text("SELECT * FROM tasks WHERE project_id = :pid ORDER BY created_at DESC"),
+            {"pid": project_id},
+        )
+        return [_row_to_task(dict(r._mapping)) for r in rows.fetchall()]
+
+
+async def get_pending_tasks() -> list:
+    engine = _get_engine()
+    async with AsyncSession(engine) as db:
+        rows = await db.execute(
+            text("SELECT * FROM tasks WHERE status IN ('pending', 'running') ORDER BY created_at ASC")
+        )
+        return [_row_to_task(dict(r._mapping)) for r in rows.fetchall()]
+
+
+async def update_task_status(
+    task_id: str,
+    status: str,
+    progress: float | None = None,
+    result: dict | None = None,
+    error: str | None = None,
+) -> None:
+    engine = _get_engine()
+    async with AsyncSession(engine) as db:
+        now = datetime.now(timezone.utc).isoformat()
+        sets = ["status=:status"]
+        params: dict = {"id": task_id, "status": status}
+        if progress is not None:
+            sets.append("progress=:progress")
+            params["progress"] = progress
+        if result is not None:
+            sets.append("result=:result")
+            params["result"] = json.dumps(result)
+        if error is not None:
+            sets.append("error=:error")
+            params["error"] = error
+        if status in ("completed", "failed", "cancelled"):
+            sets.append("completed_at=:completed_at")
+            params["completed_at"] = now
+        elif status == "running":
+            sets.append("started_at=:started_at")
+            params["started_at"] = now
+        await db.execute(
+            text(f"UPDATE tasks SET {', '.join(sets)} WHERE id=:id"),
+            params,
+        )
+        await db.commit()
+
+
+def _row_to_task(d: dict):
+    from shared.models import TaskRecord, TaskStatus
+    return TaskRecord(
+        id=d["id"],
+        project_id=d["project_id"],
+        task_type=d["task_type"],
+        status=TaskStatus(d.get("status", "pending")),
+        progress=d.get("progress", 0.0),
+        params=json.loads(d.get("params", "{}")),
+        result=json.loads(d["result"]) if d.get("result") else None,
+        error=d.get("error"),
+        started_at=d.get("started_at"),
+        completed_at=d.get("completed_at"),
+        created_at=d.get("created_at", datetime.now(timezone.utc).isoformat()),
+    )

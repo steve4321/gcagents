@@ -191,53 +191,98 @@ async function renderAgents() {
   }
 }
 
-async function renderPipeline() {
-  const container = $('#pipelineContent');
+async function renderProjectBoard() {
+  const container = $('#projectBoard');
   if (!container) return;
 
-  container.innerHTML = `<div class="pipeline-container"><div class="pipeline-track">${PIPELINE_PHASES.map(() => '<div class="pipeline-phase"><div class="pipeline-node skeleton" style="width:44px;height:44px;border-radius:50%"></div></div>').join('')}</div></div>`;
+  container.innerHTML = '<div class="project-board-skeleton"></div>';
 
   try {
-    const [statusData, historyData] = await Promise.all([
-      fetchJSON(`${API_BASE}/status`),
-      fetchJSON(`${API_BASE}/pipeline/history`)
-    ]);
+    const projects = await fetchJSON(`${API_BASE}/orchestrator/projects`);
 
-    const currentPhase = statusData.phase || 'idle';
-    const currentIdx = PIPELINE_PHASES.findIndex(p => p.id === currentPhase);
-    const hasErrors = statusData.errors && statusData.errors.length > 0;
+    if (!projects || projects.length === 0) {
+      container.innerHTML = '';
+      showEmpty(container.parentElement, 'No projects yet. Projects will appear as the pipeline creates them.', '<rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/>');
+      return;
+    }
 
-    const historyMap = {};
-    (historyData || []).forEach(h => { historyMap[h.phase] = h; });
+    const phases = ['backlog', 'design', 'develop', 'test', 'build', 'live'];
+    const phaseLabels = { backlog: 'Backlog', design: 'Design', develop: 'Develop', test: 'Test', build: 'Build', live: 'Live' };
 
-    let html = '<div class="pipeline-container"><div class="pipeline-track">';
-
-    PIPELINE_PHASES.forEach((phase, i) => {
-      let cls = 'upcoming';
-      if (i < currentIdx) cls = 'completed';
-      else if (i === currentIdx) cls = hasErrors ? 'error' : 'current';
-
-      const hist = historyMap[phase.id];
-      const tooltip = hist ? `${fmtRelativeTime(hist.updated_at)}${hist.errors?.length ? ' - ' + hist.errors[0] : ''}` : '';
-
+    let html = '<div class="project-board">';
+    phases.forEach(phase => {
+      const phaseProjects = projects.filter(p => p.phase === phase);
       html += `
-        <div class="pipeline-phase ${cls}" data-tooltip="${tooltip}">
-          <div class="pipeline-node">
-            ${cls === 'completed' ?
-              '<svg class="node-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>' :
-              `<svg class="node-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="${AGENTS.find(a => a.id === phase.id)?.icon || ''}"/></svg>`
-            }
+        <div class="board-column">
+          <div class="board-column-header">
+            <span class="board-column-name">${phaseLabels[phase] || phase}</span>
+            <span class="board-column-count">${phaseProjects.length}</span>
           </div>
-          <div class="pipeline-phase-name">${phase.label}</div>
+          <div class="board-column-cards">
+            ${phaseProjects.length > 0 ? phaseProjects.map(p => `
+              <div class="project-card ${p.awaiting_decision ? 'awaiting-decision' : ''}" data-project-id="${p.id}">
+                <div class="project-card-header">
+                  <span class="project-name">${escapeHtml(p.name || 'Unnamed')}</span>
+                </div>
+                <div class="project-card-meta">
+                  <span class="project-genre-badge">${p.genre || 'General'}</span>
+                </div>
+                <div class="project-progress">
+                  <div class="project-progress-bar" style="width:${p.progress || 0}%"></div>
+                </div>
+                <div class="project-phase-indicator">${phaseLabels[phase] || phase}</div>
+              </div>
+            `).join('') : '<div class="board-column-empty">No projects</div>'}
+          </div>
         </div>
       `;
     });
-
-    html += '</div></div>';
+    html += '</div>';
     container.innerHTML = html;
 
   } catch (err) {
-    showError(container, 'Failed to load pipeline', err.message);
+    showError(container, 'Failed to load projects', err.message);
+  }
+}
+
+async function renderTaskMonitor() {
+  const container = $('#taskList');
+  if (!container) return;
+
+  container.innerHTML = '<div class="task-list-skeleton"></div>';
+
+  try {
+    const tasks = await fetchJSON(`${API_BASE}/orchestrator/tasks`);
+
+    if (!tasks || tasks.length === 0) {
+      container.innerHTML = '';
+      showEmpty(container.parentElement, 'No active tasks. Tasks will appear as projects progress.', '<path d="M12 20V10"/><path d="M18 20V4"/><path d="M6 20v-4"/>');
+      return;
+    }
+
+    let html = '<div class="task-list">';
+    tasks.forEach(task => {
+      const statusClass = getStatusClass(task.status);
+      const isRunning = task.status === 'running' || task.status === 'pending';
+      html += `
+        <div class="task-item" data-task-id="${task.id}">
+          <span class="task-status-badge ${statusClass}">${task.status || 'unknown'}</span>
+          <div class="task-info">
+            <span class="task-name">${escapeHtml(task.project_name || 'Unknown Project')}</span>
+            <span class="task-type">${task.task_type || 'task'}</span>
+          </div>
+          <div class="task-progress">
+            <div class="task-progress-bar ${isRunning ? 'running' : ''}" style="width:${task.progress || 0}%"></div>
+          </div>
+          <span class="task-duration">${task.duration ? fmtDuration(task.duration) : '--'}</span>
+        </div>
+      `;
+    });
+    html += '</div>';
+    container.innerHTML = html;
+
+  } catch (err) {
+    showError(container, 'Failed to load tasks', err.message);
   }
 }
 
@@ -258,6 +303,44 @@ async function renderMarket() {
     const opportunities = (reportData?.opportunities || []).slice(0, 3);
     const signals = (signalsData || []).slice(0, 20);
 
+    const sourceMap = {};
+    signals.forEach(s => {
+      const src = s.source || 'unknown';
+      if (!sourceMap[src]) sourceMap[src] = 0;
+      sourceMap[src]++;
+    });
+    const sourceBadges = Object.entries(sourceMap).map(([src, count]) => {
+      const active = count > 0;
+      return `<div class="source-badge ${active ? 'active' : 'inactive'}">${escapeHtml(src)} <span class="count">(${count})</span></div>`;
+    }).join('');
+
+    const genreTrendMap = {};
+    signals.forEach(s => {
+      const genre = s.genre || 'unknown';
+      if (!genreTrendMap[genre]) {
+        genreTrendMap[genre] = { rising: 0, stable: 0, declining: 0, total: 0, sources: new Set() };
+      }
+      genreTrendMap[genre].total++;
+      genreTrendMap[genre].sources.add(s.source);
+      if (s.score >= 0.7) genreTrendMap[genre].rising++;
+      else if (s.score >= 0.4) genreTrendMap[genre].stable++;
+      else genreTrendMap[genre].declining++;
+    });
+
+    const getTrendBadge = (genre) => {
+      const data = genreTrendMap[genre];
+      if (!data || data.total === 0) return '';
+      if (data.rising > data.declining) return '<div class="trend-badge rising">↑ Rising</div>';
+      if (data.declining > data.rising) return '<div class="trend-badge declining">↓ Declining</div>';
+      return '<div class="trend-badge stable">→ Stable</div>';
+    };
+
+    const getSourceAgreement = (genre) => {
+      const data = genreTrendMap[genre];
+      if (!data || data.sources.size < 2) return '';
+      return `<div class="source-agreement">${data.sources.size} sources confirm</div>`;
+    };
+
     grid.innerHTML = `
       <div class="market-analysis">
         <div class="market-analysis-header">
@@ -265,6 +348,10 @@ async function renderMarket() {
           <span class="market-analysis-badge">${reportData?.signals_count || 0} signals</span>
         </div>
         <div class="market-analysis-content">${analysis}</div>
+      </div>
+      <div class="market-sources-section">
+        <div class="sources-title">Source Health</div>
+        <div class="market-sources">${sourceBadges || '<div class="source-badge inactive">No sources active</div>'}</div>
       </div>
       <div class="opportunities-section">
         <div class="opportunities-title">Top Opportunities</div>
@@ -274,7 +361,7 @@ async function renderMarket() {
               <span class="opportunity-name">${opp.name || 'Unnamed'}</span>
               <span class="opportunity-score">${(opp.market_opportunity_score || 0).toFixed(1)}</span>
             </div>
-            <div class="opportunity-genre">${opp.genre || 'General'}</div>
+            <div class="opportunity-genre">${opp.genre || 'General'}${getTrendBadge(opp.genre || '')}</div>
             <div class="opportunity-description">${opp.description || 'No description available.'}</div>
             <div class="opportunity-meta">
               <span>
@@ -285,6 +372,7 @@ async function renderMarket() {
                 <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 7h4a2 2 0 012 2v4M3 5a2 2 0 012-2h4m0 0v4m0-4L8 13m4-4L3 9"/></svg>
                 ${opp.differentiation || 'Standard'}
               </span>
+              ${getSourceAgreement(opp.genre || '')}
             </div>
           </div>
         `).join('') : '<div class="empty-state"><div class="empty-message">No opportunities detected yet.</div></div>'}
@@ -642,12 +730,59 @@ async function renderChat() {
     chatHistory.forEach(msg => {
       const isUser = msg.role === 'user';
       const roleClass = msg.agent_name ? msg.agent_name.toLowerCase() : 'system';
-      container.innerHTML += `
-        <div class="chat-message ${isUser ? 'user' : 'agent'}">
-          <span class="chat-message-role ${roleClass}">${isUser ? 'You' : (msg.agent_name || 'Agent')}</span>
-          <div class="chat-message-bubble">${escapeHtml(msg.content)}</div>
-        </div>
-      `;
+      const metadata = msg.metadata_json || {};
+      const msgType = metadata.type;
+
+      if (msgType === 'decision') {
+        const decisionId = metadata.decision_id || msg.id;
+        const resolved = metadata.resolved || false;
+        const resolution = metadata.resolution || '';
+        container.innerHTML += `
+          <div class="chat-message decision-card agent ${resolved ? 'resolved' : ''}" data-decision-id="${decisionId}">
+            <div class="decision-header">
+              <span class="decision-icon">🔔</span>
+              <span class="decision-type">决策请求</span>
+              <span class="decision-agent ${roleClass}">${msg.agent_name || 'Agent'}</span>
+            </div>
+            <div class="decision-question">${escapeHtml(msg.content)}</div>
+            ${metadata.context ? `<div class="decision-context">${metadata.context.map(c => `<div class="decision-context-item">${escapeHtml(c)}</div>`).join('')}</div>` : ''}
+            ${!resolved ? `
+              <div class="decision-actions">
+                <button class="decision-btn approve" onclick="respondDecision('${decisionId}', 'approve')">✓ Approve</button>
+                <button class="decision-btn reject" onclick="respondDecision('${decisionId}', 'reject')">✗ Reject</button>
+                <button class="decision-btn discuss" onclick="respondDecision('${decisionId}', 'discuss')">💬 Discuss</button>
+              </div>
+            ` : `<div class="decision-resolution">${resolution}</div>`}
+          </div>
+        `;
+      } else if (msgType === 'report') {
+        container.innerHTML += `
+          <div class="chat-message report agent">
+            <div class="report-header">
+              <span class="report-icon">📊</span>
+              <span class="report-agent ${roleClass}">${msg.agent_name || 'Agent'}</span>
+            </div>
+            <div class="chat-message-bubble">${escapeHtml(msg.content)}</div>
+          </div>
+        `;
+      } else if (msgType === 'alert') {
+        container.innerHTML += `
+          <div class="chat-message alert agent">
+            <div class="alert-header">
+              <span class="alert-icon">⚠️</span>
+              <span class="alert-agent ${roleClass}">${msg.agent_name || 'Agent'}</span>
+            </div>
+            <div class="chat-message-bubble">${escapeHtml(msg.content)}</div>
+          </div>
+        `;
+      } else {
+        container.innerHTML += `
+          <div class="chat-message ${isUser ? 'user' : 'agent'}">
+            <span class="chat-message-role ${roleClass}">${isUser ? 'You' : (msg.agent_name || 'Agent')}</span>
+            <div class="chat-message-bubble">${escapeHtml(msg.content)}</div>
+          </div>
+        `;
+      }
     });
 
     container.scrollTop = container.scrollHeight;
@@ -713,6 +848,29 @@ async function sendChatMessage() {
   }
 }
 
+async function respondDecision(decisionId, response) {
+  const card = document.querySelector(`[data-decision-id="${decisionId}"]`);
+  if (!card) return;
+
+  if (response === 'discuss') {
+    const input = $('#chatInput');
+    if (input) {
+      input.value = `Re: decision ${decisionId} — `;
+      input.focus();
+    }
+    return;
+  }
+
+  try {
+    await fetchJSON(`${API_BASE}/decisions/${decisionId}/respond?response=${response}`, {
+      method: 'POST',
+    });
+    await renderChat();
+  } catch (err) {
+    console.error('Failed to respond to decision:', err);
+  }
+}
+
 let lastEventId = 0;
 let eventPollInterval = null;
 
@@ -774,7 +932,8 @@ async function refreshAll() {
   updateTimestamp();
   await Promise.allSettled([
     renderAgents(),
-    renderPipeline(),
+    renderProjectBoard(),
+    renderTaskMonitor(),
     renderMarket(),
     renderProjects(),
     renderMemory(),

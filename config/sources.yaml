@@ -89,3 +89,51 @@ sources:
       - 23424975  # UK
     endpoints:
       trends: "/trends/by/woeid/{woeid}"
+
+  steam_spy:
+    type: rest
+    base_url: "https://steamspy.com"
+    auth_type: none
+    tags:
+      - indie
+      - casual
+      - puzzle
+      - action
+      - strategy
+      - simulation
+      - arcade
+    endpoints:
+      by_tag: "/api.php?request=tag&tag={tag}"
+    cache_ttl_seconds: 600
+
+  youtube_trending:
+    type: rss
+    base_url: "https://www.youtube.com"
+    auth_type: none
+    feeds:
+      - "https://www.youtube.com/feeds/videos.xml?channel_id=UCEnGNPdaPTFj4Bboneid3Uw"
+    search_terms:
+      - "indie game"
+      - "web game"
+      - "html5 game"
+    cache_ttl_seconds: 3600
+
+  product_hunt:
+    type: rss
+    base_url: "https://www.producthunt.com"
+    auth_type: none
+    feeds:
+      - "https://www.producthunt.com/feed?category=gaming"
+    cache_ttl_seconds: 3600
+
+  tiktok_tags:
+    type: scraper
+    base_url: "https://www.tiktok.com"
+    auth_type: none
+    tags:
+      - indiegame
+      - webgame
+      - html5game
+      - browsergame
+      - minigame
+    cache_ttl_seconds: 1800

@@ -50,6 +50,8 @@ class SourceConfig(BaseModel):
     categories: list[str] = []
     charts: list[str] = []
     platforms: list[str] = []
+    tags: list[str] = []
+    search_terms: list[str] = []
 
 
 class AllSourcesConfig(BaseModel):

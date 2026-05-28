@@ -77,6 +77,35 @@ async def run_forever(interval_seconds: int = 3600) -> None:
             break
 
 
+async def run_scheduler_tick() -> dict | None:
+    from orchestrator.scheduler import scheduler_tick
+    from orchestrator.persistence import ensure_tables
+
+    await ensure_tables()
+    return await scheduler_tick()
+
+
+async def run_scheduler_forever(interval_seconds: int = 300) -> None:
+    config = load_config()
+    config.games_output_dir.mkdir(parents=True, exist_ok=True)
+    config.build_dir.mkdir(parents=True, exist_ok=True)
+
+    console.print("\n[bold green]🎮 GCAgents - Scheduler Mode Starting...[/bold green]")
+    console.print(f"[dim]Tick interval: {interval_seconds}s (Ctrl+C to stop)[/dim]\n")
+
+    while True:
+        result = await run_scheduler_tick()
+        tick_num = result.get("tick", "?") if result else "?"
+        console.print(f"[dim]Tick #{tick_num} complete[/dim]")
+
+        console.print(f"[dim]Sleeping {interval_seconds}s until next tick (Ctrl+C to stop)...[/dim]\n")
+        try:
+            await asyncio.sleep(interval_seconds)
+        except asyncio.CancelledError:
+            console.print("\n[bold yellow]Scheduler mode stopped.[/bold yellow]")
+            break
+
+
 def cli() -> None:
     parser = _build_arg_parser()
     args = parser.parse_args()
@@ -85,6 +114,8 @@ def cli() -> None:
         asyncio.run(run_single_cycle())
     elif args.command == "run-forever":
         asyncio.run(run_forever(interval_seconds=args.interval))
+    elif args.command == "run-scheduler":
+        asyncio.run(run_scheduler_forever(interval_seconds=args.interval))
     elif args.command == "scan":
         asyncio.run(_run_scan_only())
     else:
@@ -118,6 +149,9 @@ def _build_arg_parser():
     forever_parser.add_argument("--interval", type=int, default=3600,
                                 help="Seconds between cycles (default: 3600)")
     sub.add_parser("scan", help="Run market scan only")
+    sched_parser = sub.add_parser("run-scheduler", help="Run tick-based multi-project scheduler")
+    sched_parser.add_argument("--interval", type=int, default=300,
+                              help="Seconds between ticks (default: 300)")
     return parser
 
 

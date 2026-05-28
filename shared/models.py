@@ -135,3 +135,84 @@ class EventLog(BaseModel):
     project_name: str = ""
     metadata: dict = {}
     created_at: datetime = datetime.now()
+
+
+class ProjectPhase(str, Enum):
+    BACKLOG = "backlog"
+    SCANNING = "scanning"
+    DESIGNING = "designing"
+    DEVELOPING = "developing"
+    TESTING = "testing"
+    BUILDING = "building"
+    PUBLISHING = "publishing"
+    LIVE = "live"
+    PAUSED = "paused"
+    CANCELLED = "cancelled"
+
+
+class ProjectState(BaseModel):
+    id: str
+    name: str
+    genre: str = ""
+    phase: ProjectPhase = ProjectPhase.BACKLOG
+    progress: float = 0.0
+    proposal: dict | None = None
+    gdd: dict | None = None
+    code_path: str | None = None
+    art_status: str = "pending"
+    qa_result: dict | None = None
+    itch_url: str | None = None
+    version: str = "0.0.0"
+    awaiting_decision: str | None = None
+    created_at: datetime = datetime.now()
+    updated_at: datetime = datetime.now()
+
+
+class DecisionType(str, Enum):
+    NEW_PROJECT = "new_project"
+    PUBLISH = "publish"
+    CANCEL = "cancel"
+    BUDGET_OVERRUN = "budget_overrun"
+    DIRECTION_CHANGE = "direction_change"
+
+
+class DecisionStatus(str, Enum):
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    EXPIRED = "expired"
+
+
+class DecisionPoint(BaseModel):
+    id: str
+    project_id: str | None = None
+    decision_type: DecisionType
+    question: str
+    options: list[dict] = []
+    context: dict = {}
+    status: DecisionStatus = DecisionStatus.PENDING
+    human_response: str | None = None
+    created_at: datetime = datetime.now()
+    resolved_at: datetime | None = None
+
+
+class TaskStatus(str, Enum):
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class TaskRecord(BaseModel):
+    id: str
+    project_id: str
+    task_type: str
+    status: TaskStatus = TaskStatus.PENDING
+    progress: float = 0.0
+    params: dict = {}
+    result: dict | None = None
+    error: str | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    created_at: datetime = datetime.now()
