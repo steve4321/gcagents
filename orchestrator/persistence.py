@@ -46,6 +46,51 @@ async def ensure_tables():
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
             )
         """))
+        await db.execute(text("""
+            CREATE TABLE IF NOT EXISTS game_feedback (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_id INTEGER NOT NULL,
+                post_id TEXT NOT NULL,
+                author TEXT DEFAULT '',
+                text TEXT NOT NULL,
+                posted_at TEXT,
+                vote_count INTEGER DEFAULT 0,
+                category TEXT DEFAULT 'other',
+                ai_analysis TEXT DEFAULT '',
+                processed INTEGER DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        """))
+        await db.execute(text("""
+            CREATE TABLE IF NOT EXISTS game_versions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_id INTEGER NOT NULL,
+                version TEXT NOT NULL,
+                gdd_snapshot TEXT,
+                changelog TEXT DEFAULT '',
+                feedback_ids TEXT DEFAULT '[]',
+                build_size INTEGER DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        """))
+        await db.execute(text("""
+            CREATE TABLE IF NOT EXISTS game_metrics (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_id INTEGER NOT NULL,
+                metric_name TEXT NOT NULL,
+                metric_value REAL NOT NULL,
+                recorded_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        """))
+        # Add columns to game_projects if missing (idempotent migration)
+        for col_sql in [
+            "ALTER TABLE game_projects ADD COLUMN current_version TEXT DEFAULT '0.0.0'",
+            "ALTER TABLE game_projects ADD COLUMN feedback_count INTEGER DEFAULT 0",
+        ]:
+            try:
+                await db.execute(text(col_sql))
+            except Exception:
+                pass  # column already exists
         await db.commit()
 
 
@@ -152,6 +197,164 @@ async def save_pipeline_state(
         except Exception:
             await db.rollback()
             raise
+
+
+# ── Feedback ────────────────────────────────────────────────────────────────
+
+async def save_feedback(
+    project_id: int,
+    post_id: str,
+    text: str,
+    author: str = "",
+    posted_at: str | None = None,
+    vote_count: int = 0,
+    category: str = "other",
+    ai_analysis: str = "",
+) -> int:
+    engine = _get_engine()
+    async with AsyncSession(engine) as db:
+        existing = await db.execute(
+            text("SELECT id FROM game_feedback WHERE project_id = :pid AND post_id = :post_id"),
+            {"pid": project_id, "post_id": post_id},
+        )
+        if existing.fetchone():
+            return 0  # dedup
+        result = await db.execute(
+            text("""
+                INSERT INTO game_feedback
+                    (project_id, post_id, author, text, posted_at, vote_count, category, ai_analysis)
+                VALUES (:project_id, :post_id, :author, :text, :posted_at, :vote_count, :category, :ai_analysis)
+            """),
+            {
+                "project_id": project_id,
+                "post_id": post_id,
+                "author": author[:100],
+                "text": text[:5000],
+                "posted_at": posted_at or datetime.now(timezone.utc).isoformat(),
+                "vote_count": vote_count,
+                "category": category,
+                "ai_analysis": ai_analysis[:2000],
+            },
+        )
+        await db.execute(
+            text("UPDATE game_projects SET feedback_count = feedback_count + 1 WHERE id = :pid"),
+            {"pid": project_id},
+        )
+        await db.commit()
+        return result.lastrowid or 0
+
+
+async def get_unprocessed_feedback(project_id: int) -> list[dict]:
+    engine = _get_engine()
+    async with AsyncSession(engine) as db:
+        rows = await db.execute(
+            text("SELECT * FROM game_feedback WHERE project_id = :pid AND processed = 0 ORDER BY posted_at DESC"),
+            {"pid": project_id},
+        )
+        return [dict(r._mapping) for r in rows.fetchall()]
+
+
+async def mark_feedback_processed(feedback_ids: list[int]) -> None:
+    engine = _get_engine()
+    async with AsyncSession(engine) as db:
+        for fid in feedback_ids:
+            await db.execute(
+                text("UPDATE game_feedback SET processed = 1 WHERE id = :fid"),
+                {"fid": fid},
+            )
+        await db.commit()
+
+
+# ── Game Versions ───────────────────────────────────────────────────────────
+
+async def save_game_version(
+    project_id: int,
+    version: str,
+    gdd_snapshot: dict | None = None,
+    changelog: str = "",
+    feedback_ids: list[int] | None = None,
+    build_size: int = 0,
+) -> int:
+    engine = _get_engine()
+    async with AsyncSession(engine) as db:
+        result = await db.execute(
+            text("""
+                INSERT INTO game_versions
+                    (project_id, version, gdd_snapshot, changelog, feedback_ids, build_size)
+                VALUES (:project_id, :version, :gdd_snapshot, :changelog, :feedback_ids, :build_size)
+            """),
+            {
+                "project_id": project_id,
+                "version": version,
+                "gdd_snapshot": json.dumps(gdd_snapshot or {}),
+                "changelog": changelog[:2000],
+                "feedback_ids": json.dumps(feedback_ids or []),
+                "build_size": build_size,
+            },
+        )
+        await db.execute(
+            text("UPDATE game_projects SET current_version = :ver, updated_at = :now WHERE id = :pid"),
+            {"ver": version, "now": datetime.now(timezone.utc).isoformat(), "pid": project_id},
+        )
+        await db.commit()
+        return result.lastrowid or 0
+
+
+async def get_latest_version(project_id: int) -> str:
+    engine = _get_engine()
+    async with AsyncSession(engine) as db:
+        row = await db.execute(
+            text("SELECT current_version FROM game_projects WHERE id = :pid"),
+            {"pid": project_id},
+        )
+        result = row.fetchone()
+        return result[0] if result else "0.0.0"
+
+
+# ── Game Metrics ────────────────────────────────────────────────────────────
+
+async def save_game_metric(project_id: int, metric_name: str, metric_value: float) -> None:
+    engine = _get_engine()
+    async with AsyncSession(engine) as db:
+        await db.execute(
+            text("""
+                INSERT INTO game_metrics (project_id, metric_name, metric_value)
+                VALUES (:project_id, :metric_name, :metric_value)
+            """),
+            {"project_id": project_id, "metric_name": metric_name[:50], "metric_value": metric_value},
+        )
+        await db.commit()
+
+
+async def get_project_metrics(project_id: int, limit: int = 100) -> list[dict]:
+    engine = _get_engine()
+    async with AsyncSession(engine) as db:
+        rows = await db.execute(
+            text("""
+                SELECT * FROM game_metrics
+                WHERE project_id = :pid
+                ORDER BY recorded_at DESC
+                LIMIT :lim
+            """),
+            {"pid": project_id, "lim": limit},
+        )
+        return [dict(r._mapping) for r in rows.fetchall()]
+
+
+# ── Queries ─────────────────────────────────────────────────────────────────
+
+async def get_live_projects() -> list[dict]:
+    engine = _get_engine()
+    async with AsyncSession(engine) as db:
+        rows = await db.execute(
+            text("""
+                SELECT id, name, genre, status, itch_url, current_version, feedback_count
+                FROM game_projects
+                WHERE status IN ('live', 'updating')
+                ORDER BY updated_at DESC
+            """)
+        )
+        return [dict(r._mapping) for r in rows.fetchall()]
 
 
 async def save_market_signals(signals: list[dict]) -> None:

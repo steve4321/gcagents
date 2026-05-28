@@ -14,6 +14,7 @@ class PipelinePhase(str, Enum):
     SCANNING = "scanning"
     EVALUATING = "evaluating"
     DESIGNING = "designing"
+    UPDATING = "updating"
     DEVELOPING = "developing"
     TESTING = "testing"
     BUILDING = "building"
