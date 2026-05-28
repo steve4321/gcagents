@@ -14,7 +14,7 @@ from shared.config import load_config
 console = Console()
 
 
-async def run_single_cycle() -> None:
+async def run_single_cycle() -> dict | None:
     config = load_config()
     config.games_output_dir.mkdir(parents=True, exist_ok=True)
     config.build_dir.mkdir(parents=True, exist_ok=True)
@@ -44,10 +44,37 @@ async def run_single_cycle() -> None:
         if result.get("errors"):
             console.print(f"  Errors: [red]{result['errors']}[/red]")
 
+        return result
+
     except Exception as e:
         console.print(f"\n[bold red]Cycle failed: {e}[/bold red]")
         logger.exception("Cycle execution failed")
-        sys.exit(1)
+        return None
+
+
+async def run_forever(interval_seconds: int = 3600) -> None:
+    config = load_config()
+    config.games_output_dir.mkdir(parents=True, exist_ok=True)
+    config.build_dir.mkdir(parents=True, exist_ok=True)
+
+    console.print("\n[bold green]🎮 GCAgents - 24/7 Mode Starting...[/bold green]")
+    console.print(f"[dim]Interval: {interval_seconds}s between cycles (Ctrl+C to stop)[/dim]\n")
+
+    cycle = 0
+    while True:
+        cycle += 1
+        console.print(f"\n[bold cyan]═══════ Cycle #{cycle} ═══════[/bold cyan]\n")
+
+        result = await run_single_cycle()
+        if result is None:
+            console.print(f"[red]Cycle {cycle} failed, continuing...[/red]")
+
+        console.print(f"\n[dim]Sleeping {interval_seconds}s before next cycle (Ctrl+C to stop)...[/dim]\n")
+        try:
+            await asyncio.sleep(interval_seconds)
+        except asyncio.CancelledError:
+            console.print("\n[bold yellow]24/7 mode stopped.[/bold yellow]")
+            break
 
 
 def cli() -> None:
@@ -56,6 +83,8 @@ def cli() -> None:
 
     if args.command == "run":
         asyncio.run(run_single_cycle())
+    elif args.command == "run-forever":
+        asyncio.run(run_forever(interval_seconds=args.interval))
     elif args.command == "scan":
         asyncio.run(_run_scan_only())
     else:
@@ -85,6 +114,9 @@ def _build_arg_parser():
     )
     sub = parser.add_subparsers(dest="command")
     sub.add_parser("run", help="Run a full cycle (scan → design → dev → deploy)")
+    forever_parser = sub.add_parser("run-forever", help="Run in 24/7 mode — loop forever with interval")
+    forever_parser.add_argument("--interval", type=int, default=3600,
+                                help="Seconds between cycles (default: 3600)")
     sub.add_parser("scan", help="Run market scan only")
     return parser
 

@@ -130,9 +130,13 @@ COO检查 ──▶ 收集反馈 ──▶ 扫描 ──▶ 评估 ──┬─�
 ### 执行入口 (`orchestrator/main.py`)
 
 ```bash
-python3 -m orchestrator.main run    # 完整运行一个周期
-python3 -m orchestrator.main scan   # 仅执行市场扫描
+python3 -m orchestrator.main run              # 完整运行一个周期
+python3 -m orchestrator.main run-forever       # 24/7 模式，循环运行，间隔 3600s
+python3 -m orchestrator.main run-forever --interval 600  # 每 10 分钟运行一次
+python3 -m orchestrator.main scan             # 仅执行市场扫描
 ```
+
+**24/7 模式**：`run-forever` 命令在循环中重复执行完整周期，每个周期结束后等待可配置的间隔时间（默认 3600s），然后自动开始下一周期。Ctrl+C 安全停止。
 
 ---
 

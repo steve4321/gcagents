@@ -27,7 +27,7 @@ const AGENTS = [
 ];
 
 function $(sel) { return document.querySelector(sel); }
-function $$(sel) { return document.querySelectorAll(sel); } }
+function $$(sel) { return document.querySelectorAll(sel); }
 
 function fmtRelativeTime(isoString) {
   if (!isoString) return '--';
