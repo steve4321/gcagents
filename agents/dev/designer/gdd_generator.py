@@ -60,7 +60,15 @@ Return ONLY the JSON object, no other text."""
 async def generate_gdd(proposal: GameProposal, config: AppConfig) -> dict:
     logger.info(f"Generating GDD for: {proposal.name} ({proposal.genre})")
 
-    client = AsyncOpenAI(api_key=config.deepseek_api_key, base_url="https://api.deepseek.com")
+    if config.zhipu_api_key:
+        client = AsyncOpenAI(api_key=config.zhipu_api_key, base_url="https://open.bigmodel.cn/api/paas/v4")
+        model = "glm-4-flash"
+    elif config.deepseek_api_key:
+        client = AsyncOpenAI(api_key=config.deepseek_api_key, base_url="https://api.deepseek.com")
+        model = "deepseek-chat"
+    else:
+        logger.error("No AI API key configured")
+        return {"title": proposal.name, "genre": proposal.genre, "scenes": []}
 
     user_prompt = f"""Create a GDD for this game proposal:
 
@@ -76,7 +84,7 @@ Generate a complete, detailed GDD. Make the game fun and engaging for web play."
 
 
     response = await client.chat.completions.create(
-        model="deepseek-chat",
+        model=model,
         messages=[
             {"role": "system", "content": DESIGNER_SYSTEM_PROMPT},
             {"role": "user", "content": user_prompt},

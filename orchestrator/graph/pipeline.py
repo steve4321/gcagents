@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from langgraph.graph import END, StateGraph
+from loguru import logger
 
 from orchestrator.state import CompanyState, PipelinePhase
 from orchestrator.nodes.ceo import ceo_evaluate, route_after_qa
@@ -11,19 +14,42 @@ from agents.dev.programmer.agent import develop_game
 from agents.dev.qa.qa_agent import run_qa
 from agents.dev.builder.build_agent import build_game
 from agents.ops.deployer.itch_deployer import deploy_to_itch
+from orchestrator.persistence import save_pipeline_state, save_market_signals, save_agent_log, ensure_tables
+
+
+def _logged_node(fn, node_name: str, phase: str):
+    async def wrapper(state: CompanyState) -> dict:
+        started_at = datetime.now(timezone.utc).isoformat()
+        project_name = (
+            state.gdd.get("title") if state.gdd
+            else state.current_proposal.name if state.current_proposal
+            else None
+        )
+        try:
+            result = await fn(state)
+            duration_ms = int((datetime.now(timezone.utc) - datetime.fromisoformat(started_at)).total_seconds() * 1000)
+            await save_agent_log(node_name, "completed", phase=phase, duration_ms=duration_ms,
+                                 project_name=project_name, started_at=started_at)
+            return result
+        except Exception as e:
+            duration_ms = int((datetime.now(timezone.utc) - datetime.fromisoformat(started_at)).total_seconds() * 1000)
+            await save_agent_log(node_name, "failed", phase=phase, error=str(e), duration_ms=duration_ms,
+                                 project_name=project_name, started_at=started_at)
+            raise
+    return wrapper
 
 
 def build_company_graph() -> StateGraph:
     graph = StateGraph(CompanyState)
 
     graph.add_node("scan", scan_market)
-    graph.add_node("evaluate", ceo_evaluate)
-    graph.add_node("design", design_game)
-    graph.add_node("art", generate_art)
-    graph.add_node("develop", develop_game)
-    graph.add_node("qa", run_qa)
-    graph.add_node("build", build_game)
-    graph.add_node("deploy", deploy_to_itch)
+    graph.add_node("evaluate", _logged_node(ceo_evaluate, "evaluate", "evaluating"))
+    graph.add_node("design", _logged_node(design_game, "design", "designing"))
+    graph.add_node("art", _logged_node(generate_art, "art", "designing"))
+    graph.add_node("develop", _logged_node(develop_game, "develop", "developing"))
+    graph.add_node("qa", _logged_node(run_qa, "qa", "testing"))
+    graph.add_node("build", _logged_node(build_game, "build", "building"))
+    graph.add_node("deploy", _logged_node(deploy_to_itch, "deploy", "publishing"))
 
     graph.set_entry_point("scan")
 
@@ -67,6 +93,7 @@ def _route_after_evaluation(state: CompanyState) -> str:
     return "idle"
 
 
-def create_company_app():
+async def create_company_app():
+    await ensure_tables()
     graph = build_company_graph()
     return graph.compile()

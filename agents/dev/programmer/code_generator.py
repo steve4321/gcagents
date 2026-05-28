@@ -26,6 +26,7 @@ Generate the following files:
 Rules:
 - Use Phaser 4 API (not Phaser 3)
 - All code must be valid TypeScript with strict mode
+- CRITICAL: Use `import * as Phaser from 'phaser';` (NOT `import Phaser from 'phaser';` - Phaser ESM has no default export)
 - Include placeholder geometry for assets (no external images needed for MVP)
 - Use Phaser's built-in shape rendering for visuals
 - Keep the game simple but fun and complete
@@ -37,14 +38,24 @@ Return a JSON object mapping file paths to file contents:
 {"src/main.ts": "...", "src/game/scenes/GameScene.ts": "...", ...}"""
 
 
-async def generate_game_code(gdd: dict, project_dir: Path, config: AppConfig) -> Path:
+async def generate_game_code(gdd: dict, project_dir: Path, config: AppConfig, build_error: str = "") -> Path:
     logger.info(f"Generating Phaser 4 game code for: {gdd.get('title', 'unknown')}")
 
     project_dir.mkdir(parents=True, exist_ok=True)
 
     _scaffold_project(project_dir)
 
-    client = AsyncOpenAI(api_key=config.deepseek_api_key, base_url="https://api.deepseek.com")
+    if config.deepseek_api_key:
+        client = AsyncOpenAI(api_key=config.deepseek_api_key, base_url="https://api.deepseek.com")
+        model = "deepseek-coder"
+        max_tokens = 16384
+    elif config.zhipu_api_key:
+        client = AsyncOpenAI(api_key=config.zhipu_api_key, base_url="https://open.bigmodel.cn/api/paas/v4")
+        model = "glm-4-flash"
+        max_tokens = 8192
+    else:
+        logger.error("No AI API key configured")
+        return project_dir
 
     user_prompt = f"""Generate a complete Phaser 4 + TypeScript game based on this GDD:
 
@@ -54,15 +65,22 @@ Generate ALL source files as a JSON object mapping file paths to file contents.
 The game must be playable and fun. Use Phaser shapes/text for visuals (no external assets).
 Include the window.__TEST__ interface for automated testing."""
 
+    messages = [
+        {"role": "system", "content": PROGRAMMER_SYSTEM_PROMPT},
+        {"role": "user", "content": user_prompt},
+    ]
+
+    if build_error:
+        messages.append({
+            "role": "user",
+            "content": f"The previous build FAILED with this error. Fix the code:\n\n{build_error[:2000]}\n\nReturn ALL source files again with the fixes applied.",
+        })
 
     response = await client.chat.completions.create(
-        model="deepseek-coder",
-        messages=[
-            {"role": "system", "content": PROGRAMMER_SYSTEM_PROMPT},
-            {"role": "user", "content": user_prompt},
-        ],
+        model=model,
+        messages=messages,
         temperature=0.4,
-        max_tokens=8000,
+        max_tokens=max_tokens,
     )
 
     text = response.choices[0].message.content or ""

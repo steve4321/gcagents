@@ -1,20 +1,25 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from loguru import logger
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
-from shared.config import AppConfig, load_config, ROOT_DIR
+from shared.config import load_config, ROOT_DIR
 
-config: AppConfig = load_config()
+config = load_config()
 engine = create_async_engine(config.db_url, echo=False)
+
+# Track running pipeline process
+_pipeline_process: subprocess.Popen | None = None
 
 
 @asynccontextmanager
@@ -33,159 +38,231 @@ app.add_middleware(
 )
 
 
-async def get_db() -> AsyncSession:
-    async with AsyncSession(engine) as session:
-        yield session
-
-
-async def row_to_dict(row) -> dict:
-    return dict(row._mapping)
+def games_dir() -> list[dict]:
+    results = []
+    games_path = config.games_output_dir
+    if not games_path.exists():
+        return results
+    for d in sorted(games_path.iterdir()):
+        if d.is_dir() and (d / "dist").exists():
+            dist_files = list((d / "dist").rglob("*"))
+            results.append({
+                "name": d.name,
+                "dist_size": sum(f.stat().st_size for f in dist_files if f.is_file()),
+                "file_count": len(dist_files),
+                "updated": max(f.stat().st_mtime for f in dist_files) if dist_files else 0,
+            })
+    return results
 
 
 @app.get("/api/status")
 async def get_status():
     async with AsyncSession(engine) as db:
-        result = await db.execute(
-            text("""
-                SELECT phase::text, current_project_id, errors
-                FROM orchestrator_state
-                ORDER BY id DESC
-                LIMIT 1
-            """)
-        )
-        state_row = result.fetchone()
+        state_row = (await db.execute(
+            text("SELECT phase, errors FROM orchestrator_state ORDER BY id DESC LIMIT 1")
+        )).fetchone()
 
-        result = await db.execute(
+        scan_row = (await db.execute(
             text("SELECT MAX(captured_at) as last_scan FROM market_signals")
-        )
-        scan_row = result.fetchone()
+        )).fetchone()
 
-        active_project = None
-        if state_row and state_row.current_project_id:
-            result = await db.execute(
-                text("SELECT name, status FROM game_projects WHERE id = :pid"),
-                {"pid": state_row.current_project_id},
-            )
-            proj = result.fetchone()
-            if proj:
-                active_project = {"name": proj.name, "status": proj.status}
+        proj_row = (await db.execute(
+            text("SELECT name, status FROM game_projects ORDER BY updated_at DESC LIMIT 1")
+        )).fetchone()
 
         return {
             "phase": state_row.phase if state_row else "idle",
-            "active_project": active_project,
-            "last_scan_time": scan_row.last_scan.isoformat() if scan_row and scan_row.last_scan else None,
-            "errors": state_row.errors if state_row and state_row.errors else [],
+            "active_project": {"name": proj_row.name, "status": proj_row.status} if proj_row else None,
+            "last_scan_time": scan_row.last_scan if scan_row and scan_row.last_scan else None,
+            "errors": json.loads(state_row.errors) if state_row and state_row.errors else [],
+            "games": games_dir(),
         }
 
 
-@app.get("/api/projects")
-async def list_projects():
+@app.get("/api/agents")
+async def get_agents():
     async with AsyncSession(engine) as db:
-        result = await db.execute(
-            text("""
-                SELECT id, name, genre, status, itch_url,
-                       created_at, updated_at, published_at
-                FROM game_projects
-                ORDER BY updated_at DESC
-            """)
-        )
-        rows = result.fetchall()
-        projects = []
-        for row in rows:
-            d = dict(row._mapping)
-            for col in ("created_at", "updated_at", "published_at"):
-                if d.get(col):
-                    d[col] = d[col].isoformat()
-            projects.append(d)
-        return projects
+        rows = (await db.execute(text("""
+            SELECT node_name, status, phase, started_at, completed_at, duration_ms, error, project_name
+            FROM agent_logs
+            ORDER BY id DESC
+            LIMIT 50
+        """))).fetchall()
+
+        agents = [dict(r._mapping) for r in rows]
+
+        stats = (await db.execute(text("""
+            SELECT
+                node_name,
+                COUNT(*) as runs,
+                SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END) as successes,
+                SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END) as failures,
+                ROUND(AVG(CASE WHEN duration_ms IS NOT NULL THEN duration_ms ELSE 0 END)) as avg_duration_ms
+            FROM agent_logs
+            GROUP BY node_name
+            ORDER BY node_name
+        """))).fetchall()
+
+        return {"logs": agents, "stats": [dict(r._mapping) for r in stats]}
 
 
-@app.get("/api/projects/{project_id}")
-async def get_project(project_id: int):
+@app.get("/api/market/report")
+async def get_market_report():
     async with AsyncSession(engine) as db:
-        result = await db.execute(
-            text("SELECT * FROM game_projects WHERE id = :pid"),
-            {"pid": project_id},
-        )
-        row = result.fetchone()
-        if not row:
-            raise HTTPException(404, "Project not found")
-        d = dict(row._mapping)
-        for col in ("created_at", "updated_at", "published_at"):
-            if d.get(col):
-                d[col] = d[col].isoformat()
+        report = (await db.execute(
+            text("SELECT * FROM market_reports ORDER BY id DESC LIMIT 1")
+        )).fetchone()
+
+        if not report:
+            return None
+
+        d = dict(report._mapping)
+        if isinstance(d.get("opportunities_json"), str):
+            d["opportunities"] = json.loads(d["opportunities_json"])
         return d
 
 
 @app.get("/api/market/latest")
 async def get_market_latest():
     async with AsyncSession(engine) as db:
-        result = await db.execute(
+        rows = (await db.execute(
             text("""
                 SELECT id, source, signal_type, genre, title, data, score, captured_at
                 FROM market_signals
                 ORDER BY captured_at DESC
                 LIMIT 50
             """)
-        )
-        rows = result.fetchall()
+        )).fetchall()
         signals = []
         for row in rows:
             d = dict(row._mapping)
-            d["captured_at"] = d["captured_at"].isoformat()
             if isinstance(d.get("data"), str):
                 d["data"] = json.loads(d["data"])
             signals.append(d)
         return signals
 
 
-@app.get("/api/metrics/{project_id}")
-async def get_metrics(project_id: int):
+@app.get("/api/projects")
+async def list_projects():
     async with AsyncSession(engine) as db:
-        result = await db.execute(
+        rows = (await db.execute(
             text("""
-                SELECT metric_type, value, captured_at
-                FROM game_metrics
-                WHERE project_id = :pid
-                ORDER BY captured_at DESC
-                LIMIT 100
-            """),
-            {"pid": project_id},
-        )
-        rows = result.fetchall()
-        metrics = []
+                SELECT id, name, genre, status, gdd, itch_url,
+                       created_at, updated_at, published_at
+                FROM game_projects
+                ORDER BY updated_at DESC
+            """)
+        )).fetchall()
+        projects = []
         for row in rows:
             d = dict(row._mapping)
-            d["captured_at"] = d["captured_at"].isoformat()
-            metrics.append(d)
-        return metrics
+            if isinstance(d.get("gdd"), str):
+                try:
+                    d["gdd"] = json.loads(d["gdd"])
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            projects.append(d)
+        return projects
+
+
+@app.get("/api/pipeline/history")
+async def get_pipeline_history():
+    async with AsyncSession(engine) as db:
+        rows = (await db.execute(
+            text("SELECT phase, updated_at, errors FROM orchestrator_state ORDER BY id DESC LIMIT 20")
+        )).fetchall()
+        return [dict(r._mapping) for r in rows]
 
 
 @app.get("/api/memory")
 async def get_memory():
     async with AsyncSession(engine) as db:
-        result = await db.execute(
+        rows = (await db.execute(
             text("""
                 SELECT id, category, title, content, importance, created_at
                 FROM company_memory
                 ORDER BY importance DESC, created_at DESC
                 LIMIT 50
             """)
-        )
-        rows = result.fetchall()
+        )).fetchall()
         memories = []
         for row in rows:
             d = dict(row._mapping)
-            d["created_at"] = d["created_at"].isoformat()
             if isinstance(d.get("content"), str):
-                d["content"] = json.loads(d["content"])
+                try:
+                    d["content"] = json.loads(d["content"])
+                except (json.JSONDecodeError, TypeError):
+                    pass
             memories.append(d)
         return memories
 
 
-app.mount("/", StaticFiles(directory="dashboard/web", html=True), name="dashboard")
+@app.get("/api/gdd/{project_id}")
+async def get_gdd(project_id: int):
+    async with AsyncSession(engine) as db:
+        row = (await db.execute(
+            text("SELECT name, gdd, proposal FROM game_projects WHERE id = :pid"),
+            {"pid": project_id},
+        )).fetchone()
+        if not row:
+            raise HTTPException(404, "Project not found")
+        d = dict(row._mapping)
+        if isinstance(d.get("gdd"), str):
+            try:
+                d["gdd"] = json.loads(d["gdd"])
+            except (json.JSONDecodeError, TypeError):
+                pass
+        if isinstance(d.get("proposal"), str):
+            try:
+                d["proposal"] = json.loads(d["proposal"])
+            except (json.JSONDecodeError, TypeError):
+                pass
+        return d
+
+
+# ── Pipeline Control ──────────────────────────────────────────────────────────
+
+@app.post("/api/pipeline/run")
+async def trigger_pipeline():
+    global _pipeline_process
+    if _pipeline_process is not None and _pipeline_process.poll() is None:
+        return {"status": "already_running", "message": "Pipeline is already running"}
+
+    _pipeline_process = subprocess.Popen(
+        [sys.executable, "-m", "orchestrator.main", "run"],
+        cwd=ROOT_DIR,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    logger.info(f"Pipeline started (pid={_pipeline_process.pid})")
+    return {"status": "started", "message": "Pipeline started"}
+
+
+@app.get("/api/pipeline/status")
+async def check_pipeline_status():
+    global _pipeline_process
+    if _pipeline_process is None:
+        return {"running": False, "status": "idle"}
+    ret = _pipeline_process.poll()
+    if ret is None:
+        return {"running": True, "status": "running"}
+    status = "completed" if ret == 0 else "failed"
+    _pipeline_process = None
+    return {"running": False, "status": status, "exit_code": ret}
+
+
+# ── Game Preview Static Files ─────────────────────────────────────────────────
+
+games_output = config.games_output_dir
+if games_output.exists():
+    app.mount(
+        "/games-preview",
+        StaticFiles(directory=str(games_output)),
+        name="games-preview",
+    )
+
+app.mount("/", StaticFiles(directory=str(ROOT_DIR / "dashboard" / "web"), html=True), name="dashboard")
 
 if __name__ == "__main__":
     import uvicorn
-
-    uvicorn.run("api_server:app", host="0.0.0.0", port=config.dashboard_port, reload=True)
+    uvicorn.run("dashboard.web.api_server:app", host="0.0.0.0", port=config.dashboard_port, reload=True)

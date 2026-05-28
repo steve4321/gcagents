@@ -17,9 +17,18 @@ async def develop_game(state: CompanyState) -> dict:
         return {"phase": PipelinePhase.IDLE, "errors": ["Missing GDD"]}
 
     config = load_config()
-    project_name = gdd.get("title", "untitled").lower().replace(" ", "-")
-    project_dir = config.games_output_dir / project_name
+    base_name = gdd.get("title", "untitled").lower().replace(" ", "-")
+    project_dir = config.games_output_dir / base_name
 
-    code_path = await generate_game_code(gdd, project_dir, config)
+    if project_dir.exists():
+        from datetime import datetime
+        stamp = datetime.now().strftime("%m%d%H%M")
+        project_dir = config.games_output_dir / f"{base_name}-{stamp}"
+
+    build_error = ""
+    if state.errors:
+        build_error = state.errors[0] if isinstance(state.errors, list) else str(state.errors)
+
+    code_path = await generate_game_code(gdd, project_dir, config, build_error=build_error)
 
     return {"phase": PipelinePhase.TESTING, "game_code_path": str(code_path)}

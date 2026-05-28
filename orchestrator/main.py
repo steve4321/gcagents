@@ -19,7 +19,7 @@ async def run_single_cycle() -> None:
     config.games_output_dir.mkdir(parents=True, exist_ok=True)
     config.build_dir.mkdir(parents=True, exist_ok=True)
 
-    app = create_company_app()
+    app = await create_company_app()
 
     console.print("\n[bold green]🎮 GCAgents - AI Game Company Starting...[/bold green]\n")
 
@@ -72,7 +72,8 @@ async def _run_scan_only() -> None:
     insights = result.get("market_insights", [])
     console.print(f"[cyan]Opportunities found: {len(insights)}[/cyan]\n")
     for opp in insights:
-        console.print(f"  • {opp.get('name', 'N/A')} ({opp.get('genre', 'N/A')}) score={opp.get('score', 0):.2f}")
+        score = opp.get("market_opportunity_score") or opp.get("score", 0)
+        console.print(f"  • {opp.get('name', 'N/A')} ({opp.get('genre', 'N/A')}) score={score:.2f}")
 
 
 def _build_arg_parser():

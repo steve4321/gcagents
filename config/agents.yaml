@@ -15,7 +15,7 @@ models:
 
   glm:
     provider: zhipuai
-    model: "glm-4"
+    model: "glm-4-flash"
     api_key_env: "ZHIPU_API_KEY"
     roles: [designer, writer]
 

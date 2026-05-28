@@ -121,9 +121,9 @@ async def test_code_generation(gdd: dict, config: AppConfig, mock: bool = False)
 
     code_path = await generate_game_code(gdd, project_dir, config)
 
-    ts_files = list(code_path.rglob("*.ts"))
-    console.print(f"Generated {len(ts_files)} TypeScript files:")
-    for f in ts_files:
+    ts_files = [f for f in code_path.rglob("*.ts") if "node_modules" not in f.parts]
+    console.print(f"Generated {len(ts_files)} TypeScript files in src/:")
+    for f in sorted(ts_files):
         console.print(f"  {f.relative_to(code_path)}")
 
     return code_path

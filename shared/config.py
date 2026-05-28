@@ -30,7 +30,7 @@ class AppConfig(BaseSettings):
 
     games_output_dir: Path = DATA_DIR / "games"
     build_dir: Path = DATA_DIR / "builds"
-    dashboard_port: int = 3000
+    dashboard_port: int = 8080
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 

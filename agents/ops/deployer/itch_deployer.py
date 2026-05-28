@@ -31,13 +31,6 @@ async def deploy_to_itch(state: CompanyState) -> dict:
     try:
         env = {"BUTLER_API_KEY": config.butler_api_key}
 
-        subprocess.run(
-            ["butler", "login"],
-            env={**subprocess.os.environ, **env},
-            capture_output=True,
-            timeout=30,
-        )
-
         result = subprocess.run(
             [
                 "butler", "push",
@@ -51,8 +44,9 @@ async def deploy_to_itch(state: CompanyState) -> dict:
         )
 
         if result.returncode != 0:
-            logger.error(f"Deploy failed: {result.stderr}")
-            return {"phase": PipelinePhase.BUILDING, "errors": [f"Deploy failed: {result.stderr[:500]}"]}
+            detail = (result.stderr or result.stdout or "").strip()[:500]
+            logger.error(f"Deploy failed: {detail}")
+            return {"phase": PipelinePhase.BUILDING, "errors": [f"Deploy failed: {detail}"]}
 
         itch_url = f"https://{config.butler_username}.itch.io/{project_name}"
         logger.info(f"Deployed to: {itch_url}")

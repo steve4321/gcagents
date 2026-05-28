@@ -17,14 +17,16 @@ async def run_qa(state: CompanyState) -> dict:
     logger.info(f"Running QA on: {project_dir.name}")
 
     build_ok = _check_build_exists(project_dir)
+    build_error = ""
     if not build_ok:
         logger.warning("No build found, attempting build first")
-        build_result = _try_build(project_dir)
-        if not build_result:
+        build_ok, build_error = _try_build(project_dir)
+        if not build_ok:
             return {
                 "phase": PipelinePhase.DEVELOPING,
-                "qa_results": {"passed": False, "errors": ["Build failed"]},
+                "qa_results": {"passed": False, "errors": [build_error[:500]]},
                 "retry_count": state.retry_count + 1,
+                "errors": [build_error[:500]],
             }
 
     structure_ok, structure_errors = _check_project_structure(project_dir)
@@ -54,7 +56,7 @@ def _check_build_exists(project_dir: Path) -> bool:
     return (project_dir / "dist" / "index.html").exists()
 
 
-def _try_build(project_dir: Path) -> bool:
+def _try_build(project_dir: Path) -> tuple[bool, str]:
     try:
         result = subprocess.run(
             ["npm", "run", "build"],
@@ -63,9 +65,11 @@ def _try_build(project_dir: Path) -> bool:
             text=True,
             timeout=120,
         )
-        return result.returncode == 0
-    except Exception:
-        return False
+        if result.returncode == 0:
+            return True, ""
+        return False, result.stderr or result.stdout or "Build failed with no output"
+    except Exception as e:
+        return False, str(e)
 
 
 def _check_project_structure(project_dir: Path) -> tuple[bool, list[str]]:

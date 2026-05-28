@@ -1,64 +1,180 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>GCAgents - Mission Control</title>
-<link rel="stylesheet" href="style.css">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GCAgents</title>
+  <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<header class="dashboard-header">
-  <div class="header-left">
-    <h1><span class="accent">&#9654;</span> GCAgents</h1>
-    <span class="subtitle">Autonomous Game Company &mdash; Mission Control</span>
+  <div class="dashboard">
+    <header class="dashboard-header">
+      <div class="dashboard-title">
+        <h1><span class="logo">&#9654;</span> GCAgents</h1>
+        <span class="phase-indicator" id="phaseIndicator">IDLE</span>
+      </div>
+      <div class="header-actions">
+        <span class="last-update">Last update: <time id="lastUpdateTime">--:--:--</time></span>
+        <button id="runPipelineBtn" class="run-pipeline-btn" title="Run Pipeline">
+          ▶ Run Pipeline
+        </button>
+        <button id="refreshBtn" class="refresh-btn" title="Refresh data">
+          <svg class="refresh-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M23 4v6h-6M1 20v-6h6"/>
+            <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
+          </svg>
+          Refresh
+        </button>
+      </div>
+    </header>
+
+    <section id="agentsSection" class="section">
+      <div class="section-header">
+        <div class="section-title">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+          </svg>
+          Agent Monitor
+        </div>
+        <svg class="section-toggle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="6 9 12 15 18 9"/>
+        </svg>
+      </div>
+      <div class="section-content" id="agentsContent">
+        <div class="agent-grid">
+          <div class="agent-card skeleton skeleton-card"></div>
+          <div class="agent-card skeleton skeleton-card"></div>
+          <div class="agent-card skeleton skeleton-card"></div>
+          <div class="agent-card skeleton skeleton-card"></div>
+          <div class="agent-card skeleton skeleton-card"></div>
+          <div class="agent-card skeleton skeleton-card"></div>
+          <div class="agent-card skeleton skeleton-card"></div>
+          <div class="agent-card skeleton skeleton-card"></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="pipelineSection" class="section">
+      <div class="section-header">
+        <div class="section-title">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="4" y1="21" x2="4" y2="14"/>
+            <line x1="4" y1="10" x2="4" y2="3"/>
+            <line x1="12" y1="21" x2="12" y2="12"/>
+            <line x1="12" y1="8" x2="12" y2="3"/>
+            <line x1="20" y1="21" x2="20" y2="16"/>
+            <line x1="20" y1="12" x2="20" y2="3"/>
+            <line x1="1" y1="14" x2="7" y2="14"/>
+            <line x1="9" y1="8" x2="15" y2="8"/>
+            <line x1="17" y1="16" x2="23" y2="16"/>
+          </svg>
+          Pipeline Timeline
+        </div>
+        <svg class="section-toggle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="6 9 12 15 18 9"/>
+        </svg>
+      </div>
+      <div class="section-content" id="pipelineContent">
+        <div class="pipeline-container">
+          <div class="pipeline-track">
+            <div class="pipeline-phase"><div class="pipeline-node skeleton" style="width:44px;height:44px;border-radius:50%"></div></div>
+            <div class="pipeline-phase"><div class="pipeline-node skeleton" style="width:44px;height:44px;border-radius:50%"></div></div>
+            <div class="pipeline-phase"><div class="pipeline-node skeleton" style="width:44px;height:44px;border-radius:50%"></div></div>
+            <div class="pipeline-phase"><div class="pipeline-node skeleton" style="width:44px;height:44px;border-radius:50%"></div></div>
+            <div class="pipeline-phase"><div class="pipeline-node skeleton" style="width:44px;height:44px;border-radius:50%"></div></div>
+            <div class="pipeline-phase"><div class="pipeline-node skeleton" style="width:44px;height:44px;border-radius:50%"></div></div>
+            <div class="pipeline-phase"><div class="pipeline-node skeleton" style="width:44px;height:44px;border-radius:50%"></div></div>
+            <div class="pipeline-phase"><div class="pipeline-node skeleton" style="width:44px;height:44px;border-radius:50%"></div></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="marketSection" class="section">
+      <div class="section-header">
+        <div class="section-title">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="20" x2="18" y2="10"/>
+            <line x1="12" y1="20" x2="12" y2="4"/>
+            <line x1="6" y1="20" x2="6" y2="14"/>
+          </svg>
+          Market Report
+        </div>
+        <svg class="section-toggle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="6 9 12 15 18 9"/>
+        </svg>
+      </div>
+      <div class="section-content" id="marketContent">
+        <div class="market-grid">
+          <div class="market-analysis">
+            <div class="market-analysis-header">
+              <span class="market-analysis-title">AI Analysis</span>
+              <span class="market-analysis-badge">0 signals</span>
+            </div>
+            <div class="market-analysis-content">Loading market analysis...</div>
+          </div>
+          <div class="opportunities-section">
+            <div class="opportunities-title">Top Opportunities</div>
+            <div class="opportunity-card skeleton" style="height:120px"></div>
+            <div class="opportunity-card skeleton" style="height:120px"></div>
+            <div class="opportunity-card skeleton" style="height:120px"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="projectsSection" class="section">
+      <div class="section-header">
+        <div class="section-title">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="2" y="7" width="20" height="14" rx="2" ry="2"/>
+            <path d="M16 21V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v16"/>
+          </svg>
+          Active Games
+        </div>
+        <svg class="section-toggle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="6 9 12 15 18 9"/>
+        </svg>
+      </div>
+      <div class="section-content" id="projectsContent">
+        <div class="games-grid">
+          <div class="game-card skeleton" style="height:140px"></div>
+          <div class="game-card skeleton" style="height:140px"></div>
+          <div class="game-card skeleton" style="height:140px"></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="memorySection" class="section">
+      <div class="section-header">
+        <div class="section-title">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2a10 10 0 1010 10A10 10 0 0012 2z"/>
+            <path d="M12 6v6l4 2"/>
+          </svg>
+          Company Memory
+        </div>
+        <svg class="section-toggle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="6 9 12 15 18 9"/>
+        </svg>
+      </div>
+      <div class="section-content" id="memoryContent">
+        <div class="memory-list">
+          <div class="memory-entry skeleton" style="height:80px"></div>
+          <div class="memory-entry skeleton" style="height:80px"></div>
+          <div class="memory-entry skeleton" style="height:80px"></div>
+        </div>
+      </div>
+    </section>
   </div>
-  <div class="header-right">
-    <span class="last-update">Last update: <time id="lastUpdateTime">--</time></span>
-    <button id="refreshBtn" class="btn-icon" title="Refresh now">&#x21bb;</button>
+
+  <script src="app.js"></script>
+
+  <div id="previewModal" class="preview-modal">
+    <div class="preview-modal-content">
+      <button id="previewCloseBtn" class="preview-close-btn">&times;</button>
+      <iframe id="previewIframe" src=""></iframe>
+    </div>
   </div>
-</header>
-
-<main class="dashboard-grid">
-  <section id="statusSection" class="card">
-    <h2><span class="status-dot" id="statusDot"></span> System Status</h2>
-    <div id="statusContent" class="card-body">
-      <div class="loader"></div>
-    </div>
-  </section>
-
-  <section id="pipelineSection" class="card card-wide">
-    <h2>Project Pipeline</h2>
-    <div id="pipelineContent" class="card-body">
-      <div class="loader"></div>
-    </div>
-  </section>
-
-  <section id="marketSection" class="card card-wide">
-    <h2>Market Scanner</h2>
-    <div id="marketContent" class="card-body">
-      <div class="loader"></div>
-    </div>
-  </section>
-
-  <section id="projectsSection" class="card card-wide">
-    <h2>Active Games</h2>
-    <div id="projectsContent" class="card-body">
-      <div class="loader"></div>
-    </div>
-  </section>
-
-  <section id="memorySection" class="card card-wide">
-    <h2>Company Memory</h2>
-    <div id="memoryContent" class="card-body">
-      <div class="loader"></div>
-    </div>
-  </section>
-</main>
-
-<footer class="dashboard-footer">
-  <p>GCAgents &mdash; Autonomous AI Game Development Studio</p>
-</footer>
-
-<script src="app.js"></script>
 </body>
 </html>

@@ -5,20 +5,45 @@ from loguru import logger
 from shared.config import load_config
 from shared.models import GameProposal
 
-from .state import CompanyState, PipelinePhase
+from orchestrator.state import CompanyState, PipelinePhase
+
+
+async def _get_completed_genres() -> set[str]:
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+    from shared.config import load_config
+
+    config = load_config()
+    engine = create_async_engine(config.db_url, echo=False)
+    genres = set()
+    async with AsyncSession(engine) as db:
+        rows = await db.execute(text("SELECT DISTINCT genre FROM game_projects"))
+        for row in rows.fetchall():
+            if row.genre:
+                genres.add(row.genre.lower())
+    await engine.dispose()
+    return genres
 
 
 async def ceo_evaluate(state: CompanyState) -> dict:
-    """CEO reviews market insights and decides whether to greenlight a project."""
     if not state.market_insights:
         logger.info("CEO: No market insights, triggering scan")
         return {"phase": PipelinePhase.SCANNING}
 
-    top_opportunity = max(state.market_insights, key=lambda x: x.get("score", 0))
+    completed_genres = await _get_completed_genres()
+    opportunities = state.market_insights
+
+    novel = [o for o in opportunities if o.get("genre", "").lower() not in completed_genres]
+    if not novel:
+        logger.info("CEO: All top genres already produced, picking best anyway")
+        novel = opportunities
+
+    top_opportunity = max(novel, key=lambda x: x.get("market_opportunity_score", x.get("score", 0)))
     threshold = 0.6
 
-    if top_opportunity.get("score", 0) < threshold:
-        logger.info(f"CEO: Best opportunity score {top_opportunity.get('score')} below {threshold}, waiting")
+    score = top_opportunity.get("market_opportunity_score") or top_opportunity.get("score", 0)
+    if score < threshold:
+        logger.info(f"CEO: Best opportunity score {score} below {threshold}, waiting")
         return {"phase": PipelinePhase.IDLE}
 
     proposal = GameProposal(
@@ -26,8 +51,8 @@ async def ceo_evaluate(state: CompanyState) -> dict:
         genre=top_opportunity["genre"],
         description=top_opportunity["description"],
         target_platforms=["itch.io", "web"],
-        estimated_dev_hours=top_opportunity.get("estimated_hours", 8),
-        market_opportunity_score=top_opportunity["score"],
+        estimated_dev_hours=top_opportunity.get("estimated_dev_hours") or top_opportunity.get("estimated_hours", 8),
+        market_opportunity_score=score,
         differentiation=top_opportunity.get("differentiation", ""),
         reference_games=top_opportunity.get("reference_games", []),
     )
@@ -37,7 +62,6 @@ async def ceo_evaluate(state: CompanyState) -> dict:
 
 
 async def route_after_qa(state: CompanyState) -> str:
-    """After QA, decide: pass → build, fail → fix or abort."""
     if not state.qa_results:
         return "build"
 
@@ -51,8 +75,3 @@ async def route_after_qa(state: CompanyState) -> str:
 
     logger.warning(f"CEO: QA failed (attempt {state.retry_count}/3), sending back to dev")
     return "redevelop"
-
-
-async def route_after_operating(state: CompanyState) -> str:
-    """After a period of operation, decide: iterate, retire, or continue."""
-    return "continue"
