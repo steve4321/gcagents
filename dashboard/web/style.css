@@ -1573,6 +1573,118 @@ body {
   cursor: not-allowed;
 }
 
+.quick-prototype-btn {
+  padding: var(--space-2) var(--space-4);
+  background: var(--accent-amber-dim);
+  color: var(--accent-amber);
+  border: 1px solid rgba(255, 179, 0, 0.3);
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  white-space: nowrap;
+}
+
+.quick-prototype-btn:hover {
+  background: rgba(255, 179, 0, 0.25);
+  border-color: var(--accent-amber);
+}
+
+.prototype-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(6px);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  z-index: 1001;
+}
+
+.prototype-modal.visible {
+  display: flex;
+}
+
+.prototype-modal-content {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 16px;
+  padding: var(--space-8);
+  max-width: 480px;
+  width: 90%;
+  position: relative;
+}
+
+.prototype-modal-content h2 {
+  font-size: 20px;
+  margin-bottom: var(--space-2);
+}
+
+.prototype-modal-desc {
+  color: var(--text-secondary);
+  font-size: 14px;
+  margin-bottom: var(--space-5);
+}
+
+.prototype-modal-close {
+  position: absolute;
+  top: 12px;
+  right: 16px;
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 22px;
+  cursor: pointer;
+}
+
+.prototype-input {
+  width: 100%;
+  padding: 10px 14px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  color: var(--text-primary);
+  font-size: 15px;
+  outline: none;
+  margin-bottom: var(--space-4);
+}
+
+.prototype-input:focus {
+  border-color: var(--accent-amber);
+}
+
+.prototype-submit-btn {
+  padding: 10px 28px;
+  background: var(--accent-amber);
+  color: #000;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.prototype-submit-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.prototype-status {
+  margin-top: var(--space-3);
+  font-size: 13px;
+  min-height: 20px;
+}
+
+.prototype-status.running { color: var(--accent-cyan); }
+.prototype-status.success { color: var(--accent-green); }
+.prototype-status.error { color: var(--accent-red); }
+
+.prototype-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
 @keyframes pulse-dot {
   0%, 100% { opacity: 1; transform: scale(1); }
   50% { opacity: 0.4; transform: scale(0.85); }

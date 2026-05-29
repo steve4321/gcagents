@@ -95,18 +95,20 @@ CEO 作为调度大脑，每个 tick 处理所有项目的一步操作：
 
 ```
 每个 tick (默认 300s):
-┌─────────────────────────────────────────────────┐
-│ 1. 处理人类指令 (从 chat 读取)                    │
-│ 2. 检查决策点 — 跳过等待人类的项目                │
-│ 3. 定期市场扫描 (每 10 ticks)                     │
-│ 4. 推进各项目:                                    │
-│    backlog → [人类批准] → scanning → designing    │
-│    → developing → testing → building              │
-│    → [人类批准] → publishing → live               │
-│ 5. 从任务队列取一个任务执行                        │
-│ 6. 根据执行结果更新项目状态                        │
-│ 7. 生成主动汇报到 chat                            │
-└─────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────┐
+│ 1. 处理人类指令 (从 chat 读取)                        │
+│ 2. 检查决策点 — 跳过等待人类的项目                     │
+│ 3. 定期市场扫描 (每 10 ticks)                         │
+│ 4. 加载项目记忆（短期事件 + 长期教训）                  │
+│ 5. 推进各项目:                                        │
+│    backlog → [人类批准] → scanning → designing        │
+│    → developing (art → music → code) → testing        │
+│    → building → localize → [人类批准] → publishing     │
+│    → live (consolidate 记忆)                          │
+│ 6. 从任务队列取一个任务执行（含 3 层错误恢复）          │
+│ 7. 根据执行结果更新项目状态 + 存储记忆                  │
+│ 8. 生成主动汇报到 chat                                │
+└──────────────────────────────────────────────────────┘
 ```
 
 **5 类决策门控（必须人类批准）**：
@@ -139,12 +141,35 @@ class ProjectPhase(str, Enum):
     CANCELLED = "cancelled"    # 已取消
 ```
 
+### 原型快速模式 (`orchestrator/prototype_mode.py`)
+
+5 分钟内生成可玩原型，跳过美术和详细设计：
+
+```
+概念提示 → LLM 最小规格 → Phaser 模板代码 → 构建预览
+```
+
+- 使用彩色矩形/emoji 替代美术资产
+- Dashboard 一键按钮 "⚡ Prototype"
+- 预览后人工决定是否提升为正式项目
+
+### 3 层嵌套错误恢复
+
+| 层级 | 策略 | 行为 |
+|------|------|------|
+| **Layer 1** | `retry_with_feedback` | 同任务重试最多 2 次，错误信息反馈给 Agent |
+| **Layer 2** | `strategy_change` | 切换策略（如 develop → develop_simple），最多 1 次 |
+| **Layer 3** | `direction_change` | 创建决策点，暂停项目，等待人类决策 |
+
 ### 执行入口 (`orchestrator/main.py`)
 
 ```bash
 # 多项目调度器（推荐）
 python3 -m orchestrator.main run-scheduler              # 启动调度器，默认 300s/tick
 python3 -m orchestrator.main run-scheduler --interval 60 # 1 分钟一个 tick
+
+# 原型快速模式
+python3 -m orchestrator.main run-prototype "space shooter with powerups"
 
 # 经典模式（兼容）
 python3 -m orchestrator.main run              # 完整运行一个周期
@@ -231,6 +256,12 @@ python3 -m orchestrator.main scan             # 仅执行市场扫描
 - 游戏机制和控制系统
 - 参考游戏和差异化定位
 
+**机制规划层** (`mechanic_planner.py`)：
+- GDD 生成后自动分解为有序机制列表
+- 每个机制包含：name、description、inputs/outputs、constraints、dependencies、complexity
+- 程序员按机制逐一生成代码（核心系统→游戏玩法→打磨）
+- 无机制规划时退化为整体生成（向后兼容）
+
 ### 4. 美术师 (`agents/dev/artist/`)
 
 通过 **ComfyUI + Stable Diffusion 1.5** 生成游戏美术资产。**ComfyUI 不是游戏引擎**，它是美术资产生成工具——生成的 PNG 图片由 Phaser 游戏引擎加载使用。
@@ -250,6 +281,12 @@ python3 -m orchestrator.main scan             # 仅执行市场扫描
 | UI 图标 | 32×32 | 道具、能力、金币等 |
 
 **性能**：RTX 3060 首次生成 ~391s（模型加载），后续 ~10s/张。
+
+**美术风格一致性** (`art_style.py`)：
+- 5 种预设风格：pixel_16、pixel_8、cartoon、flat_design、handdrawn
+- 每种风格定义 prompt_suffix、negative_prompt、sprite_size、palette
+- 根据 genre 自动选择风格（platformer→pixel_16, puzzle→flat_design, idle→cartoon）
+- ArtStyleConfig 持久化在项目 GDD 中，确保所有资产生成使用相同风格
 
 **集成方式**：生成的 PNG 放入游戏 `public/assets/`，Phaser 的 BootScene 通过 `this.load.image()` 加载，场景用 `this.add.image()` 替代 `this.add.rectangle()` 矩形占位符。
 
@@ -276,6 +313,7 @@ generate_game_code(gdd, project_dir, config, build_error="")
 ```
 
 - 接收 GDD，用 Jinja2 模板 + AI 生成完整游戏源码
+- **机制驱动生成**：如果 GDD 包含 mechanics 列表，按依赖顺序逐机制生成代码；否则整体生成
 - 强制约束：`import * as Phaser from 'phaser'`（Phaser 4 ESM 无默认导出）
 - 游戏代码引用 ComfyUI 生成的美术资产路径（`assets/bg_menu.png`、`assets/player.png` 等），运行时通过 Phaser 加载
 - **构建重试机制**：如果 `build_error` 参数非空，自动将错误信息追加到 AI prompt 中，让 AI 修复后重新生成
@@ -291,6 +329,15 @@ generate_game_code(gdd, project_dir, config, build_error="")
 - 失败时返回 `retry_count+1` 和错误详情
 - 构建错误会通过 LangGraph 状态传递回 Developer，实现**错误反馈闭环**
 
+**自动化 Playtest** (`auto_playtest.py` + `playtest_checks.py`)：
+- 使用 Playwright headless Chromium 执行 8 项自动化验证：
+  - 页面加载（无 JS 错误）、Canvas 存在、Canvas 渲染（非零尺寸）
+  - 非白屏、交互元素存在、开始按钮可点击
+  - 分数系统响应（点击后文本变化）、控制台错误检查
+- 容忍度：允许 1 项检查失败
+- 返回 playtest score（0-1）和详细检查结果
+- 构建成功后自动运行，QA 通过需要 build_ok + playtest_passed
+
 ### 7. 构建打包 (`agents/dev/builder/`)
 
 - 执行 `vite build` 生成 `dist/` 目录
@@ -303,6 +350,31 @@ generate_game_code(gdd, project_dir, config, build_error="")
 - 使用 `BUTLER_API_KEY` 环境变量认证（无需交互式登录）
 - 推送到 `{username}/{project_name}:html` 频道
 - 注意：游戏页面需预先在 itch.io 手动创建
+
+### 9. 音乐生成 (`agents/dev/music/`)
+
+为游戏生成背景音乐和音效，支持多种后端：
+
+| 后端 | 条件 | 输出 |
+|------|------|------|
+| **Suno API** | `suno_api_key` 已配置 | AI 生成的 MP3 音乐 |
+| **Web Audio 程序化** (默认) | 无需外部 API | 基于振荡器的循环旋律 |
+
+- 程序化 BGM 根据 genre 配置不同参数（tempo/scale/octave）：arcade=140bpm、puzzle=90bpm、rpg=80bpm
+- 5 种 SFX：jump、collect、hit、gameover、click（振荡器合成）
+- 输出 `bgm.js` + `sfx.js` 到 `assets/audio/`
+- 在 DEVELOPING 阶段（art → music → develop）自动执行
+
+### 10. 自动本地化 (`agents/dev/localize/`)
+
+将游戏 UI 文字翻译为多语言，仅面向海外市场（无中文）：
+
+- **字符串提取** (`string_extractor.py`)：从 HTML 文本节点和 JS 字符串中提取可翻译字符串
+- **LLM 翻译** (`translator.py`)：使用 glm-4-flash/deepseek 翻译到 15 种语言
+- **注入本地化**：生成 `assets/loc/loc.js`，自动注入 `<script>` 标签到 index.html
+- 默认翻译前 5 大市场：日语、韩语、西班牙语、葡萄牙语、德语
+- 支持语言：ja, ko, es, pt, de, fr, ru, ar, hi, th, vi, id, tr, it, pl
+- 在 BUILDING 阶段后自动执行（build → localize → publishing）
 
 ---
 
@@ -329,6 +401,7 @@ generate_game_code(gdd, project_dir, config, build_error="")
 | `finance_budgets` | 预算配置 | category, budget_type, budget_limit_usd, spent_usd |
 | `chat_messages` | 高管聊天记录 | role, content, agent_name, metadata_json |
 | `event_logs` | 公司事件日志 | event_type, severity, title, source_agent |
+| `memories` | 分层记忆系统 | id, category, content, summary, project_id, importance, created_at |
 
 ### 写入时机
 
@@ -346,6 +419,8 @@ generate_game_code(gdd, project_dir, config, build_error="")
 | 游戏运行 | `game_metrics`（分析事件埋点上报） |
 | 财务操作 | `finance_budgets` + `event_logs` |
 | 高管聊天/决策 | `chat_messages`（含决策卡片） |
+| 记忆存储 | `memories`（短期事件 + 长期教训） |
+| 项目完成 | `memories` consolidate（短期→长期提取） |
 | 所有重要事件 | `event_logs` |
 
 ---
@@ -369,6 +444,12 @@ Dashboard 运行在独立进程（FastAPI + 静态 HTML/CSS/JS），与管道解
 | `/api/decisions/{id}/respond` | POST | 回复决策（approve/reject/discuss） |
 | **任务监控** | | |
 | `/api/orchestrator/tasks` | GET | 任务列表（支持按项目过滤） |
+| **原型模式** | | |
+| `/api/orchestrator/prototype` | POST | 快速生成原型（5 分钟） |
+| **记忆系统** | | |
+| `/api/memory/{id}/recent` | GET | 项目短期记忆 |
+| `/api/memory/search?q=...` | GET | 搜索长期教训 |
+| `/api/memory/lessons` | GET | 所有长期教训 |
 | **经典管道** | | |
 | `/api/pipeline/run` | POST | 触发单次管道运行 |
 | `/api/pipeline/run-forever` | POST | 启动 24/7 模式 |
@@ -404,6 +485,7 @@ Dashboard 运行在独立进程（FastAPI + 静态 HTML/CSS/JS），与管道解
 - **Active Games** — 构建的游戏列表，支持 iframe 预览
 - **Company Memory** — 长期记忆
 - **24/7 Mode Toggle** — 一键启停 24/7 运行模式
+- **⚡ Prototype Button** — 快速原型模式（输入概念 → 5 分钟生成可玩 demo）
 - **Run Pipeline Button** — 一键启动管道
 
 ---
@@ -442,17 +524,18 @@ Dashboard 运行在独立进程（FastAPI + 静态 HTML/CSS/JS），与管道解
 ```
 gcagents/
 ├── orchestrator/           # 核心编排
-│   ├── scheduler.py        #   CEO 多项目调度器（tick-based）
-│   ├── task_queue.py       #   任务队列（SQLite-backed）
+│   ├── scheduler.py        #   CEO 多项目调度器（tick-based + 3 层错误恢复）
+│   ├── task_queue.py       #   任务队列（SQLite-backed + retry 元数据）
 │   ├── decision_gate.py    #   决策门控（5 类人类审批）
 │   ├── graph/pipeline.py   #   经典线性管道（LangGraph，兼容）
 │   ├── nodes/ceo.py        #   CEO 评估（经典模式）
 │   ├── nodes/cfo.py        #   CFO 预算预检
 │   ├── nodes/coo.py        #   COO 健康检查
 │   ├── event_bus.py        #   统一事件发射
-│   ├── state.py            #   全局状态定义
-│   ├── persistence.py      #   SQLite 持久化（含 projects/decisions/tasks 表）
-│   └── main.py             #   CLI 入口（run/run-forever/run-scheduler/scan）
+│   ├── state.py            #   全局状态定义（含 retry_feedback）
+│   ├── persistence.py      #   SQLite 持久化（含 projects/decisions/tasks/memories 表）
+│   ├── prototype_mode.py   #   原型快速模式（5 分钟 demo）
+│   └── main.py             #   CLI 入口（run/run-forever/run-scheduler/run-prototype/scan）
 ├── agents/                 # AI Agent 实现
 │   ├── research/           #   市场研究（12 个数据源）
 │   │   ├── scanner.py      #     多源扫描
@@ -460,22 +543,31 @@ gcagents/
 │   │   └── sources/        #     12 个数据源适配器
 │   │       └── fetchers.py #       itch/reddit/steam/youtube/tiktok/...
 │   ├── dev/                #   游戏开发
-│   │   ├── designer/       #     GDD 生成
+│   │   ├── designer/       #     GDD 生成 + 机制规划
+│   │   │   └── mechanic_planner.py  #   机制分解（GDD → 有序机制列表）
 │   │   ├── artist/         #     美术生成 (ComfyUI SD 1.5)
+│   │   │   └── art_style.py#       美术风格一致性（5 种预设）
 │   │   ├── programmer/     #     代码生成 (DeepSeek)
 │   │   ├── qa/             #     质量测试
+│   │   │   ├── auto_playtest.py  #    Playwright 自动化 playtest
+│   │   │   └── playtest_checks.py#    8 项验证检查
+│   │   ├── music/          #     音乐生成（Web Audio 程序化 + Suno API）
+│   │   ├── localize/       #     自动本地化（15 种语言）
+│   │   │   ├── string_extractor.py  #  字符串提取 + 注入
+│   │   │   └── translator.py        #  LLM 翻译
 │   │   └── builder/        #     Vite 构建
 │   └── ops/                #   运维部署
 │       ├── deployer/       #     itch.io 发布
 │       └── analytics/      #     数据分析 + 反馈收集
 ├── dashboard/web/          # 监控面板
-│   ├── api_server.py       #   FastAPI 后端（35 个 API 端点）
+│   ├── api_server.py       #   FastAPI 后端（38 个 API 端点）
 │   ├── index.html          #   前端（项目看板/任务监控/决策卡片/市场趋势）
 │   ├── app.js              #   前端逻辑
 │   └── style.css           #   样式
 ├── shared/                 # 共享模块
 │   ├── config.py           #   配置加载 (pydantic-settings)
 │   ├── models.py           #   数据模型（ProjectState/DecisionPoint/TaskRecord + 原有模型）
+│   ├── memory.py           #   分层记忆系统（短期事件 + 长期教训 + 项目上下文）
 │   └── llm_client.py       #   统一 LLM 客户端（token 追踪 + 成本记录 + 重试退避）
 ├── config/                 # 配置文件
 │   ├── agents.yaml         #   Agent 与模型映射
@@ -498,6 +590,7 @@ gcagents/
 | 迭代 | 统一 LLM 客户端、CFO/COO Agent、高管聊天面板、财务 API |
 | 迭代 | 24/7 运行模式、Dashboard 启停按钮 |
 | **当前** | **多项目编排重构**：CEO 调度器、决策门控（5 类）、任务队列、12 市场数据源、项目看板、任务监控、决策卡片、市场趋势面板 |
+| **v2** | **8 项增强**：自动化 Playtest（Playwright 8 项检查）、机制规划层（GDD→有序机制→逐机制代码生成）、3 层嵌套错误恢复、美术风格一致性（5 种预设）、原型快速模式（5 分钟 demo）、分层记忆系统（短期+长期）、音乐生成（Web Audio+Suno）、自动本地化（15 种语言） |
 
 ---
 
@@ -525,6 +618,9 @@ BUTLER_USERNAME=kingsman666    # itch.io 用户名
 # 多项目调度器（推荐）
 python3 -m orchestrator.main run-scheduler
 python3 -m orchestrator.main run-scheduler --interval 60
+
+# 原型快速模式
+python3 -m orchestrator.main run-prototype "space shooter with powerups"
 
 # 经典模式
 python3 -m orchestrator.main run

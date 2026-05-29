@@ -143,6 +143,7 @@ async def ensure_tables():
                 gdd TEXT,
                 code_path TEXT,
                 art_status TEXT DEFAULT 'pending',
+                music_status TEXT DEFAULT 'pending',
                 qa_result TEXT,
                 itch_url TEXT,
                 version TEXT DEFAULT '0.0.0',
@@ -184,6 +185,7 @@ async def ensure_tables():
         for col_sql in [
             "ALTER TABLE game_projects ADD COLUMN current_version TEXT DEFAULT '0.0.0'",
             "ALTER TABLE game_projects ADD COLUMN feedback_count INTEGER DEFAULT 0",
+            "ALTER TABLE projects ADD COLUMN music_status TEXT DEFAULT 'pending'",
         ]:
             try:
                 await db.execute(text(col_sql))
@@ -807,6 +809,7 @@ async def save_project(project) -> str:
                     UPDATE projects SET name=:name, genre=:genre, phase=:phase,
                         progress=:progress, proposal=:proposal, gdd=:gdd,
                         code_path=:code_path, art_status=:art_status,
+                        music_status=:music_status,
                         qa_result=:qa_result, itch_url=:itch_url,
                         version=:version, awaiting_decision=:awaiting_decision,
                         updated_at=:updated_at
@@ -822,6 +825,7 @@ async def save_project(project) -> str:
                     "gdd": json.dumps(project.gdd) if project.gdd else None,
                     "code_path": project.code_path,
                     "art_status": project.art_status,
+                    "music_status": project.music_status,
                     "qa_result": json.dumps(project.qa_result) if project.qa_result else None,
                     "itch_url": project.itch_url,
                     "version": project.version,
@@ -833,10 +837,10 @@ async def save_project(project) -> str:
             await db.execute(
                 text("""
                     INSERT INTO projects (id, name, genre, phase, progress, proposal, gdd,
-                        code_path, art_status, qa_result, itch_url, version,
+                        code_path, art_status, music_status, qa_result, itch_url, version,
                         awaiting_decision, created_at, updated_at)
                     VALUES (:id, :name, :genre, :phase, :progress, :proposal, :gdd,
-                        :code_path, :art_status, :qa_result, :itch_url, :version,
+                        :code_path, :art_status, :music_status, :qa_result, :itch_url, :version,
                         :awaiting_decision, :created_at, :updated_at)
                 """),
                 {
@@ -849,6 +853,7 @@ async def save_project(project) -> str:
                     "gdd": json.dumps(project.gdd) if project.gdd else None,
                     "code_path": project.code_path,
                     "art_status": project.art_status,
+                    "music_status": project.music_status,
                     "qa_result": json.dumps(project.qa_result) if project.qa_result else None,
                     "itch_url": project.itch_url,
                     "version": project.version,
@@ -922,6 +927,7 @@ def _row_to_project(d: dict):
         gdd=json.loads(d["gdd"]) if d.get("gdd") else None,
         code_path=d.get("code_path"),
         art_status=d.get("art_status", "pending"),
+        music_status=d.get("music_status", "pending"),
         qa_result=json.loads(d["qa_result"]) if d.get("qa_result") else None,
         itch_url=d.get("itch_url"),
         version=d.get("version", "0.0.0"),

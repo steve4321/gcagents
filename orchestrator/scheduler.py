@@ -16,7 +16,8 @@ from orchestrator.persistence import (
     update_project_phase,
 )
 from orchestrator.state import CompanyState, PipelinePhase
-from orchestrator.task_queue import enqueue, dequeue, complete_task, fail_task, update_progress
+from orchestrator.task_queue import enqueue, dequeue, complete_task, fail_task, update_progress, enqueue_retry
+from shared.memory import get_memory_store
 from shared.models import ProjectPhase, ProjectState
 
 _TICK_COUNT = 0
@@ -28,6 +29,7 @@ async def scheduler_tick() -> dict | None:
     _TICK_COUNT += 1
 
     logger.info(f"Scheduler tick #{_TICK_COUNT}")
+    memory = get_memory_store()
 
     await _process_instructions()
     await _resolve_answered_decisions()
@@ -40,6 +42,16 @@ async def scheduler_tick() -> dict | None:
     task_result = await _execute_one_task()
     if task_result:
         await _apply_task_result(task_result)
+        task = task_result["task"]
+        pid = task.project_id
+        if pid != "__system__":
+            memory.store_short_term(
+                "tick_result",
+                f"Phase: {task.task_type}, Status: {task_result['status']}",
+                pid,
+                tick_id=str(_TICK_COUNT),
+                importance=0.3,
+            )
 
     await _generate_reports()
 
@@ -189,6 +201,8 @@ async def _advance_project(project: ProjectState) -> None:
     elif phase == ProjectPhase.DEVELOPING:
         if project.art_status != "done":
             await enqueue(pid, "art_gen", {"project_name": project.name, "gdd": project.gdd})
+        elif project.music_status != "done":
+            await enqueue(pid, "generate_music", {"project_name": project.name, "gdd": project.gdd})
         else:
             await enqueue(pid, "develop", {"project_name": project.name, "gdd": project.gdd})
 
@@ -217,9 +231,10 @@ async def _advance_project(project: ProjectState) -> None:
             await db.commit()
 
 
-async def _execute_one_task() -> dict | None:
-    import json
+LAYER1_MAX_RETRIES = 2
 
+
+async def _execute_one_task() -> dict | None:
     task = await dequeue()
     if not task:
         return None
@@ -229,16 +244,121 @@ async def _execute_one_task() -> dict | None:
     pid = task.project_id
     params = task.params
 
-    logger.info(f"Scheduler: executing task '{task_type}' for project {pid}")
+    retry_count = params.get("retry_count", 0)
+    layer = params.get("layer", 1)
+
+    logger.info(f"Scheduler: executing task '{task_type}' for project {pid} (layer={layer}, retry={retry_count})")
 
     try:
         result = await _run_agent(task_type, pid, params)
         await complete_task(task.id, result)
         return {"task": task, "result": result, "status": "completed"}
     except Exception as e:
-        logger.error(f"Scheduler: task '{task_type}' failed: {e}")
-        await fail_task(task.id, str(e))
-        return {"task": task, "error": str(e), "status": "failed"}
+        error_msg = str(e)
+        logger.error(f"Scheduler: task '{task_type}' failed (layer={layer}, retry={retry_count}): {e}")
+        await fail_task(task.id, error_msg)
+        recovery = await _handle_retry_recovery(task, error_msg)
+        if recovery:
+            return recovery
+        return {"task": task, "error": error_msg, "status": "failed"}
+
+
+async def _handle_retry_recovery(task, error_msg: str) -> dict | None:
+    pid = task.project_id
+    task_type = task.task_type
+    params = task.params
+    retry_count = params.get("retry_count", 0)
+    layer = params.get("layer", 1)
+
+    if layer == 1:
+        if retry_count < LAYER1_MAX_RETRIES:
+            return await _retry_layer1(task, error_msg, retry_count)
+        else:
+            return await _escalate_layer2(task, error_msg)
+
+    elif layer == 2:
+        return await _escalate_layer3(task, error_msg)
+
+    return None
+
+
+async def _retry_layer1(task, error_msg: str, retry_count: int) -> dict:
+    pid = task.project_id
+    task_type = task.task_type
+    logger.info(f"Scheduler: Layer 1 retry #{retry_count + 1} for '{task_type}' (project {pid})")
+    await enqueue_retry(
+        pid, task_type, task.params,
+        retry_count=retry_count + 1,
+        retry_strategy="retry_with_feedback",
+        layer=1,
+        last_error=error_msg,
+    )
+    return {"task": task, "error": error_msg, "status": "failed", "recovery": "layer1_retry"}
+
+
+async def _escalate_layer2(task, error_msg: str) -> dict:
+    pid = task.project_id
+    task_type = task.task_type
+    alt_type = _fallback_task_type(task_type)
+    alt_params = dict(task.params)
+    alt_params["simplified"] = True
+    alt_params["original_task_type"] = task_type
+    logger.info(f"Scheduler: Layer 2 strategy change '{task_type}' -> '{alt_type}' (project {pid})")
+    await enqueue_retry(
+        pid, alt_type, alt_params,
+        retry_count=0,
+        retry_strategy="strategy_change",
+        layer=2,
+        last_error=error_msg,
+    )
+    return {"task": task, "error": error_msg, "status": "failed", "recovery": "layer2_strategy_change"}
+
+
+async def _escalate_layer3(task, error_msg: str) -> dict:
+    pid = task.project_id
+    task_type = task.params.get("original_task_type", task.task_type)
+    logger.warning(f"Scheduler: Layer 3 escalation for project {pid}, task '{task_type}'")
+    context = {
+        "failed_task_type": task_type,
+        "layer2_task_type": task.task_type,
+        "last_error": error_msg,
+        "retry_metadata": {
+            "retry_count": task.params.get("retry_count", 0),
+            "retry_strategy": task.params.get("retry_strategy", ""),
+            "layer": 2,
+        },
+    }
+    await create_decision(
+        "direction_change",
+        f"Task '{task_type}' failed after retry and strategy change. Error: {error_msg[:200]}",
+        project_id=pid,
+        context=context,
+    )
+    from orchestrator.persistence import _get_engine
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import AsyncSession
+    engine = _get_engine()
+    async with AsyncSession(engine) as db:
+        await db.execute(
+            text("UPDATE projects SET phase='paused', updated_at=:now WHERE id=:id"),
+            {"now": datetime.now(timezone.utc).isoformat(), "id": pid},
+        )
+        await db.commit()
+    await emit("scheduler", f"Project {pid} paused — awaiting human decision after task failure", severity="warning", source_agent="scheduler")
+    return {"task": task, "error": error_msg, "status": "failed", "recovery": "layer3_escalation"}
+
+
+def _fallback_task_type(task_type: str) -> str:
+    mapping = {
+        "develop": "develop_simple",
+        "qa": "qa",
+        "build": "build",
+        "design_game": "design_game",
+        "art_gen": "art_gen",
+        "generate_music": "generate_music",
+        "market_scan": "market_scan",
+    }
+    return mapping.get(task_type, task_type)
 
 
 async def _run_agent(task_type: str, project_id: str, params: dict) -> dict:
@@ -250,6 +370,13 @@ async def _run_agent(task_type: str, project_id: str, params: dict) -> dict:
         gdd=project.gdd if project else None,
         current_proposal=_proposal_from_project(project) if project else None,
     )
+
+    if params.get("last_error"):
+        state.retry_feedback = {
+            "last_error": params["last_error"],
+            "retry_count": params.get("retry_count", 0),
+            "layer": params.get("layer", 1),
+        }
 
     if task_type == "market_scan":
         from agents.research.scanner import scan_market
@@ -263,7 +390,11 @@ async def _run_agent(task_type: str, project_id: str, params: dict) -> dict:
         from agents.dev.artist.art_node import generate_art
         return await generate_art(state)
 
-    elif task_type == "develop":
+    elif task_type == "generate_music":
+        from agents.dev.music.music_generator import generate_music
+        return await generate_music(state)
+
+    elif task_type in ("develop", "develop_simple"):
         from agents.dev.programmer.agent import develop_game
         return await develop_game(state)
 
@@ -274,6 +405,23 @@ async def _run_agent(task_type: str, project_id: str, params: dict) -> dict:
     elif task_type == "build":
         from agents.dev.builder.build_agent import build_game
         return await build_game(state)
+
+    elif task_type == "localize":
+        from agents.dev.localize.string_extractor import extract_strings, inject_localization
+        from agents.dev.localize.translator import translate_strings
+
+        name = params.get("project_name", "")
+        dist_dir = f"data/games/{name}/dist"
+        strings = extract_strings(dist_dir)
+        if strings:
+            genre = ""
+            if project and project.gdd:
+                genre = project.gdd.get("genre", "")
+            translations = await translate_strings(strings, game_genre=genre)
+            result = inject_localization(dist_dir, translations)
+        else:
+            result = {"locales": [], "note": "no strings found"}
+        return result
 
     elif task_type == "deploy":
         from agents.ops.deployer.itch_deployer import deploy_to_itch
@@ -315,18 +463,23 @@ async def _apply_task_result(task_result: dict) -> None:
         return
 
     if status == "failed":
-        await emit("scheduler", f"Task '{task.task_type}' failed for project {pid}", severity="warning", source_agent="scheduler")
+        recovery = task_result.get("recovery")
+        if recovery:
+            logger.info(f"Scheduler: task '{task.task_type}' failed, recovery action: {recovery}")
+        else:
+            await emit("scheduler", f"Task '{task.task_type}' failed for project {pid}", severity="warning", source_agent="scheduler")
         return
 
     result = task_result.get("result", {})
     task_type = task.task_type
+    effective_type = task.params.get("original_task_type", task_type)
     project = await get_project(pid)
     if not project:
         return
 
     engine = _get_engine()
 
-    if task_type == "market_scan":
+    if effective_type == "market_scan":
         insights = result.get("market_insights", [])
         if insights:
             top = max(insights, key=lambda x: x.get("market_opportunity_score", x.get("score", 0)))
@@ -345,7 +498,7 @@ async def _apply_task_result(task_result: dict) -> None:
         else:
             await update_project_phase(pid, "backlog")
 
-    elif task_type == "design_game":
+    elif effective_type == "design_game":
         gdd = result.get("gdd")
         if gdd:
             async with AsyncSession(engine) as db:
@@ -356,7 +509,7 @@ async def _apply_task_result(task_result: dict) -> None:
                 await db.commit()
             await update_project_phase(pid, "developing")
 
-    elif task_type == "art_gen":
+    elif effective_type == "art_gen":
         art_path = result.get("art_assets_path")
         async with AsyncSession(engine) as db:
             await db.execute(
@@ -365,7 +518,15 @@ async def _apply_task_result(task_result: dict) -> None:
             )
             await db.commit()
 
-    elif task_type == "develop":
+    elif effective_type == "generate_music":
+        async with AsyncSession(engine) as db:
+            await db.execute(
+                text("UPDATE projects SET music_status='done', updated_at=:now WHERE id=:id"),
+                {"now": datetime.now(timezone.utc).isoformat(), "id": pid},
+            )
+            await db.commit()
+
+    elif effective_type == "develop":
         code_path = result.get("game_code_path")
         if code_path:
             async with AsyncSession(engine) as db:
@@ -376,7 +537,7 @@ async def _apply_task_result(task_result: dict) -> None:
                 await db.commit()
         await update_project_phase(pid, "testing")
 
-    elif task_type == "qa":
+    elif effective_type == "qa":
         qa_results = result.get("qa_results", {})
         passed = qa_results.get("passed", False) if isinstance(qa_results, dict) else False
         async with AsyncSession(engine) as db:
@@ -405,7 +566,7 @@ async def _apply_task_result(task_result: dict) -> None:
             else:
                 await update_project_phase(pid, "developing")
 
-    elif task_type == "build":
+    elif effective_type == "build":
         build_path = result.get("build_path")
         if build_path:
             async with AsyncSession(engine) as db:
@@ -414,9 +575,15 @@ async def _apply_task_result(task_result: dict) -> None:
                     {"bp": build_path, "now": datetime.now(timezone.utc).isoformat(), "id": pid},
                 )
                 await db.commit()
+        await enqueue(pid, "localize", {"project_name": project.name})
         await update_project_phase(pid, "publishing")
 
-    elif task_type == "deploy":
+    elif effective_type == "localize":
+        locales = result.get("locales", [])
+        if locales:
+            await emit("scheduler", f"Localized '{project.name}' to {len(locales)} locales: {', '.join(locales)}", source_agent="scheduler", project_name=project.name)
+
+    elif effective_type == "deploy":
         itch_url = result.get("itch_url")
         if itch_url:
             async with AsyncSession(engine) as db:
@@ -427,6 +594,7 @@ async def _apply_task_result(task_result: dict) -> None:
                 await db.commit()
             await emit("scheduler", f"Project '{project.name}' published to {itch_url}", source_agent="scheduler", project_name=project.name)
             await save_chat_message("assistant", f"🚀 Project '{project.name}' is now live at {itch_url}", agent_name="scheduler")
+            get_memory_store().consolidate(pid)
 
 
 async def _generate_reports() -> None:

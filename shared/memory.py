@@ -1,0 +1,226 @@
+"""Layered memory system for persistent learning across game projects."""
+from __future__ import annotations
+
+import hashlib
+import sqlite3
+from datetime import datetime, timezone
+from pathlib import Path
+
+from loguru import logger
+
+DB_PATH = Path("data/gcagents.db")
+
+
+class MemoryStore:
+    """Two-layer memory: short-term (per-project events) and long-term (cross-project lessons)."""
+
+    def __init__(self, db_path: str | Path = DB_PATH):
+        self.db_path = str(db_path)
+        self._init_tables()
+
+    def _connect(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        return conn
+
+    def _init_tables(self) -> None:
+        Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
+        with self._connect() as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS memories (
+                    id TEXT PRIMARY KEY,
+                    category TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    summary TEXT,
+                    embedding_hash TEXT,
+                    project_id TEXT NOT NULL DEFAULT '',
+                    tick_id TEXT DEFAULT '',
+                    importance REAL DEFAULT 0.5,
+                    created_at TEXT NOT NULL,
+                    accessed_at TEXT NOT NULL,
+                    access_count INTEGER DEFAULT 0
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_category ON memories(category)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_project ON memories(project_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_importance ON memories(importance)")
+
+    # ── Short-term memory ────────────────────────────────────────────────────
+
+    def store_short_term(
+        self,
+        category: str,
+        content: str,
+        project_id: str,
+        tick_id: str = "",
+        importance: float = 0.5,
+    ) -> str:
+        mem_id = hashlib.md5(
+            f"{category}:{content}:{datetime.now(timezone.utc).isoformat()}"
+            .encode()
+        ).hexdigest()[:12]
+        now = datetime.now(timezone.utc).isoformat()
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO memories "
+                "(id, category, content, project_id, "
+                "tick_id, importance, created_at, accessed_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (mem_id, category, content,
+                 project_id, tick_id, importance, now, now),
+            )
+        return mem_id
+
+    def get_recent(
+        self,
+        project_id: str,
+        category: str | None = None,
+        limit: int = 10,
+    ) -> list[dict]:
+        with self._connect() as conn:
+            if category:
+                rows = conn.execute(
+                    "SELECT * FROM memories WHERE project_id = ? AND category = ? "
+                    "ORDER BY created_at DESC LIMIT ?",
+                    (project_id, category, limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM memories WHERE project_id = ? "
+                    "ORDER BY created_at DESC LIMIT ?",
+                    (project_id, limit),
+                ).fetchall()
+            return [dict(r) for r in rows]
+
+    # ── Long-term memory ─────────────────────────────────────────────────────
+
+    def store_long_term(
+        self,
+        category: str,
+        content: str,
+        summary: str,
+        importance: float = 0.7,
+    ) -> str:
+        mem_id = hashlib.md5(f"lt:{category}:{summary}".encode()).hexdigest()[:12]
+        now = datetime.now(timezone.utc).isoformat()
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO memories "
+                "(id, category, content, summary, project_id, importance, created_at, accessed_at) "
+                "VALUES (?, ?, ?, ?, '', ?, ?, ?)",
+                (mem_id, category, content, summary, importance, now, now),
+            )
+        return mem_id
+
+    def search_long_term(
+        self,
+        query: str,
+        category: str | None = None,
+        limit: int = 5,
+    ) -> list[dict]:
+        query_lower = query.lower()
+        with self._connect() as conn:
+            if category:
+                rows = conn.execute(
+                    "SELECT * FROM memories "
+                    "WHERE category = ? "
+                    "AND (LOWER(content) LIKE ? "
+                    "OR LOWER(summary) LIKE ?) "
+                    "ORDER BY importance DESC, "
+                    "created_at DESC LIMIT ?",
+                    (category, f"%{query_lower}%",
+                     f"%{query_lower}%", limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM memories "
+                    "WHERE (LOWER(content) LIKE ? "
+                    "OR LOWER(summary) LIKE ?) "
+                    "AND project_id = '' "
+                    "ORDER BY importance DESC, "
+                    "created_at DESC LIMIT ?",
+                    (f"%{query_lower}%",
+                     f"%{query_lower}%", limit),
+                ).fetchall()
+            results = [dict(r) for r in rows]
+            now = datetime.now(timezone.utc).isoformat()
+            for r in results:
+                conn.execute(
+                    "UPDATE memories SET access_count = access_count + 1, accessed_at = ? WHERE id = ?",
+                    (now, r["id"]),
+                )
+            return results
+
+    # ── Consolidation ────────────────────────────────────────────────────────
+
+    def consolidate(self, project_id: str) -> list[str]:
+        recent = self.get_recent(project_id, limit=50)
+        if not recent:
+            return []
+
+        by_category: dict[str, list[str]] = {}
+        for m in recent:
+            by_category.setdefault(m["category"], []).append(m["content"])
+
+        lessons: list[str] = []
+        for cat, items in by_category.items():
+            summary = f"[{cat}] From {len(items)} events: " + "; ".join(items[:3])
+            self.store_long_term(
+                category=f"lesson:{cat}",
+                content="\n".join(items[:10]),
+                summary=summary,
+                importance=0.6,
+            )
+            lessons.append(summary)
+
+        logger.info(f"Consolidated {len(recent)} memories into {len(lessons)} lessons for project {project_id}")
+        return lessons
+
+    # ── Context builder ──────────────────────────────────────────────────────
+
+    def get_project_context(self, project_id: str, query: str = "") -> str:
+        parts: list[str] = []
+
+        recent = self.get_recent(project_id, limit=5)
+        if recent:
+            parts.append("## Recent Project Events")
+            for m in recent:
+                parts.append(f"- [{m['category']}] {m['content']}")
+
+        if query:
+            lessons = self.search_long_term(query, limit=3)
+            if lessons:
+                parts.append("\n## Relevant Past Lessons")
+            for lesson in lessons:
+                parts.append(
+                    f"- {lesson.get('summary', lesson.get('content', ''))}"
+                )
+
+        return "\n".join(parts) if parts else ""
+
+    # ── Utilities ────────────────────────────────────────────────────────────
+
+    def get_all_lessons(self) -> list[dict]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM memories WHERE project_id = '' ORDER BY importance DESC, created_at DESC"
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def delete_project_memories(self, project_id: str) -> int:
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "DELETE FROM memories WHERE project_id = ?", (project_id,)
+            )
+            return cursor.rowcount
+
+
+_memory_store: MemoryStore | None = None
+
+
+def get_memory_store() -> MemoryStore:
+    global _memory_store
+    if _memory_store is None:
+        _memory_store = MemoryStore()
+    return _memory_store

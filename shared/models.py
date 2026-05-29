@@ -160,6 +160,7 @@ class ProjectState(BaseModel):
     gdd: dict | None = None
     code_path: str | None = None
     art_status: str = "pending"
+    music_status: str = "pending"
     qa_result: dict | None = None
     itch_url: str | None = None
     version: str = "0.0.0"

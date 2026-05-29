@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import re
-from pathlib import Path
 
 import httpx
 from loguru import logger
@@ -9,6 +8,7 @@ from loguru import logger
 from orchestrator.state import CompanyState, PipelinePhase
 from shared.config import load_config
 
+from .art_style import resolve_art_style
 from .comfyui_client import ComfyUIClient
 from .sprite_generator import SpriteGenerator
 
@@ -28,8 +28,8 @@ async def generate_art(state: CompanyState) -> dict:
     output_dir = config.games_output_dir / project_name / "assets"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    art_style = gdd.get("art_style", {})
-    style = art_style.get("theme", "pixel-art")
+    art_style_config = resolve_art_style(gdd)
+    style = art_style_config.style_key
 
     entities = gdd.get("entities", [])
     scenes = gdd.get("scenes", [])
@@ -40,7 +40,7 @@ async def generate_art(state: CompanyState) -> dict:
     ui_elements = ui_layout.get("hud", []) + ui_layout.get("menus", [])
 
     client = ComfyUIClient(base_url=config.comfyui_url)
-    generator = SpriteGenerator(client)
+    generator = SpriteGenerator(client, art_style=art_style_config)
 
     try:
         if sprite_characters:
@@ -57,7 +57,9 @@ async def generate_art(state: CompanyState) -> dict:
         return {"phase": PipelinePhase.DEVELOPING, "art_assets_path": str(output_dir)}
 
     except httpx.ConnectError:
-        logger.warning("ComfyUI unavailable - falling back to Phaser shape rendering (no art assets needed)")
+        logger.warning(
+            "ComfyUI unavailable - falling back to Phaser shape rendering (no art assets needed)"
+        )
         return {"phase": PipelinePhase.DEVELOPING, "art_assets_path": ""}
     except Exception as e:
         logger.error(f"Art generation failed: {e}")

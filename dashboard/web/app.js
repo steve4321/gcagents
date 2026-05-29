@@ -973,6 +973,11 @@ function init() {
     foreverToggleBtn.addEventListener('click', toggleForever);
   }
 
+  const quickPrototypeBtn = $('#quickPrototypeBtn');
+  if (quickPrototypeBtn) {
+    quickPrototypeBtn.addEventListener('click', openPrototypeModal);
+  }
+
   const previewCloseBtn = $('#previewCloseBtn');
   if (previewCloseBtn) {
     previewCloseBtn.addEventListener('click', closePreview);
@@ -998,3 +1003,53 @@ function init() {
 }
 
 document.addEventListener('DOMContentLoaded', init);
+
+function openPrototypeModal() {
+  const modal = document.getElementById('prototypeModal');
+  if (modal) modal.classList.add('visible');
+  const input = document.getElementById('prototypeInput');
+  if (input) input.focus();
+}
+
+function closePrototypeModal() {
+  const modal = document.getElementById('prototypeModal');
+  if (modal) modal.classList.remove('visible');
+}
+
+async function submitPrototype() {
+  const input = document.getElementById('prototypeInput');
+  const statusEl = document.getElementById('prototypeStatus');
+  const btn = document.getElementById('prototypeSubmitBtn');
+  if (!input || !statusEl || !btn) return;
+
+  const concept = input.value.trim();
+  if (!concept) return;
+
+  btn.disabled = true;
+  btn.textContent = 'Generating...';
+  statusEl.textContent = 'Creating prototype...';
+  statusEl.className = 'prototype-status running';
+
+  try {
+    const result = await fetchJSON(`${API_BASE}/orchestrator/prototype`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ concept }),
+    });
+
+    statusEl.textContent = `Done in ${result.duration_seconds}s — click to play!`;
+    statusEl.className = 'prototype-status success';
+
+    btn.textContent = 'Generate';
+
+    closePrototypeModal();
+    openPreview(result.project_name);
+    refreshAll();
+  } catch (err) {
+    statusEl.textContent = 'Failed: ' + (err.message || 'Unknown error');
+    statusEl.className = 'prototype-status error';
+    btn.textContent = 'Generate';
+  }
+
+  btn.disabled = false;
+}

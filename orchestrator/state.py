@@ -36,6 +36,7 @@ class CompanyState(BaseModel):
     qa_results: dict | None = None
     errors: list[str] = []
     retry_count: int = 0
+    retry_feedback: dict | None = None
     project_ids: list[str] = []
 
     class Config:

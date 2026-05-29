@@ -37,3 +37,22 @@ async def fail_task(task_id: str, error: str) -> None:
 
 async def update_progress(task_id: str, progress: float) -> None:
     await update_task_status(task_id, status="running", progress=progress)
+
+
+async def enqueue_retry(
+    project_id: str,
+    task_type: str,
+    params: dict | None = None,
+    *,
+    retry_count: int = 0,
+    retry_strategy: str = "retry_with_feedback",
+    layer: int = 1,
+    last_error: str | None = None,
+) -> TaskRecord:
+    base_params = dict(params or {})
+    base_params["retry_count"] = retry_count
+    base_params["retry_strategy"] = retry_strategy
+    base_params["layer"] = layer
+    if last_error:
+        base_params["last_error"] = last_error
+    return await enqueue(project_id, task_type, base_params)

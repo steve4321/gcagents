@@ -537,6 +537,41 @@ async def cancel_project(project_id: str):
     return {"status": "cancelled"}
 
 
+# ── Layered Memory API ────────────────────────────────────────────────────────
+
+@app.get("/api/memory/{project_id}/recent")
+async def get_recent_memories(project_id: str, category: str = "", limit: int = 20):
+    from shared.memory import get_memory_store
+    store = get_memory_store()
+    return store.get_recent(project_id, category=category or None, limit=limit)
+
+
+@app.get("/api/memory/search")
+async def search_memories(q: str = "", category: str = "", limit: int = 10):
+    if not q:
+        raise HTTPException(400, "Query parameter 'q' is required")
+    from shared.memory import get_memory_store
+    store = get_memory_store()
+    return store.search_long_term(q, category=category or None, limit=limit)
+
+
+@app.get("/api/memory/lessons")
+async def get_all_lessons():
+    from shared.memory import get_memory_store
+    store = get_memory_store()
+    return store.get_all_lessons()
+
+
+@app.post("/api/orchestrator/prototype")
+async def run_prototype(request: dict):
+    concept = request.get("concept", "").strip()
+    if not concept:
+        raise HTTPException(400, "concept is required")
+    from orchestrator.prototype_mode import run_prototype
+    result = await run_prototype(concept)
+    return result
+
+
 # ── Game Preview Static Files ─────────────────────────────────────────────────
 
 games_output = config.games_output_dir

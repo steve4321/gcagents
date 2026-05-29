@@ -118,6 +118,8 @@ def cli() -> None:
         asyncio.run(run_scheduler_forever(interval_seconds=args.interval))
     elif args.command == "scan":
         asyncio.run(_run_scan_only())
+    elif args.command == "run-prototype":
+        asyncio.run(_run_prototype(args.concept))
     else:
         parser.print_help()
 
@@ -136,6 +138,17 @@ async def _run_scan_only() -> None:
         console.print(f"  • {opp.get('name', 'N/A')} ({opp.get('genre', 'N/A')}) score={score:.2f}")
 
 
+async def _run_prototype(concept: str) -> None:
+    from orchestrator.prototype_mode import run_prototype
+
+    console.print(f"\n[bold cyan]🚀 Quick Prototype: {concept}[/bold cyan]\n")
+    result = await run_prototype(concept)
+    console.print(f"[bold green]✓ Prototype built in {result['duration_seconds']}s[/bold green]")
+    console.print(f"  Name: [cyan]{result['project_name']}[/cyan]")
+    console.print(f"  Path: [dim]{result['dist_path']}[/dim]")
+    console.print(f"  Preview: [link]{result['preview_url']}[/link]\n")
+
+
 def _build_arg_parser():
     import argparse
 
@@ -152,6 +165,8 @@ def _build_arg_parser():
     sched_parser = sub.add_parser("run-scheduler", help="Run tick-based multi-project scheduler")
     sched_parser.add_argument("--interval", type=int, default=300,
                               help="Seconds between ticks (default: 300)")
+    proto_parser = sub.add_parser("run-prototype", help="Generate a quick playable prototype (~5 min)")
+    proto_parser.add_argument("concept", help='Game concept, e.g. "space shooter with powerups"')
     return parser
 
 

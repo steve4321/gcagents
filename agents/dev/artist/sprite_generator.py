@@ -4,6 +4,7 @@ from pathlib import Path
 
 from loguru import logger
 
+from .art_style import ArtStyleConfig
 from .comfyui_client import ComfyUIClient
 from .workflows import (
     BACKGROUND_WORKFLOW,
@@ -12,12 +13,21 @@ from .workflows import (
     build_workflow,
 )
 
-DEFAULT_NEGATIVE_PROMPT = "blurry, low quality, distorted, ugly, bad anatomy, watermark, text, signature, realistic, photo"
+DEFAULT_NEGATIVE_PROMPT = (
+    "blurry, low quality, distorted, ugly, bad anatomy, "
+    "watermark, text, signature, realistic, photo"
+)
 
 
 class SpriteGenerator:
-    def __init__(self, client: ComfyUIClient):
+    def __init__(self, client: ComfyUIClient, art_style: ArtStyleConfig | None = None):
         self._client = client
+        self._art_style = art_style
+
+    def _negative_prompt(self) -> str:
+        if self._art_style:
+            return self._art_style.negative_prompt
+        return DEFAULT_NEGATIVE_PROMPT
 
     async def generate_character_sprites(
         self,
@@ -29,9 +39,20 @@ class SpriteGenerator:
         results: dict[str, Path] = {}
 
         for character in characters:
-            positive = f"pixel art character sprite {character}, {style} style, game asset, transparent background, full body centered, 8-bit retro game character, high quality, clean outlines"
-            workflow = build_workflow(CHARACTER_SPRITE_WORKFLOW, positive, DEFAULT_NEGATIVE_PROMPT)
-            workflow["7"]["inputs"]["filename_prefix"] = f"char_{character.lower().replace(' ', '_')}"
+            base_prompt = (
+                f"pixel art character sprite {character}, {style} style, game asset, "
+                f"transparent background, full body centered, 8-bit retro game character, "
+                "high quality, clean outlines"
+            )
+            positive = (
+                self._art_style.enrich_prompt(base_prompt) if self._art_style else base_prompt
+            )
+            workflow = build_workflow(
+                CHARACTER_SPRITE_WORKFLOW, positive, self._negative_prompt()
+            )
+            workflow["7"]["inputs"]["filename_prefix"] = (
+                f"char_{character.lower().replace(' ', '_')}"
+            )
 
             prompt_id = await self._client.queue_prompt(workflow)
             images = await self._client.get_output_images(prompt_id, output_dir)
@@ -49,11 +70,19 @@ class SpriteGenerator:
     ) -> Path | None:
         logger.info(f"Generating background: {theme} ({dimensions[0]}x{dimensions[1]})")
 
-        positive = f"pixel art game background {theme}, game environment tileset, 2D side-scrolling level, retro game scenery, vibrant colors, looping tile"
-        workflow = build_workflow(BACKGROUND_WORKFLOW, positive, DEFAULT_NEGATIVE_PROMPT)
+        base_prompt = (
+            f"pixel art game background {theme}, game environment tileset, "
+            "2D side-scrolling level, retro game scenery, vibrant colors, looping tile"
+        )
+        positive = (
+            self._art_style.enrich_prompt(base_prompt) if self._art_style else base_prompt
+        )
+        workflow = build_workflow(BACKGROUND_WORKFLOW, positive, self._negative_prompt())
         workflow["4"]["inputs"]["width"] = dimensions[0]
         workflow["4"]["inputs"]["height"] = dimensions[1]
-        workflow["7"]["inputs"]["filename_prefix"] = f"bg_{theme.lower().replace(' ', '_')}"
+        workflow["7"]["inputs"]["filename_prefix"] = (
+            f"bg_{theme.lower().replace(' ', '_')}"
+        )
 
         prompt_id = await self._client.queue_prompt(workflow)
         images = await self._client.get_output_images(prompt_id, output_dir)
@@ -74,9 +103,19 @@ class SpriteGenerator:
         results: dict[str, Path] = {}
 
         for element in elements:
-            positive = f"pixel art ui icon {element}, {style} style, game user interface element, high contrast, retro game ui, 32x32 icon, flat design"
-            workflow = build_workflow(UI_ELEMENT_WORKFLOW, positive, DEFAULT_NEGATIVE_PROMPT)
-            workflow["7"]["inputs"]["filename_prefix"] = f"ui_{element.lower().replace(' ', '_')}"
+            base_prompt = (
+                f"pixel art ui icon {element}, {style} style, "
+                "game user interface element, high contrast, retro game ui, 32x32 icon, flat design"
+            )
+            positive = (
+                self._art_style.enrich_prompt(base_prompt) if self._art_style else base_prompt
+            )
+            workflow = build_workflow(
+                UI_ELEMENT_WORKFLOW, positive, self._negative_prompt()
+            )
+            workflow["7"]["inputs"]["filename_prefix"] = (
+                f"ui_{element.lower().replace(' ', '_')}"
+            )
 
             prompt_id = await self._client.queue_prompt(workflow)
             images = await self._client.get_output_images(prompt_id, output_dir)

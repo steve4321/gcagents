@@ -17,4 +17,9 @@ async def design_game(state: CompanyState) -> dict:
     config = load_config()
     gdd = await generate_gdd(proposal, config)
 
+    from .mechanic_planner import plan_mechanics
+    mechanics = await plan_mechanics(gdd)
+    if mechanics:
+        gdd["mechanics"] = mechanics
+
     return {"phase": PipelinePhase.DEVELOPING, "gdd": gdd}

@@ -7,6 +7,8 @@ from loguru import logger
 
 from orchestrator.state import CompanyState, PipelinePhase
 
+from .auto_playtest import run_auto_playtest
+
 
 async def run_qa(state: CompanyState) -> dict:
     game_code_path = state.game_code_path
@@ -31,13 +33,31 @@ async def run_qa(state: CompanyState) -> dict:
 
     structure_ok, structure_errors = _check_project_structure(project_dir)
 
+    playtest_results = None
+    dist_dir = project_dir / "dist"
+    if build_ok and dist_dir.exists():
+        logger.info("Running automated playtest...")
+        playtest_results = await run_auto_playtest(dist_dir)
+        logger.info(
+            f"Playtest: passed={playtest_results['passed']}, "
+            f"score={playtest_results['score']}, "
+            f"duration={playtest_results.get('duration_ms', 0)}ms"
+        )
+
+    checks = {
+        "project_structure": structure_ok,
+        "build_artifacts": build_ok,
+    }
+    if playtest_results is not None:
+        checks["playtest"] = playtest_results
+
+    playtest_passed = playtest_results["passed"] if playtest_results else True
+    all_passed = structure_ok and build_ok and playtest_passed
+
     qa_results = {
-        "passed": structure_ok,
+        "passed": all_passed,
         "errors": structure_errors,
-        "checks": {
-            "project_structure": structure_ok,
-            "build_artifacts": build_ok,
-        },
+        "checks": checks,
     }
 
     logger.info(f"QA results: passed={qa_results['passed']}, errors={len(structure_errors)}")

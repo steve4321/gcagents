@@ -21,6 +21,9 @@
         <button id="foreverToggleBtn" class="forever-toggle-btn" title="24/7 Mode">
           ⟳ 24/7 OFF
         </button>
+        <button id="quickPrototypeBtn" class="quick-prototype-btn" title="Quick Prototype">
+          ⚡ Prototype
+        </button>
         <button id="refreshBtn" class="refresh-btn" title="Refresh data">
           <svg class="refresh-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M23 4v6h-6M1 20v-6h6"/>
@@ -224,6 +227,19 @@
     <div class="preview-modal-content">
       <button id="previewCloseBtn" class="preview-close-btn">&times;</button>
       <iframe id="previewIframe" src=""></iframe>
+    </div>
+  </div>
+
+  <div id="prototypeModal" class="prototype-modal">
+    <div class="prototype-modal-content">
+      <button class="prototype-modal-close" onclick="closePrototypeModal()">&times;</button>
+      <h2>Quick Prototype</h2>
+      <p class="prototype-modal-desc">Describe a game concept. A playable prototype will be generated in ~30 seconds.</p>
+      <input type="text" id="prototypeInput" class="prototype-input" placeholder='e.g. "space shooter with powerups"'>
+      <div class="prototype-modal-actions">
+        <button class="prototype-submit-btn" id="prototypeSubmitBtn" onclick="submitPrototype()">Generate</button>
+      </div>
+      <div id="prototypeStatus" class="prototype-status"></div>
     </div>
   </div>
 </body>

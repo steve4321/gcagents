@@ -16,6 +16,11 @@ async def generate_art(state: CompanyState) -> dict:
     try:
         from agents.dev.artist.art_agent import generate_art as _generate_art_impl
         result = await _generate_art_impl(state)
+
+        updated_gdd = state.gdd
+        if updated_gdd and "art_style" in updated_gdd:
+            result["gdd"] = updated_gdd
+
         return result
     except ImportError:
         logger.warning("ComfyUI art agent not available, using Phaser shape fallback")

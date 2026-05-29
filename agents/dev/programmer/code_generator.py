@@ -56,6 +56,84 @@ async def generate_game_code(gdd: dict, project_dir: Path, config: AppConfig, bu
         logger.error("No AI API key configured")
         return project_dir
 
+    mechanics = gdd.get("mechanics")
+    if mechanics and not build_error:
+        code_path = await _generate_by_mechanics(gdd, project_dir, config, model, max_tokens)
+    else:
+        code_path = await _generate_all_at_once(gdd, project_dir, config, model, max_tokens, build_error)
+
+    _install_and_build(code_path)
+    return code_path
+
+
+async def _generate_by_mechanics(
+    gdd: dict, project_dir: Path, config: AppConfig, model: str, max_tokens: int,
+) -> Path:
+    mechanics = gdd["mechanics"]
+    game_title = gdd.get("title", "game")
+    logger.info(f"Generating code mechanic-by-mechanic: {len(mechanics)} mechanics")
+
+    accumulated_files: dict[str, str] = {}
+
+    for i, mechanic in enumerate(mechanics):
+        dep_names = mechanic.get("dependencies", [])
+        relevant_existing = {k: v for k, v in accumulated_files.items()
+                             if any(d in k.lower().replace("/", "_").replace(".", "_") for d in dep_names)}
+        existing_summary = "\n".join(
+            f"- {path} ({len(content)} chars)" for path, content in relevant_existing.items()
+        ) if relevant_existing else "None yet."
+
+        mechanic_prompt = f"""You are building a Phaser 4 + TypeScript game incrementally, mechanic by mechanic.
+
+Game: {game_title}
+Genre: {gdd.get('genre', 'unknown')}
+Summary: {gdd.get('summary', '')}
+
+Current mechanic ({i + 1}/{len(mechanics)}): {json.dumps(mechanic, indent=2)}
+
+Already implemented files (for context):
+{existing_summary}
+
+Implement this mechanic now. Return a JSON object mapping file paths to file contents.
+- For the FIRST mechanic (order 0), include src/main.ts, src/game/config.ts, and any scene/entity files needed.
+- For later mechanics, ADD new files or RETURN UPDATED versions of existing files.
+- Use `import * as Phaser from 'phaser';`
+- Use Phaser shapes/text for visuals (no external assets).
+- Include window.__TEST__ = {{ ready: false, state: () => ({{...}}) }} in GameScene.
+- Include analytics: navigator.sendBeacon on game_start and game_over events.
+
+Return ONLY a JSON object of file paths to contents."""
+
+        response = await llm.chat_completion(
+            model=model,
+            messages=[
+                {"role": "system", "content": PROGRAMMER_SYSTEM_PROMPT},
+                {"role": "user", "content": mechanic_prompt},
+            ],
+            temperature=0.4,
+            max_tokens=max_tokens,
+            agent_name="programmer",
+            project_name=game_title,
+        )
+
+        new_files = _parse_code_files(response[0])
+        accumulated_files.update(new_files)
+        logger.info(f"Mechanic '{mechanic.get('name', '?')}' → {len(new_files)} files (total: {len(accumulated_files)})")
+
+    src_dir = project_dir / "src"
+    src_dir.mkdir(parents=True, exist_ok=True)
+    for file_path, content in accumulated_files.items():
+        full_path = project_dir / file_path
+        full_path.parent.mkdir(parents=True, exist_ok=True)
+        full_path.write_text(content, encoding="utf-8")
+
+    logger.info(f"Generated {len(accumulated_files)} total files from {len(mechanics)} mechanics")
+    return project_dir
+
+
+async def _generate_all_at_once(
+    gdd: dict, project_dir: Path, config: AppConfig, model: str, max_tokens: int, build_error: str,
+) -> Path:
     game_title = gdd.get("title", "game")
     user_prompt = f"""Generate a complete Phaser 4 + TypeScript game based on this GDD:
 
@@ -99,9 +177,6 @@ Include basic gameplay analytics: call `navigator.sendBeacon('/api/analytics/eve
         logger.debug(f"Generated: {file_path}")
 
     logger.info(f"Generated {len(files)} source files")
-
-    _install_and_build(project_dir)
-
     return project_dir
 
 
