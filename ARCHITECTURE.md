@@ -401,6 +401,7 @@ generate_game_code(gdd, project_dir, config, build_error="")
 | `finance_budgets` | 预算配置 | category, budget_type, budget_limit_usd, spent_usd |
 | `chat_messages` | 高管聊天记录 | role, content, agent_name, metadata_json |
 | `event_logs` | 公司事件日志 | event_type, severity, title, source_agent |
+| `orchestrator_state` | 经典管道状态追踪 | phase, current_project_id, errors, updated_at |
 | `memories` | 分层记忆系统 | id, category, content, summary, project_id, importance, created_at |
 
 ### 写入时机
@@ -580,6 +581,73 @@ gcagents/
 
 ---
 
+## Dashboard 安全模型
+
+Dashboard 提供双模式安全策略：
+
+| 模式 | 触发条件 | 监听地址 | 控制面鉴权 |
+|------|---------|---------|-----------|
+| **本地开发（默认）** | 未设置 `DASHBOARD_API_KEY` | `127.0.0.1` | 无（仅本机访问） |
+| **生产/远程** | 设置 `DASHBOARD_API_KEY` | `0.0.0.0` | 控制面端点需 `X-API-Key` header |
+
+**控制面端点**（需鉴权，10 个 + WebSocket）：
+- `POST /api/pipeline/{run, run-forever, stop}`
+- `POST /api/projects/{id}/{pause, resume, cancel}`
+- `POST /api/decisions/{id}/respond`
+- `POST /api/chat/send`
+- `POST /api/finance/budget`
+- `POST /api/orchestrator/prototype`
+- WebSocket `/ws/events`（支持 `?api_key=` 查询参数回退，用于浏览器 WS 客户端）
+
+**公开端点**：所有 `GET` 请求 + `POST /api/analytics/event`（浏览器游戏埋点，无需鉴权）
+
+CORS 默认仅允许 `http://localhost:8080`；可通过 `DASHBOARD_CORS_ORIGINS` 环境变量（逗号分隔）扩展。
+
+鉴权失败返回 `401 {"detail": "Invalid or missing X-API-Key"}`。
+
+---
+
+## 测试与质量
+
+### 测试套件
+
+使用 `pytest` + `pytest-asyncio`，测试位于 `tests/` 目录：
+
+| 文件 | 覆盖模块 | 关键测试 |
+|------|---------|---------|
+| `test_persistence.py` | `orchestrator/persistence.py` | `test_ensure_tables_creates_orchestrator_state`（**回归测试**） |
+| `test_scheduler.py` | `orchestrator/scheduler.py` | `test_fallback_task_type_qa_is_identity`（**回归测试**，追踪未实现 fallback） |
+| `test_decision_gate.py` | `orchestrator/decision_gate.py` | 创建/解决决策流程 |
+| `test_llm_client.py` | `shared/llm_client.py` | 成本估算、429 重试 |
+
+DB 测试使用 `tmp_path` 临时 SQLite，monkeypatch `_get_engine()`，不污染 `data/gcagents.db`。所有异步测试使用 `@pytest.mark.asyncio`。
+
+### 持续集成
+
+`.github/workflows/ci.yml` 在 push/PR 到 `master`/`main` 时运行：
+
+- `ruff check .`（lint）
+- `ruff format --check .`（格式检查）
+- `mypy orchestrator shared agents dashboard`（类型检查，aspirational strict，使用 `continue-on-error`）
+- `pytest tests/ -v`（测试）
+
+Python 3.11/3.12 matrix，job timeout 10 分钟，pip 缓存。
+
+### 错误恢复策略（Layer 2 待实现项）
+
+`_fallback_task_type()` 当前仅 `develop → develop_simple` 有真实策略变更；以下 task 类型的 Layer 2 fallback 暂为 identity 映射（待补全）：
+
+- `qa` → `qa`（计划：实现 `qa_minimal`，跳过严格检查）
+- `build` → `build`（计划：实现 `build_skip_optimize`，禁用 Vite minify）
+- `design_game` → `design_game`（计划：实现 `design_game_minimal`）
+- `art_gen` → `art_gen`（计划：实现 `art_gen_emoji` 回退到 emoji 占位符）
+- `generate_music` → `generate_music`（计划：实现纯 Web Audio 流程化）
+- `market_scan` → `market_scan`（计划：实现缓存扫描）
+
+每个待实现项已在 `scheduler.py` 中以 `# TODO:` 标记。
+
+---
+
 ## 开发日志与演进
 
 | 日期 | 变更 |
@@ -591,6 +659,7 @@ gcagents/
 | 迭代 | 24/7 运行模式、Dashboard 启停按钮 |
 | **当前** | **多项目编排重构**：CEO 调度器、决策门控（5 类）、任务队列、12 市场数据源、项目看板、任务监控、决策卡片、市场趋势面板 |
 | **v2** | **8 项增强**：自动化 Playtest（Playwright 8 项检查）、机制规划层（GDD→有序机制→逐机制代码生成）、3 层嵌套错误恢复、美术风格一致性（5 种预设）、原型快速模式（5 分钟 demo）、分层记忆系统（短期+长期）、音乐生成（Web Audio+Suno）、自动本地化（15 种语言） |
+| **v3** | **代码质量与安全强化**：修复 `orchestrator_state` 表缺失 bug（管线状态追踪静默失败）；添加 Dashboard `X-API-Key` 鉴权（localhost-only 回退模式 + CORS 收紧）；新增 pytest 测试套件（14 个测试 + 3 个回归测试）；新增 GitHub Actions CI（ruff + mypy + pytest）；新增 README.md 用户入口；ARCHITECTURE.md 更新 |
 
 ---
 
