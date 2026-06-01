@@ -349,14 +349,20 @@ async def _escalate_layer3(task, error_msg: str) -> dict:
 
 
 def _fallback_task_type(task_type: str) -> str:
+    """Map a task type to a Layer 2 strategy-change alternative.
+
+    Returns the input unchanged when no real fallback is implemented for that
+    task type. Callers should detect identity fallbacks and log a warning so
+    operators know Layer 2 provided no actual strategy change.
+    """
     mapping = {
         "develop": "develop_simple",
-        "qa": "qa",
-        "build": "build",
-        "design_game": "design_game",
-        "art_gen": "art_gen",
-        "generate_music": "generate_music",
-        "market_scan": "market_scan",
+        "qa": "qa",                          # TODO: implement qa_minimal (skip strict checks)
+        "build": "build",                    # TODO: implement build_skip_optimize (no Vite minify)
+        "design_game": "design_game",        # TODO: implement design_game_minimal (shorter GDD)
+        "art_gen": "art_gen",                # TODO: implement art_gen_emoji (fall back to emoji)
+        "generate_music": "generate_music",  # TODO: implement generate_music_procedural (Web Audio only)
+        "market_scan": "market_scan",        # TODO: implement market_scan_cache (use cached signals)
     }
     return mapping.get(task_type, task_type)
 
