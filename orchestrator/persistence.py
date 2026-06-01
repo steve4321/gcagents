@@ -168,29 +168,33 @@ async def ensure_tables():
         """))
         await db.execute(text("""
             CREATE TABLE IF NOT EXISTS tasks (
-                id TEXT PRIMARY KEY,
-                project_id TEXT NOT NULL,
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_id TEXT,
                 task_type TEXT NOT NULL,
+                params TEXT,
                 status TEXT NOT NULL DEFAULT 'pending',
                 progress REAL DEFAULT 0.0,
-                params TEXT DEFAULT '{}',
                 result TEXT,
                 error TEXT,
+                retry_count INTEGER DEFAULT 0,
+                retry_strategy TEXT DEFAULT '',
+                layer INTEGER DEFAULT 0,
+                last_error TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 started_at TEXT,
-                completed_at TEXT,
-                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+                completed_at TEXT
             )
         """))
-        # Add columns to game_projects if missing (idempotent migration)
-        for col_sql in [
-            "ALTER TABLE game_projects ADD COLUMN current_version TEXT DEFAULT '0.0.0'",
-            "ALTER TABLE game_projects ADD COLUMN feedback_count INTEGER DEFAULT 0",
-            "ALTER TABLE projects ADD COLUMN music_status TEXT DEFAULT 'pending'",
-        ]:
-            try:
-                await db.execute(text(col_sql))
-            except Exception:
-                pass  # column already exists
+        # Referenced by save_pipeline_state() and dashboard /api/status endpoints.
+        await db.execute(text("""
+            CREATE TABLE IF NOT EXISTS orchestrator_state (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                phase TEXT,
+                current_project_id INTEGER,
+                errors TEXT,
+                updated_at TEXT
+            )
+        """))
         await db.commit()
 
 
