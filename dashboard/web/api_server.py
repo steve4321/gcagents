@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from loguru import logger
@@ -17,6 +18,44 @@ from shared.config import load_config, ROOT_DIR
 
 config = load_config()
 engine = create_async_engine(config.db_url, echo=False)
+
+# ── API-Key Authentication ────────────────────────────────────────────────────
+
+_DASHBOARD_API_KEY: str = os.environ.get("DASHBOARD_API_KEY", "")
+
+
+async def get_api_key(request: Request) -> None:
+    """Validate ``X-API-Key`` header on control-plane endpoints.
+
+    Security model
+    ~~~~~~~~~~~~~~
+    * If ``DASHBOARD_API_KEY`` is set in the environment, every mutating /
+      control-plane endpoint (listed below) must carry an ``X-API-Key`` header
+      whose value matches the configured key.
+    * If the variable is **not** set the dependency is a no-op; the server
+      should bind to ``127.0.0.1`` only (enforced in the ``__main__`` block).
+
+    Protected endpoints (POST + WebSocket):
+        ``/api/pipeline/{run,run-forever,stop}``,
+        ``/api/projects/{id}/{pause,resume,cancel}``,
+        ``/api/decisions/{id}/respond``,
+        ``/api/chat/send``,
+        ``/api/finance/budget``,
+        ``/api/orchestrator/prototype``,
+        ``/ws/events``.
+
+    Always-open (no key required):
+        All ``GET`` endpoints and ``POST /api/analytics/event``
+        (browser telemetry).
+
+    Returns ``401 Unauthorized`` when the key is required but missing or
+    incorrect.
+    """
+    if not _DASHBOARD_API_KEY:
+        return
+    api_key = request.headers.get("X-API-Key", "")
+    if api_key != _DASHBOARD_API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid or missing X-API-Key")
 
 # Track running pipeline process
 _pipeline_process: subprocess.Popen | None = None
@@ -43,10 +82,16 @@ async def lifespan(app: FastAPI):
     await engine.dispose()
 
 
+_cors_origins = (
+    [o.strip() for o in _cors_raw.split(",") if o.strip()]
+    if (_cors_raw := os.environ.get("DASHBOARD_CORS_ORIGINS", ""))
+    else ["http://localhost:8080"]
+)
+
 app = FastAPI(title="GCAgents Dashboard", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -237,7 +282,7 @@ async def get_gdd(project_id: int):
 
 # ── Pipeline Control ──────────────────────────────────────────────────────────
 
-@app.post("/api/pipeline/run")
+@app.post("/api/pipeline/run", dependencies=[Depends(get_api_key)])
 async def trigger_pipeline():
     global _pipeline_process
     if _pipeline_process is not None and _pipeline_process.poll() is None:
@@ -253,7 +298,7 @@ async def trigger_pipeline():
     return {"status": "started", "message": "Pipeline started"}
 
 
-@app.post("/api/pipeline/run-forever")
+@app.post("/api/pipeline/run-forever", dependencies=[Depends(get_api_key)])
 async def trigger_forever(interval: int = 3600):
     global _forever_process
     if _forever_process is not None and _forever_process.poll() is None:
@@ -270,7 +315,7 @@ async def trigger_forever(interval: int = 3600):
     return {"status": "started", "mode": "forever", "message": "24/7 mode started"}
 
 
-@app.post("/api/pipeline/stop")
+@app.post("/api/pipeline/stop", dependencies=[Depends(get_api_key)])
 async def stop_pipeline():
     global _pipeline_process, _forever_process
     stopped = []
@@ -386,6 +431,11 @@ async def list_live_projects():
 
 @app.websocket("/ws/events")
 async def events_websocket(websocket: WebSocket):
+    if _DASHBOARD_API_KEY:
+        ws_key = websocket.headers.get("X-API-Key", "") or websocket.query_params.get("api_key", "")
+        if ws_key != _DASHBOARD_API_KEY:
+            await websocket.close(code=4001, reason="Invalid or missing X-API-Key")
+            return
     await websocket.accept()
     _event_clients.add(websocket)
     try:
@@ -403,7 +453,7 @@ async def events_websocket(websocket: WebSocket):
 
 # ── Chat API ───────────────────────────────────────────────────────────────────
 
-@app.post("/api/chat/send")
+@app.post("/api/chat/send", dependencies=[Depends(get_api_key)])
 async def send_chat_message(message: dict):
     content = message.get("content", "").strip()
     target_agent = message.get("target_agent", "ceo").strip().lower()
@@ -450,7 +500,7 @@ async def get_events(limit: int = 200, event_type: str = ""):
 
 # ── Finance API ────────────────────────────────────────────────────────────────
 
-@app.post("/api/finance/budget")
+@app.post("/api/finance/budget", dependencies=[Depends(get_api_key)])
 async def set_budget(budget: dict):
     from orchestrator.persistence import set_budget as db_set_budget, log_event
 
@@ -478,7 +528,7 @@ async def list_decisions():
     return [d.model_dump() for d in decisions]
 
 
-@app.post("/api/decisions/{decision_id}/respond")
+@app.post("/api/decisions/{decision_id}/respond", dependencies=[Depends(get_api_key)])
 async def respond_decision(decision_id: str, response: str = ""):
     from orchestrator.decision_gate import resolve
     result = await resolve(decision_id, response)
@@ -513,14 +563,14 @@ async def list_tasks(project_id: str = ""):
     return [t.model_dump() for t in tasks]
 
 
-@app.post("/api/projects/{project_id}/pause")
+@app.post("/api/projects/{project_id}/pause", dependencies=[Depends(get_api_key)])
 async def pause_project(project_id: str):
     from orchestrator.persistence import update_project_phase
     await update_project_phase(project_id, "paused")
     return {"status": "paused"}
 
 
-@app.post("/api/projects/{project_id}/resume")
+@app.post("/api/projects/{project_id}/resume", dependencies=[Depends(get_api_key)])
 async def resume_project(project_id: str):
     from orchestrator.persistence import get_project, update_project_phase
     project = await get_project(project_id)
@@ -530,7 +580,7 @@ async def resume_project(project_id: str):
     return {"status": "resumed"}
 
 
-@app.post("/api/projects/{project_id}/cancel")
+@app.post("/api/projects/{project_id}/cancel", dependencies=[Depends(get_api_key)])
 async def cancel_project(project_id: str):
     from orchestrator.persistence import update_project_phase
     await update_project_phase(project_id, "cancelled")
@@ -562,7 +612,7 @@ async def get_all_lessons():
     return store.get_all_lessons()
 
 
-@app.post("/api/orchestrator/prototype")
+@app.post("/api/orchestrator/prototype", dependencies=[Depends(get_api_key)])
 async def run_prototype(request: dict):
     concept = request.get("concept", "").strip()
     if not concept:
@@ -586,4 +636,10 @@ app.mount("/", StaticFiles(directory=str(ROOT_DIR / "dashboard" / "web"), html=T
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("dashboard.web.api_server:app", host="0.0.0.0", port=config.dashboard_port, reload=True)
+    if _DASHBOARD_API_KEY:
+        _host = "0.0.0.0"
+        logger.info("DASHBOARD_API_KEY configured — requiring X-API-Key on control-plane endpoints")
+    else:
+        _host = "127.0.0.1"
+        logger.warning("DASHBOARD_API_KEY not set — running in permissive localhost-only mode")
+    uvicorn.run("dashboard.web.api_server:app", host=_host, port=config.dashboard_port, reload=True)
