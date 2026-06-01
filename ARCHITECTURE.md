@@ -6,9 +6,11 @@ GCAgents 是一个多项目并行运作的 AI 游戏公司系统。它像一家�
 
 **核心理念**：
 - 用 AI Agent 模拟游戏公司组织架构，CEO 作为调度大脑管理多个并行项目
+- **CEO-only 交互模式**：用户只与 CEO 对话，CFO/COO 作为内部节点自动运行，不提供独立交互入口
 - **重要决策必须人类批准**：新项目启动、发布上线、项目取消、预算超限、方向调整
 - 12 个市场数据源（itch.io/Reddit/SteamSpy/TikTok/YouTube 等）提供跨源关联分析
 - 每个项目有独立的生命周期和进度，互不阻塞
+- **文档查看器**：所有 Agent 工作文档（proposal、GDD、market scan、art report、music report、QA report、build report）可通过 Dashboard 文档弹窗查看
 
 ---
 
@@ -38,8 +40,9 @@ GCAgents 是一个多项目并行运作的 AI 游戏公司系统。它像一家�
 │  │  项目看板     │     │  ┌──────────┐ ┌──────────┐           │     │
 │  │  任务监控     │     │  │glm-4-flash│ │deepseek- │           │     │
 │  │  决策卡片     │     │  │(分析/设计)│ │coder     │           │     │
-│  │  市场趋势     │     │  └──────────┘ │(代码生成)│           │     │
-│  │  高管对话     │     │               └──────────┘           │     │
+│  │  文档查看器   │     │  └──────────┘ │(代码生成)│           │     │
+│  │  市场趋势     │     │               └──────────┘           │     │
+│  │  CEO 汇报    │     │                                        │     │
 │  └─────────────┘     └────────────────────────────────────────┘     │
 │                                                                      │
 │  ┌─────────────┐     ┌────────────────────────────────────────┐     │
@@ -58,7 +61,7 @@ GCAgents 是一个多项目并行运作的 AI 游戏公司系统。它像一家�
 | AI 代码 | **deepseek-coder** | 生成 Phaser 4 + TypeScript 游戏源码 |
 | 美术生成 | **ComfyUI + SD 1.5** (本地 GPU) | AI 生成游戏美术资产（背景/角色/UI 图标） |
 | 游戏运行 | **Phaser 4 + TypeScript + Vite** | 生成 Web 小游戏（加载并显示 ComfyUI 美术资产） |
-| 监控面板 | **FastAPI + 原生 HTML/CSS/JS** | 项目看板、任务监控、决策卡片、高管对话、市场趋势 |
+| 监控面板 | **FastAPI + 原生 HTML/CSS/JS** | 项目看板、任务监控、决策卡片、CEO 汇报、文档查看器、市场趋势 |
 | 市场情报 | **12 个数据源** (itch/Reddit/SteamSpy/TikTok/YouTube/...) | 跨源关联分析、趋势追踪、竞品密度 |
 | 持久化 | **SQLite + SQLAlchemy (async)** | 项目、决策、任务、财务、聊天、事件 |
 | 部署 | **Butler CLI** | 推送到 itch.io |
@@ -96,6 +99,7 @@ CEO 作为调度大脑，每个 tick 处理所有项目的一步操作：
 ```
 每个 tick (默认 300s):
 ┌──────────────────────────────────────────────────────┐
+│ 0. 检查调度器暂停状态（文件标志 .scheduler_paused）     │
 │ 1. 处理人类指令 (从 chat 读取)                        │
 │ 2. 检查决策点 — 跳过等待人类的项目                     │
 │ 3. 定期市场扫描 (每 10 ticks)                         │
@@ -107,7 +111,7 @@ CEO 作为调度大脑，每个 tick 处理所有项目的一步操作：
 │    → live (consolidate 记忆)                          │
 │ 6. 从任务队列取一个任务执行（含 3 层错误恢复）          │
 │ 7. 根据执行结果更新项目状态 + 存储记忆                  │
-│ 8. 生成主动汇报到 chat                                │
+│ 8. 生成主动汇报到 chat（CEO 汇报）                     │
 └──────────────────────────────────────────────────────┘
 ```
 
@@ -115,11 +119,16 @@ CEO 作为调度大脑，每个 tick 处理所有项目的一步操作：
 
 | 决策类型 | 触发条件 | 示例 |
 |---------|---------|------|
-| 新项目启动 | 市场扫描发现机会 | "发现3个机会，推荐A，启动？" |
+| 新项目启动 | CEO 创建项目于 BACKLOG，`awaiting_decision="new_project"` | "发现3个机会，推荐A，启动？" |
 | 项目发布 | QA 通过 | "项目A测试通过，发布到itch.io？" |
 | 项目取消 | QA 连续失败 3 次 | "项目C连续失败，取消？" |
 | 预算超限 | 开发前预算检查 | "项目B预算达80%，继续？" |
 | 方向调整 | 市场变化 | "建议调整B方向？" |
+
+**决策交互方式**：
+- **聊天决策卡片**：Dashboard 聊天面板中的决策卡片，包含 approve/reject/discuss 按钮
+- **项目看板内联按钮**：项目卡片上直接显示 approve/reject 和文档查看按钮，无需切换到聊天
+- **批准流程**：BACKLOG 项目经人类批准后自动进入 SCANNING 阶段
 
 ### 模式 2: 经典线性管道（兼容）
 
@@ -160,6 +169,15 @@ class ProjectPhase(str, Enum):
 | **Layer 1** | `retry_with_feedback` | 同任务重试最多 2 次，错误信息反馈给 Agent |
 | **Layer 2** | `strategy_change` | 切换策略（如 develop → develop_simple），最多 1 次 |
 | **Layer 3** | `direction_change` | 创建决策点，暂停项目，等待人类决策 |
+
+### 调度器暂停/恢复
+
+支持通过文件标志暂停和恢复整个调度器：
+
+- **暂停机制**：通过 API 创建 `.scheduler_paused` 文件标志，调度器在每个 tick 开始时检查该文件
+- **恢复机制**：删除暂停文件，调度器恢复正常 tick 循环
+- **Dashboard 控制**：提供 "⏸ 下班" / "▶ 上班" 按钮切换暂停状态
+- **API 端点**：`POST /api/scheduler/pause`、`POST /api/scheduler/resume`、`GET /api/scheduler/paused`
 
 ### 执行入口 (`orchestrator/main.py`)
 
@@ -224,9 +242,9 @@ python3 -m orchestrator.main scan             # 仅执行市场扫描
   - 问题/反馈 → 记录为系统事件
   - 使用 glm-4-flash 进行意图分类（direction/question/feedback/stop）
 
-### 2a. CFO (`orchestrator/nodes/cfo.py`)
+### 2a. CFO (`orchestrator/nodes/cfo.py`) — 内部节点，无独立交互入口
 
-模拟 CFO 财务管控角色：
+模拟 CFO 财务管控角色（作为内部节点自动运行，用户通过 CEO 获取财务信息）：
 
 - **预算预检** (`cfo_budget_check`)：在开发步骤前检查月度和项目预算
   - 开发步骤估算成本 ~$0.10（~50K tokens deepseek-coder）
@@ -236,9 +254,9 @@ python3 -m orchestrator.main scan             # 仅执行市场扫描
   - 汇总 token 用量、按模型/Agent 分组成本
   - 使用 glm-4-flash 生成 AI 财务洞察
 
-### 2b. COO (`orchestrator/nodes/coo.py`)
+### 2b. COO (`orchestrator/nodes/coo.py`) — 内部节点，无独立交互入口
 
-模拟 COO 运营监控角色：
+模拟 COO 运营监控角色（作为内部节点自动运行，用户通过 CEO 获取运营信息）：
 
 - **管道健康检查** (`coo_health_check`)：管道入口处检查状态
   - ≥3 个累积错误 → 暂停管道
@@ -445,6 +463,10 @@ Dashboard 运行在独立进程（FastAPI + 静态 HTML/CSS/JS），与管道解
 | `/api/decisions/{id}/respond` | POST | 回复决策（approve/reject/discuss） |
 | **任务监控** | | |
 | `/api/orchestrator/tasks` | GET | 任务列表（支持按项目过滤） |
+| **调度器控制** | | |
+| `/api/scheduler/pause` | POST | 暂停调度器（创建文件标志） |
+| `/api/scheduler/resume` | POST | 恢复调度器（删除文件标志） |
+| `/api/scheduler/paused` | GET | 查询调度器暂停状态 |
 | **原型模式** | | |
 | `/api/orchestrator/prototype` | POST | 快速生成原型（5 分钟） |
 | **记忆系统** | | |
@@ -467,6 +489,7 @@ Dashboard 运行在独立进程（FastAPI + 静态 HTML/CSS/JS），与管道解
 | `/api/gdd/{id}` | GET | 项目 GDD 详情 |
 | `/api/events` | GET | 事件日志查询 |
 | `/api/feedback/{id}` | GET | 项目反馈列表 |
+| `/api/projects/{id}/documents` | GET | 项目文档列表（proposal、GDD、market scan、art/music/QA/build reports） |
 | `/api/projects/live` | GET | 已上线项目列表 |
 | `/api/analytics/event` | POST | 游戏遥测事件 |
 | **对话与财务** | | |
@@ -477,15 +500,18 @@ Dashboard 运行在独立进程（FastAPI + 静态 HTML/CSS/JS），与管道解
 
 ### 前端功能
 
-- **Project Board** — 看板式项目面板（Backlog → Design → Dev → Test → Build → Live），每项目独立进度
+- **Project Board** — 看板式项目面板（Backlog → Design → Dev → Test → Build → Live），每项目独立进度，内联 approve/reject 和文档查看按钮
 - **Task Monitor** — 任务监控列表，实时显示状态/进度/耗时
-- **Executive Chat** — 与 CEO/CFO/COO 高管对话，含决策卡片（批准/拒绝/讨论按钮）
+- **Executive Chat** — 仅与 CEO 对话（CFO/COO 为内部节点），含决策卡片（批准/拒绝/讨论按钮）
+- **Document Viewer** — 文档查看弹窗，查看所有 Agent 工作文档（proposal、GDD、market scan、art report、music report、QA report、build report）
 - **Market Trends** — 市场趋势面板，来源健康度、趋势方向、跨源确认
 - **Company Event Log** — 终端风格实时滚动日志
 - **Agent Monitor** — 各 Agent 执行状态
 - **Active Games** — 构建的游戏列表，支持 iframe 预览
 - **Company Memory** — 长期记忆
+- **Scheduler Control** — 调度器暂停/恢复按钮（"⏸ 下班" / "▶ 上班"）
 - **24/7 Mode Toggle** — 一键启停 24/7 运行模式
+- **CEO Reports** — CEO 主动汇报取代原 Scheduler Reports，展示项目进展和决策建议
 - **⚡ Prototype Button** — 快速原型模式（输入概念 → 5 分钟生成可玩 demo）
 - **Run Pipeline Button** — 一键启动管道
 
@@ -561,8 +587,8 @@ gcagents/
 │       ├── deployer/       #     itch.io 发布
 │       └── analytics/      #     数据分析 + 反馈收集
 ├── dashboard/web/          # 监控面板
-│   ├── api_server.py       #   FastAPI 后端（38 个 API 端点）
-│   ├── index.html          #   前端（项目看板/任务监控/决策卡片/市场趋势）
+│   ├── api_server.py       #   FastAPI 后端（41 个 API 端点）
+│   ├── index.html          #   前端（项目看板/任务监控/决策卡片/文档查看器/市场趋势）
 │   ├── app.js              #   前端逻辑
 │   └── style.css           #   样式
 ├── shared/                 # 共享模块
@@ -590,13 +616,14 @@ Dashboard 提供双模式安全策略：
 | **本地开发（默认）** | 未设置 `DASHBOARD_API_KEY` | `127.0.0.1` | 无（仅本机访问） |
 | **生产/远程** | 设置 `DASHBOARD_API_KEY` | `0.0.0.0` | 控制面端点需 `X-API-Key` header |
 
-**控制面端点**（需鉴权，10 个 + WebSocket）：
+**控制面端点**（需鉴权，13 个 + WebSocket）：
 - `POST /api/pipeline/{run, run-forever, stop}`
 - `POST /api/projects/{id}/{pause, resume, cancel}`
 - `POST /api/decisions/{id}/respond`
 - `POST /api/chat/send`
 - `POST /api/finance/budget`
 - `POST /api/orchestrator/prototype`
+- `POST /api/scheduler/{pause, resume}`
 - WebSocket `/ws/events`（支持 `?api_key=` 查询参数回退，用于浏览器 WS 客户端）
 
 **公开端点**：所有 `GET` 请求 + `POST /api/analytics/event`（浏览器游戏埋点，无需鉴权）
@@ -660,6 +687,7 @@ Python 3.11/3.12 matrix，job timeout 10 分钟，pip 缓存。
 | **当前** | **多项目编排重构**：CEO 调度器、决策门控（5 类）、任务队列、12 市场数据源、项目看板、任务监控、决策卡片、市场趋势面板 |
 | **v2** | **8 项增强**：自动化 Playtest（Playwright 8 项检查）、机制规划层（GDD→有序机制→逐机制代码生成）、3 层嵌套错误恢复、美术风格一致性（5 种预设）、原型快速模式（5 分钟 demo）、分层记忆系统（短期+长期）、音乐生成（Web Audio+Suno）、自动本地化（15 种语言） |
 | **v3** | **代码质量与安全强化**：修复 `orchestrator_state` 表缺失 bug（管线状态追踪静默失败）；添加 Dashboard `X-API-Key` 鉴权（localhost-only 回退模式 + CORS 收紧）；新增 pytest 测试套件（14 个测试 + 3 个回归测试）；新增 GitHub Actions CI（ruff + mypy + pytest）；新增 README.md 用户入口；ARCHITECTURE.md 更新 |
+| **v4** | **Dashboard UX 重构**：CEO-only 交互模式（CFO/COO 转为内部节点，移除独立交互 tab）；文档查看器（所有 Agent 工作文档可通过弹窗查看）；项目看板内联审批按钮（approve/reject/document 直接在项目卡片上操作）；调度器暂停/恢复功能（文件标志 + Dashboard "⏸ 下班" 按钮）；CEO 汇报取代 Scheduler Reports；新增 API：`/api/scheduler/{pause,resume,paused}`、`/api/projects/{id}/documents` |
 
 ---
 

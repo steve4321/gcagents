@@ -53,7 +53,10 @@ GCAgents System
 - **Prototype mode** — generate a playable demo in ~5 minutes using colored rectangles/emoji as placeholder art
 - **Auto-localization** — game UI strings translated to 15 languages
 - **Programmatic music** — Web Audio oscillator-based BGM per genre (Suno API optional)
-- **Executive chat** — talk to CEO/CFO/COO through the Dashboard; receive decision cards you can approve/reject
+- **Executive chat** — talk to CEO through the Dashboard (CFO/COO run as internal nodes); receive decision cards you can approve/reject
+- **Document viewer** — view all agent work artifacts (proposal, GDD, market scan, art/music/QA/build reports) in a document modal per project
+- **Scheduler pause/resume** — pause the scheduler with a "⏸ 下班" button on the dashboard; resume with "▶ 上班"
+- **Inline approval** — approve/reject projects and view documents directly from project cards on the board
 - **Layered memory** — short-term events vs. long-term lessons; project context preserved across sessions
 
 ---
@@ -67,7 +70,7 @@ GCAgents System
 | Code AI | DeepSeek Coder | Phaser 4 + TypeScript game generation |
 | Art AI | ComfyUI + Stable Diffusion 1.5 | Game asset generation |
 | Game Engine | Phaser 4 + TypeScript + Vite | Web mini-game runtime |
-| Dashboard | FastAPI + HTML/CSS/JS | Project board, task monitor, decision cards |
+| Dashboard | FastAPI + HTML/CSS/JS | Project board, task monitor, decision cards, document viewer, CEO reports |
 | Vector Store | ChromaDB | Memory search and long-term lesson retrieval |
 | Cache | Redis | Task queue, ephemeral state |
 | Database | SQLite (async) | Projects, decisions, tasks, logs, financial records |
@@ -161,8 +164,8 @@ gcagents/
 │       ├── localize/         #   15-language auto-translation
 │       └── builder/          #   Vite build → dist/
 ├── dashboard/web/
-│   ├── api_server.py        #   FastAPI backend (38 endpoints)
-│   ├── index.html           #   Project board, task monitor, decision cards
+│   ├── api_server.py        #   FastAPI backend (41 endpoints)
+│   ├── index.html           #   Project board, task monitor, decision cards, document viewer
 │   ├── app.js               #   Frontend logic
 │   └── style.css            #   Styles
 ├── shared/
