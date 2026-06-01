@@ -21,7 +21,23 @@ from shared.memory import get_memory_store
 from shared.models import ProjectPhase, ProjectState
 
 _TICK_COUNT = 0
-MARKET_SCAN_INTERVAL = 10
+
+
+def _load_scheduler_config() -> dict:
+    """Load scheduler config from agents.yaml, with fallback to defaults."""
+    try:
+        from shared.config import load_agents_config
+        cfg = load_agents_config()
+        return cfg.get("scheduler", {})
+    except Exception:
+        return {}
+
+
+_SCHED_CFG = _load_scheduler_config()
+_default_phase_ticks = {"scanning": 3, "designing": 2, "developing": 10, "testing": 6, "building": 3, "publishing": 5}
+PHASE_MAX_TICKS: dict[str, int] = _SCHED_CFG.get("phase_max_ticks", _default_phase_ticks)
+MARKET_SCAN_INTERVAL = _SCHED_CFG.get("market_scan_interval", 10)
+MAX_ACTIVE_PROJECTS = _SCHED_CFG.get("max_active_projects", 3)
 
 
 async def scheduler_tick() -> dict | None:
@@ -180,17 +196,46 @@ async def _periodic_market_scan() -> None:
 
 async def _advance_projects() -> None:
     projects = await get_all_projects()
-    for project in projects:
-        if project.phase in (ProjectPhase.BACKLOG, ProjectPhase.CANCELLED, ProjectPhase.LIVE, ProjectPhase.PAUSED):
-            continue
-        if project.awaiting_decision:
-            continue
+    active = [p for p in projects
+              if p.phase not in (ProjectPhase.BACKLOG, ProjectPhase.CANCELLED, ProjectPhase.LIVE, ProjectPhase.PAUSED)
+              and not p.awaiting_decision]
+
+    if len(active) > MAX_ACTIVE_PROJECTS:
+        active.sort(key=lambda p: p.progress or 0, reverse=True)
+        for p in active[MAX_ACTIVE_PROJECTS:]:
+            logger.debug(f"Scheduler: project {p.name} deferred ({len(active)} active, max {MAX_ACTIVE_PROJECTS})")
+        active = active[:MAX_ACTIVE_PROJECTS]
+
+    for project in active:
         await _advance_project(project)
 
 
 async def _advance_project(project: ProjectState) -> None:
     phase = project.phase
     pid = project.id
+
+    phase_key = phase.value if hasattr(phase, "value") else str(phase)
+    max_ticks = PHASE_MAX_TICKS.get(phase_key, 10)
+    phase_ticks = await _get_phase_ticks(pid)
+    if phase_ticks >= max_ticks:
+        logger.warning(f"Scheduler: project {pid} exceeded {max_ticks} ticks in {phase_key}, pausing")
+        await create_decision(
+            "direction_change",
+            f"Project '{project.name}' stuck in {phase_key} for {phase_ticks} ticks (max {max_ticks}). Change direction?",
+            project_id=pid,
+        )
+        from sqlalchemy import text
+        from sqlalchemy.ext.asyncio import AsyncSession
+        from orchestrator.persistence import _get_engine
+        engine = _get_engine()
+        async with AsyncSession(engine) as db:
+            await db.execute(
+                text("UPDATE projects SET awaiting_decision='phase_timeout', updated_at=:now WHERE id=:id"),
+                {"now": datetime.now(timezone.utc).isoformat(), "id": pid},
+            )
+            await db.commit()
+        await emit("scheduler", f"Phase timeout: {project.name} in {phase_key}", severity="warning", source_agent="scheduler", project_name=project.name)
+        return
 
     if phase == ProjectPhase.SCANNING:
         await enqueue(pid, "market_scan", {"project_name": project.name})
@@ -365,6 +410,20 @@ def _fallback_task_type(task_type: str) -> str:
         "market_scan": "market_scan",        # TODO: implement market_scan_cache (use cached signals)
     }
     return mapping.get(task_type, task_type)
+
+
+async def _get_phase_ticks(project_id: str) -> int:
+    from orchestrator.persistence import _get_engine
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import AsyncSession
+    engine = _get_engine()
+    async with AsyncSession(engine) as db:
+        result = await db.execute(
+            text("SELECT COUNT(*) FROM tasks WHERE project_id=:pid AND status='completed'"),
+            {"pid": project_id},
+        )
+        row = result.fetchone()
+        return row[0] if row else 0
 
 
 async def _run_agent(task_type: str, project_id: str, params: dict) -> dict:
@@ -546,6 +605,13 @@ async def _apply_task_result(task_result: dict) -> None:
     elif effective_type == "qa":
         qa_results = result.get("qa_results", {})
         passed = qa_results.get("passed", False) if isinstance(qa_results, dict) else False
+
+        prev_fail_count = 0
+        if project.qa_result and isinstance(project.qa_result, dict):
+            prev_fail_count = project.qa_result.get("fail_count", 0)
+        new_fail_count = prev_fail_count + (0 if passed else 1)
+        qa_results["fail_count"] = new_fail_count
+
         async with AsyncSession(engine) as db:
             await db.execute(
                 text("UPDATE projects SET qa_result=:qr, updated_at=:now WHERE id=:id"),
@@ -556,7 +622,7 @@ async def _apply_task_result(task_result: dict) -> None:
         if passed:
             await update_project_phase(pid, "building")
         else:
-            fail_count = project.qa_result.get("fail_count", 0) + 1 if project.qa_result else 1
+            fail_count = new_fail_count
             if fail_count >= 3:
                 await create_decision(
                     "cancel",
