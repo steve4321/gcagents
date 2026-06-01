@@ -54,6 +54,19 @@ The GDD must be a JSON object with these sections:
   "estimated_play_session_minutes": 5
 }
 
+COMPLEXITY REQUIREMENTS (MANDATORY — games that are too simple will be rejected by QA):
+- Minimum 5 distinct mechanics (not just movement + score; include at least 2 unique gameplay mechanics)
+- Minimum 4 scenes (Boot, Menu, Game, GameOver — prefer 5-6 with Tutorial or LevelSelect)
+- Minimum 3 entity types with unique behaviors (e.g., player + 2 enemy/obstacle types with different AI)
+- A progression system: at least 5 levels or stages with increasing difficulty
+- At least 2 input modalities (keyboard + mouse or touch)
+- A scoring system with depth: combos, multipliers, or time bonuses (not just +1 per action)
+- At least 3 distinct enemy/obstacle patterns (not just static objects)
+- Include a tutorial or gradual mechanic introduction in the first level
+- "balance" must specify: starting_lives, difficulty_curve, and at least 3 difficulty parameters
+
+Do NOT design a trivial game. The target play session is 5-10 minutes with replay value.
+
 Return ONLY the JSON object, no other text."""
 
 
@@ -77,8 +90,13 @@ Target Platforms: {', '.join(proposal.target_platforms)}
 Differentiation: {proposal.differentiation}
 Reference Games: {', '.join(proposal.reference_games)}
 Market Score: {proposal.market_opportunity_score}
+Estimated Dev Hours: {proposal.estimated_dev_hours}
+Complexity Target: {"simple (8h)" if proposal.estimated_dev_hours <= 10 else "standard (16h)" if proposal.estimated_dev_hours <= 20 else "complex (32h+)"}
 
-Generate a complete, detailed GDD. Make the game fun and engaging for web play."""
+Generate a complete, detailed GDD. Make the game fun and engaging for web play.
+Scale complexity to match the dev hours: more hours = more mechanics, scenes, and depth.
+
+IMPORTANT: This game should have enough depth to engage a player for 5-10 minutes. Simple one-button games will be rejected."""
 
     text, usage = await llm.chat_completion(
         model=model,

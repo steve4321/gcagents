@@ -44,6 +44,11 @@ async def plan_mechanics(gdd: dict) -> list[dict]:
         "Order mechanics by dependency: core systems first "
         "(movement, rendering), gameplay next (scoring, enemies), "
         "polish last (effects, sound).\n\n"
+        "IMPORTANT COMPLEXITY RULES:\n"
+        "- Generate AT LEAST 5 mechanics for any game (minimum: player_movement, score_system, enemy_system, level_progression, and one unique gameplay mechanic)\n"
+        "- Each mechanic's complexity should be \"medium\" or higher for at least 3 mechanics\n"
+        "- The \"inputs\" and \"outputs\" lists must each have at least 2 items\n"
+        "- The \"constraints\" list must have at least 1 item per mechanic\n\n"
         "Return ONLY a JSON array of mechanic objects, no other text."
     )
 

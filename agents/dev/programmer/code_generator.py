@@ -29,7 +29,12 @@ Rules:
 - CRITICAL: Use `import * as Phaser from 'phaser';` (NOT `import Phaser from 'phaser';` - Phaser ESM has no default export)
 - Include placeholder geometry for assets (no external images needed for MVP)
 - Use Phaser's built-in shape rendering for visuals
-- Keep the game simple but fun and complete
+- Implement ALL mechanics specified in the GDD — do not skip or simplify any mechanic
+- Each mechanic must have real gameplay depth: state changes, visual feedback, player interaction
+- Include at least 3 enemy/obstacle types with distinct behaviors (not just recolored copies)
+- Implement a progression system across levels with increasing difficulty
+- Add visual feedback for all player actions: tween animations, color changes, particle effects
+- Include a scoring system with combos or multipliers when applicable
 - Include basic game loop: start → play → end
 - Add keyboard/mouse/touch controls
 - Use window.__TEST__ = { ready: false, state: () => ({...}) } for test access
@@ -98,7 +103,7 @@ Implement this mechanic now. Return a JSON object mapping file paths to file con
 - For the FIRST mechanic (order 0), include src/main.ts, src/game/config.ts, and any scene/entity files needed.
 - For later mechanics, ADD new files or RETURN UPDATED versions of existing files.
 - Use `import * as Phaser from 'phaser';`
-- Use Phaser shapes/text for visuals (no external assets).
+- Use Phaser shapes/text for visuals. Make visuals POLISHED: use gradients, glow effects, scale animations, color transitions. Do NOT use plain unstyled rectangles.
 - Include window.__TEST__ = {{ ready: false, state: () => ({{...}}) }} in GameScene.
 - Include analytics: navigator.sendBeacon on game_start and game_over events.
 
@@ -140,7 +145,7 @@ async def _generate_all_at_once(
 {json.dumps(gdd, indent=2)}
 
 Generate ALL source files as a JSON object mapping file paths to file contents.
-The game must be playable and fun. Use Phaser shapes/text for visuals (no external assets).
+The game must be playable, engaging, and have depth. Implement ALL mechanics from the GDD with real gameplay logic (not stubs). Use Phaser shapes/text with polished visuals — add tween animations, color transitions, and visual feedback for every player action. Plain unstyled rectangles are NOT acceptable.
 Include the window.__TEST__ interface for automated testing.
 Include basic gameplay analytics: call `navigator.sendBeacon('/api/analytics/event', new URLSearchParams({{ game: '{game_title}', event: 'game_start' }}))` on game start, and report 'game_over' with score and 'play_time' on game end. Keep analytics non-blocking."""
 
