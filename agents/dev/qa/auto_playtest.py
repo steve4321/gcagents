@@ -18,11 +18,12 @@ from .playtest_checks import (
 )
 
 
-async def run_auto_playtest(game_dist_path: str | Path) -> dict:
+async def run_auto_playtest(game_dist_path: str | Path, game_dir: str | Path | None = None) -> dict:
     """Run all playtest checks on a built game.
 
     Args:
         game_dist_path: Path to game's dist/ directory containing index.html
+        game_dir: Path to game's root directory (for complexity scoring).
 
     Returns:
         dict with: passed (bool), score (float 0-1), checks (list), duration_ms (int)
@@ -75,6 +76,11 @@ async def run_auto_playtest(game_dist_path: str | Path) -> dict:
                 "errors": all_errors[:5],
             })
 
+            if game_dir:
+                from agents.dev.qa.playtest_checks import check_complexity_score
+                complexity_result = check_complexity_score(game_dir, page)
+                results.append(complexity_result)
+
             await browser.close()
 
     except Exception as e:
@@ -88,14 +94,22 @@ async def run_auto_playtest(game_dist_path: str | Path) -> dict:
 
     passed_count = sum(1 for r in results if r.get("passed"))
     total_count = len(results)
-    score = passed_count / total_count if total_count > 0 else 0.0
+    base_score = passed_count / total_count if total_count > 0 else 0.0
+
+    complexity_passed = all(
+        c.get("passed", True) for c in results if c.get("name") == "complexity_score"
+    )
+    complexity_score = next(
+        (c.get("score", 1.0) for c in results if c.get("name") == "complexity_score"), 1.0
+    )
+    final_score = round(min(base_score, complexity_score), 2)
 
     elapsed = datetime.now(timezone.utc) - started_at
     duration_ms = int(elapsed.total_seconds() * 1000)
 
     return {
-        "passed": passed_count >= total_count - 1,
-        "score": round(score, 2),
+        "passed": passed_count >= total_count - 1 and complexity_passed,
+        "score": final_score,
         "checks": results,
         "passed_count": passed_count,
         "total_count": total_count,

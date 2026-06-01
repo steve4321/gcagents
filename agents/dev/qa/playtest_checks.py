@@ -1,6 +1,8 @@
 """Programmatic checks for generated web games via headless Playwright."""
 from __future__ import annotations
 
+from pathlib import Path
+
 from playwright.async_api import Page
 
 
@@ -95,3 +97,19 @@ async def check_score_system(page: Page) -> dict:
 async def check_console_errors(page: Page) -> dict:
     """Collect all console errors during test session."""
     return {"name": "console_errors", "passed": True, "note": "checked via page_error listener"}
+
+
+def check_complexity_score(game_dir: str | Path, page) -> dict:
+    """Verify game meets minimum complexity threshold."""
+    from shared.complexity import score_code, MIN_PASSING_SCORE
+
+    game_path = Path(game_dir) if not isinstance(game_dir, Path) else game_dir
+    score, metrics = score_code(game_path)
+
+    return {
+        "name": "complexity_score",
+        "passed": score >= MIN_PASSING_SCORE,
+        "score": score,
+        "detail": f"Complexity {score:.2f}/{MIN_PASSING_SCORE:.2f} — {metrics.get('total_files', 0)} files, {metrics.get('total_lines', 0)} lines",
+        "metrics": metrics,
+    }

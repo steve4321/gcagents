@@ -37,7 +37,7 @@ async def run_qa(state: CompanyState) -> dict:
     dist_dir = project_dir / "dist"
     if build_ok and dist_dir.exists():
         logger.info("Running automated playtest...")
-        playtest_results = await run_auto_playtest(dist_dir)
+        playtest_results = await run_auto_playtest(dist_dir, game_dir=project_dir)
         logger.info(
             f"Playtest: passed={playtest_results['passed']}, "
             f"score={playtest_results['score']}, "
