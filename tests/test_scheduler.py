@@ -124,7 +124,7 @@ async def test_get_phase_ticks(tmp_db):
     project = ProjectState(id="proj-001", name="Test", genre="puzzle", phase=ProjectPhase.DEVELOPING)
     await save_project(project)
 
-    t1 = TaskRecord(id="t1", project_id="proj-001", task_type="code", description="t1")
+    t1 = TaskRecord(id="t1", project_id="proj-001", task_type="develop", description="t1")
     t2 = TaskRecord(id="t2", project_id="proj-001", task_type="qa", description="t2")
     await save_task(t1)
     await save_task(t2)

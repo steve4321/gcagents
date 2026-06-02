@@ -27,6 +27,10 @@ async def develop_game(state: CompanyState) -> dict:
     if state.errors:
         build_error = state.errors[0] if isinstance(state.errors, list) else str(state.errors)
 
-    code_path = await generate_game_code(gdd, project_dir, config, build_error=build_error)
+    code_path = await generate_game_code(
+        gdd, project_dir, config,
+        build_error=build_error,
+        art_assets_path=state.art_assets_path or "",
+    )
 
     return {"phase": PipelinePhase.TESTING, "game_code_path": str(code_path)}

@@ -25,13 +25,13 @@ class TestParseCodeFiles:
         result = _parse_code_files(text)
         assert "src/main.ts" in result
 
-    def test_parse_invalid_returns_empty(self):
-        result = _parse_code_files("not valid json at all")
-        assert result == {}
+    def test_parse_invalid_raises_error(self):
+        with pytest.raises(ValueError, match="Failed to parse"):
+            _parse_code_files("not valid json at all")
 
-    def test_parse_non_dict_returns_empty(self):
-        result = _parse_code_files(json.dumps(["not", "a", "dict"]))
-        assert result == {}
+    def test_parse_non_dict_raises_error(self):
+        with pytest.raises(ValueError, match="Failed to parse"):
+            _parse_code_files(json.dumps(["not", "a", "dict"]))
 
 
 class TestScaffoldProject:

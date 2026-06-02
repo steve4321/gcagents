@@ -17,6 +17,7 @@ from orchestrator.decision_gate import create_decision, resolve
 from orchestrator.event_bus import emit
 from orchestrator.persistence import (
     count_completed_tasks,
+    count_completed_tasks_by_type,
     get_all_projects,
     get_api_usage_summary,
     get_latest_market_report,
@@ -27,6 +28,7 @@ from orchestrator.persistence import (
     save_project,
     save_chat_message,
     set_project_live,
+    update_project_art_assets_path,
     update_project_art_status,
     update_project_awaiting_decision,
     update_project_build_path,
@@ -205,6 +207,7 @@ async def _handle_approved_decision(decision) -> None:
 
     elif dtype == "publish" and pid:
         await update_project_phase(pid, "publishing")
+        await update_project_awaiting_decision(pid, None)
         project = await get_project(pid)
         if project:
             await enqueue(pid, "deploy", {"project_name": project.name})
@@ -214,6 +217,7 @@ async def _handle_approved_decision(decision) -> None:
         project = await get_project(pid)
         if project:
             await update_project_phase(pid, "developing")
+            await update_project_awaiting_decision(pid, None)
             await emit("scheduler", f"Budget overrun approved, continuing {project.name}", source_agent="scheduler", project_name=project.name)
 
     elif dtype == "direction_change" and pid:
@@ -221,6 +225,7 @@ async def _handle_approved_decision(decision) -> None:
         project = await get_project(pid)
         if project:
             await update_project_phase(pid, "designing")
+            await update_project_awaiting_decision(pid, None)
             await emit("scheduler", f"Direction change for {project.name}", source_agent="scheduler", project_name=project.name)
 
 
@@ -238,6 +243,7 @@ async def _handle_rejected_decision(decision) -> None:
 
     elif dtype == "publish" and pid:
         await update_project_phase(pid, "testing")
+        await update_project_awaiting_decision(pid, None)
         await emit("scheduler", "Publish rejected, sending back to testing", source_agent="scheduler")
 
 
@@ -382,7 +388,10 @@ async def _advance_project(project: ProjectState) -> None:
         elif project.music_status != "done":
             await enqueue(pid, "generate_music", {"project_name": project.name, "gdd": project.gdd})
         else:
-            await enqueue(pid, "develop", {"project_name": project.name, "gdd": project.gdd})
+            params = {"project_name": project.name, "gdd": project.gdd}
+            if project.art_assets_path:
+                params["art_assets_path"] = project.art_assets_path
+            await enqueue(pid, "develop", params)
 
     elif phase == ProjectPhase.TESTING:
         await enqueue(pid, "qa", {"project_name": project.name, "code_path": project.code_path})
@@ -421,8 +430,6 @@ async def _execute_one_task() -> dict | None:
         result = await _run_agent(task_type, pid, params)
         await complete_task(task.id, result)
         return {"task": task, "result": result, "status": "completed"}
-    except TaskExecutionError:
-        raise
     except Exception as e:
         error_msg = str(e)
         logger.error(f"Scheduler: task '{task_type}' failed (layer={layer}, retry={retry_count}): {e}")
@@ -501,7 +508,7 @@ async def _escalate_layer3(task, error_msg: str) -> dict:
         "retry_metadata": {
             "retry_count": task.params.get("retry_count", 0),
             "retry_strategy": task.params.get("retry_strategy", ""),
-            "layer": 2,
+            "layer": 3,
         },
     }
     await create_decision(
@@ -529,7 +536,30 @@ def _fallback_task_type(task_type: str) -> str | None:
 
 
 async def _get_phase_ticks(project_id: str) -> int:
-    return await count_completed_tasks(project_id)
+    project = await get_project(project_id)
+    if not project:
+        return 0
+
+    phase = project.phase
+    phase_key = phase.value if hasattr(phase, "value") else str(phase)
+
+    if phase_key == "scanning":
+        return await count_completed_tasks_by_type(project_id, "market_scan")
+    elif phase_key == "designing":
+        return await count_completed_tasks_by_type(project_id, "design_game")
+    elif phase_key == "developing":
+        art = await count_completed_tasks_by_type(project_id, "art_gen")
+        music = await count_completed_tasks_by_type(project_id, "generate_music")
+        code = await count_completed_tasks_by_type(project_id, "develop")
+        return art + music + code
+    elif phase_key == "testing":
+        return await count_completed_tasks_by_type(project_id, "qa")
+    elif phase_key == "building":
+        return await count_completed_tasks_by_type(project_id, "build")
+    elif phase_key == "publishing":
+        return await count_completed_tasks_by_type(project_id, "deploy")
+    else:
+        return await count_completed_tasks(project_id)
 
 
 async def _run_agent(task_type: str, project_id: str, params: dict) -> dict:
@@ -540,6 +570,7 @@ async def _run_agent(task_type: str, project_id: str, params: dict) -> dict:
         current_project_id=project_id if project_id != "__system__" else None,
         gdd=project.gdd if project else None,
         current_proposal=_proposal_from_project(project) if project else None,
+        art_assets_path=params.get("art_assets_path") or (project.art_assets_path if project else None),
     )
 
     if params.get("last_error"):
@@ -665,10 +696,15 @@ async def _apply_task_result(task_result: dict) -> None:
             await update_project_phase(pid, "developing")
 
     elif effective_type == "art_gen":
-        await update_project_art_status(pid)
+        art_status = result.get("art_status", "done")
+        await update_project_art_status(pid, art_status)
+        art_assets_path = result.get("art_assets_path", "")
+        if art_assets_path:
+            await update_project_art_assets_path(pid, art_assets_path)
 
     elif effective_type == "generate_music":
-        await update_project_music_status(pid)
+        music_status = result.get("music_status", "done")
+        await update_project_music_status(pid, music_status)
 
     elif effective_type == "develop":
         code_path = result.get("game_code_path")
@@ -680,26 +716,26 @@ async def _apply_task_result(task_result: dict) -> None:
         qa_results = result.get("qa_results", {})
         passed = qa_results.get("passed", False) if isinstance(qa_results, dict) else False
 
-        prev_fail_count = 0
-        if project.qa_result and isinstance(project.qa_result, dict):
-            prev_fail_count = project.qa_result.get("fail_count", 0)
-        new_fail_count = prev_fail_count + (0 if passed else 1)
-        qa_results["fail_count"] = new_fail_count
-
-        await update_project_qa_result(pid, qa_results)
-
         if passed:
+            await update_project_qa_result(pid, qa_results)
             await update_project_phase(pid, "building")
         else:
-            fail_count = new_fail_count
-            if fail_count >= QA_CANCEL_THRESHOLD:
+            prev_fail_count = 0
+            if project.qa_result and isinstance(project.qa_result, dict):
+                prev_fail_count = project.qa_result.get("fail_count", 0)
+            new_fail_count = prev_fail_count + 1
+            qa_results["fail_count"] = new_fail_count
+
+            if new_fail_count >= QA_CANCEL_THRESHOLD:
+                await update_project_qa_result(pid, qa_results)
                 await create_decision(
                     "cancel",
-                    f"Project '{project.name}' failed QA {fail_count} times. Cancel?",
+                    f"Project '{project.name}' failed QA {new_fail_count} times. Cancel?",
                     project_id=pid,
                 )
                 await update_project_awaiting_decision(pid, "qa_fail")
             else:
+                await update_project_qa_result(pid, {"fail_count": 0})
                 await update_project_phase(pid, "developing")
 
     elif effective_type == "build":

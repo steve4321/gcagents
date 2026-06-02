@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import uuid
 
-from orchestrator.persistence import save_task, get_pending_tasks, update_task_status
+from orchestrator.persistence import save_task, claim_next_task, update_task_status
 from shared.models import TaskParams, TaskRecord
 
 
@@ -24,9 +24,8 @@ async def enqueue(project_id: str, task_type: str, params: TaskParams | dict | N
 
 
 async def dequeue() -> TaskRecord | None:
-    """Return the oldest pending task, or None if queue is empty."""
-    tasks = await get_pending_tasks()
-    return tasks[0] if tasks else None
+    """Atomically claim and return the oldest pending task, or None if queue is empty."""
+    return await claim_next_task()
 
 
 async def complete_task(task_id: str, result: dict | None = None) -> None:

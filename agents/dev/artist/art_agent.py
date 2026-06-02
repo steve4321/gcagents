@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import re
 
 import httpx
@@ -43,15 +44,19 @@ async def generate_art(state: CompanyState) -> dict:
     generator = SpriteGenerator(client, art_style=art_style_config)
 
     try:
+        tasks = []
         if sprite_characters:
-            await generator.generate_character_sprites(style, sprite_characters, output_dir)
+            tasks.append(generator.generate_character_sprites(style, sprite_characters, output_dir))
 
         for scene in scene_themes:
             theme = f"{scene} scene for {project_name}"
-            await generator.generate_background(theme, output_dir=output_dir)
+            tasks.append(generator.generate_background(theme, output_dir=output_dir))
 
         if ui_elements:
-            await generator.generate_ui_elements(style, ui_elements, output_dir)
+            tasks.append(generator.generate_ui_elements(style, ui_elements, output_dir))
+
+        if tasks:
+            await asyncio.gather(*tasks)
 
         logger.info(f"Art generation complete for: {project_name}")
         return {"phase": PipelinePhase.DEVELOPING, "art_assets_path": str(output_dir)}

@@ -160,6 +160,7 @@ class ProjectState(BaseModel):
     proposal: dict | None = None
     gdd: dict | None = None
     code_path: str | None = None
+    art_assets_path: str = ""
     art_status: str = "pending"
     music_status: str = "pending"
     qa_result: dict | None = None

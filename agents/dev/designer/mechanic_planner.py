@@ -109,5 +109,4 @@ def _parse_mechanics(text: str) -> list[dict]:
     except (ValueError, json.JSONDecodeError):
         pass
 
-    logger.error("Failed to parse mechanics JSON")
-    return []
+    raise ValueError("Failed to parse mechanics JSON")

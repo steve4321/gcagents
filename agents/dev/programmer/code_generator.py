@@ -27,8 +27,8 @@ Rules:
 - Use Phaser 4 API (not Phaser 3)
 - All code must be valid TypeScript with strict mode
 - CRITICAL: Use `import * as Phaser from 'phaser';` (NOT `import Phaser from 'phaser';` - Phaser ESM has no default export)
-- Include placeholder geometry for assets (no external images needed for MVP)
-- Use Phaser's built-in shape rendering for visuals
+- If an art_assets_path is provided in the prompt, load images from that directory in BootScene using this.load.image() and use them in game scenes instead of placeholder shapes. Copy image files from art_assets_path into the project's public/assets/ directory. Use the actual sprite/background filenames from that path.
+- If no art_assets_path is provided, use Phaser's built-in shape rendering for visuals (placeholder geometry)
 - Implement ALL mechanics specified in the GDD — do not skip or simplify any mechanic
 - Each mechanic must have real gameplay depth: state changes, visual feedback, player interaction
 - Include at least 3 enemy/obstacle types with distinct behaviors (not just recolored copies)
@@ -39,17 +39,21 @@ Rules:
 - Add keyboard/mouse/touch controls
 - Use window.__TEST__ = { ready: false, state: () => ({...}) } for test access
 - Include basic gameplay analytics: call `navigator.sendBeacon('/api/analytics/event', new URLSearchParams({ game: '{game_name}', event: 'game_start' }))` when the game starts, and report 'game_over' with final score and 'play_time' in seconds when the game ends. This is non-blocking and should NOT impact gameplay.
+- Audio files are loaded via `<script>` tags in index.html (assets/audio/bgm.js and assets/audio/sfx.js). They export `window.GameBGM` and `window.GameSFX`. Use `window.GameBGM.start()` to start background music, `window.GameBGM.stop()` to stop it. Use `window.GameSFX.jump()`, `window.GameSFX.collect()`, `window.GameSFX.hit()`, `window.GameSFX.gameover()`, or `window.GameSFX.click()` to play sound effects at appropriate moments.
 
 Return a JSON object mapping file paths to file contents:
 {"src/main.ts": "...", "src/game/scenes/GameScene.ts": "...", ...}"""
 
 
-async def generate_game_code(gdd: dict, project_dir: Path, config: AppConfig, build_error: str = "") -> Path:
+async def generate_game_code(gdd: dict, project_dir: Path, config: AppConfig, build_error: str = "", art_assets_path: str = "") -> Path:
     logger.info(f"Generating Phaser 4 game code for: {gdd.get('title', 'unknown')}")
 
     project_dir.mkdir(parents=True, exist_ok=True)
 
     _scaffold_project(project_dir)
+
+    if art_assets_path:
+        _copy_art_assets(art_assets_path, project_dir)
 
     model = "deepseek-v4-flash"
     max_tokens = 16384
@@ -59,16 +63,16 @@ async def generate_game_code(gdd: dict, project_dir: Path, config: AppConfig, bu
 
     mechanics = gdd.get("mechanics")
     if mechanics and not build_error:
-        code_path = await _generate_by_mechanics(gdd, project_dir, config, model, max_tokens)
+        code_path = await _generate_by_mechanics(gdd, project_dir, config, model, max_tokens, art_assets_path)
     else:
-        code_path = await _generate_all_at_once(gdd, project_dir, config, model, max_tokens, build_error)
+        code_path = await _generate_all_at_once(gdd, project_dir, config, model, max_tokens, build_error, art_assets_path)
 
     _install_and_build(code_path)
     return code_path
 
 
 async def _generate_by_mechanics(
-    gdd: dict, project_dir: Path, config: AppConfig, model: str, max_tokens: int,
+    gdd: dict, project_dir: Path, config: AppConfig, model: str, max_tokens: int, art_assets_path: str = "",
 ) -> Path:
     mechanics = gdd["mechanics"]
     game_title = gdd.get("title", "game")
@@ -84,6 +88,13 @@ async def _generate_by_mechanics(
             f"- {path} ({len(content)} chars)" for path, content in relevant_existing.items()
         ) if relevant_existing else "None yet."
 
+        art_instruction = ""
+        if art_assets_path and i == 0:
+            art_instruction = f"""
+IMPORTANT: Art assets are available at: {art_assets_path}
+In BootScene, load images from this path using this.load.image(). Copy image files to public/assets/ and reference them as 'assets/filename.png'.
+In game scenes, use the loaded image sprites instead of placeholder shapes.
+"""
         mechanic_prompt = f"""You are building a Phaser 4 + TypeScript game incrementally, mechanic by mechanic.
 
 Game: {game_title}
@@ -133,12 +144,20 @@ Return ONLY a JSON object of file paths to contents."""
 
 
 async def _generate_all_at_once(
-    gdd: dict, project_dir: Path, config: AppConfig, model: str, max_tokens: int, build_error: str,
+    gdd: dict, project_dir: Path, config: AppConfig, model: str, max_tokens: int, build_error: str, art_assets_path: str = "",
 ) -> Path:
     game_title = gdd.get("title", "game")
+    art_instruction = ""
+    if art_assets_path:
+        art_instruction = f"""
+IMPORTANT: Art assets are available at: {art_assets_path}
+In BootScene, load images from this path using this.load.image(). Copy image files to public/assets/ and reference them as 'assets/filename.png'.
+In game scenes, use the loaded image sprites instead of placeholder shapes.
+"""
     user_prompt = f"""Generate a complete Phaser 4 + TypeScript game based on this GDD:
 
 {json.dumps(gdd, indent=2)}
+{art_instruction}
 
 Generate ALL source files as a JSON object mapping file paths to file contents.
 The game must be playable, engaging, and have depth. Implement ALL mechanics from the GDD with real gameplay logic (not stubs). Use Phaser shapes/text with polished visuals — add tween animations, color transitions, and visual feedback for every player action. Plain unstyled rectangles are NOT acceptable.
@@ -243,6 +262,8 @@ export default defineConfig({
   </style>
 </head>
 <body>
+  <script src="assets/audio/bgm.js"></script>
+  <script src="assets/audio/sfx.js"></script>
   <script type="module" src="/src/main.ts"></script>
 </body>
 </html>
@@ -257,23 +278,37 @@ export default defineConfig({
     public_dir.mkdir(exist_ok=True)
 
 
+def _copy_art_assets(art_assets_path: str, project_dir: Path) -> None:
+    import shutil
+    src = Path(art_assets_path)
+    if not src.exists():
+        logger.warning(f"Art assets path does not exist: {art_assets_path}")
+        return
+    dst = project_dir / "public" / "assets"
+    dst.mkdir(parents=True, exist_ok=True)
+    for f in src.iterdir():
+        if f.is_file() and f.suffix.lower() in (".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"):
+            shutil.copy2(f, dst / f.name)
+            logger.debug(f"Copied art asset: {f.name}")
+
+
 def _install_and_build(project_dir: Path) -> None:
-    """Run npm install && vite build; cleans node_modules after."""
     import shutil
     import subprocess
 
     try:
         subprocess.run(["npm", "install"], cwd=str(project_dir), capture_output=True, timeout=120, check=True)
         logger.info("npm install completed")
-        subprocess.run(["npm", "run", "build"], cwd=str(project_dir), capture_output=True, timeout=120)
+        result = subprocess.run(["npm", "run", "build"], cwd=str(project_dir), capture_output=True, timeout=120)
+        if result.returncode != 0:
+            raise RuntimeError(f"Build failed: {result.stderr.decode()[:500]}")
     except (subprocess.CalledProcessError, FileNotFoundError) as e:
-        logger.warning(f"npm install/build skipped: {e}")
+        raise RuntimeError(f"npm install/build failed: {e}")
     finally:
         shutil.rmtree(project_dir / "node_modules", ignore_errors=True)
 
 
 def _parse_code_files(text: str) -> dict[str, str]:
-    """Parse LLM response into a dict mapping file paths to contents."""
     text = text.strip()
     if text.startswith("```"):
         text = text.split("\n", 1)[1].rsplit("```", 1)[0]
@@ -294,5 +329,4 @@ def _parse_code_files(text: str) -> dict[str, str]:
     except (ValueError, json.JSONDecodeError):
         pass
 
-    logger.error("Failed to parse generated code files")
-    return {}
+    raise ValueError("Failed to parse generated code files")

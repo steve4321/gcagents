@@ -57,7 +57,7 @@ async def generate_game_audio(
     """Generate background music and sound effects for a game.
 
     Args:
-        game_dist_path: Path to game's dist/ directory
+        game_dist_path: Path to game's project root directory
         genre: Game genre (affects music style)
         mood: Mood (upbeat, calm, tense, epic)
         use_suno: Whether to attempt Suno API
@@ -67,7 +67,7 @@ async def generate_game_audio(
         dict with: bgm_path, sfx_path, bgm_type, sfx_count, music_status
     """
     dist = Path(game_dist_path)
-    audio_dir = dist / "assets" / "audio"
+    audio_dir = dist / "public" / "assets" / "audio"
     audio_dir.mkdir(parents=True, exist_ok=True)
 
     bgm_type = "procedural_webaudio"
@@ -88,7 +88,7 @@ async def generate_game_audio(
     sfx_path = audio_dir / "sfx.js"
     sfx_path.write_text(sfx_js, encoding="utf-8")
 
-    logger.info(f"Generated audio: bgm_type={bgm_type}, sfx_count=5 -> {audio_dir}")
+    logger.info(f"Generated audio: bgm_type={bgm_type}, sfx_count=5 -> public/assets/audio/")
 
     return {
         "bgm_path": str(bgm_path),

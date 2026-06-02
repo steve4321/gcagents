@@ -18,9 +18,18 @@ The GDD must be a JSON object with these sections:
   "genre": "genre-name",
   "summary": "One paragraph game concept",
   "core_loop": ["step1", "step2", "step3"],
-  "mechanics": {
-    "mechanic_name": "description of how it works"
-  },
+  "mechanics": [
+    {
+      "name": "mechanic_name",
+      "description": "what this mechanic does in 1-2 sentences",
+      "inputs": ["keyboard_input", "game_loop"],
+      "outputs": ["updated_position", "animation_frame"],
+      "constraints": ["speed_cap_200px_s", "no_wall_clipping"],
+      "dependencies": ["other_mechanic_name"],
+      "implementation_order": 0,
+      "complexity": "low" | "medium" | "high"
+    }
+  ],
   "progression": "How the player progresses",
   "win_condition": "What constitutes winning or completion",
   "monetization": "How the game could monetize (ads, iap, etc)",
@@ -55,7 +64,9 @@ The GDD must be a JSON object with these sections:
 }
 
 COMPLEXITY REQUIREMENTS (MANDATORY — games that are too simple will be rejected by QA):
-- Minimum 5 distinct mechanics (not just movement + score; include at least 2 unique gameplay mechanics)
+- Minimum 5 mechanics in the "mechanics" list (not just movement + score; include at least 2 unique gameplay mechanics)
+- Each mechanic MUST have: name, description, inputs (2+), outputs (2+), constraints (1+), implementation_order, complexity
+- Each mechanic's complexity should be "medium" or higher for at least 3 mechanics
 - Minimum 4 scenes (Boot, Menu, Game, GameOver — prefer 5-6 with Tutorial or LevelSelect)
 - Minimum 3 entity types with unique behaviors (e.g., player + 2 enemy/obstacle types with different AI)
 - A progression system: at least 5 levels or stages with increasing difficulty
@@ -126,5 +137,4 @@ def _parse_gdd(text: str) -> dict:
                 return json.loads(text[start:end])
             except json.JSONDecodeError:
                 pass
-        logger.error("Failed to parse GDD JSON")
-        return {"title": "Unknown", "genre": "unknown", "scenes": []}
+        raise ValueError("Failed to parse GDD JSON")

@@ -150,6 +150,7 @@ async def ensure_tables():
                 proposal TEXT,
                 gdd TEXT,
                 code_path TEXT,
+                art_assets_path TEXT DEFAULT '',
                 art_status TEXT DEFAULT 'pending',
                 music_status TEXT DEFAULT 'pending',
                 qa_result TEXT,
@@ -248,6 +249,26 @@ async def ensure_tables():
             await db.execute(text("ALTER TABLE projects ADD COLUMN music_status TEXT DEFAULT 'pending'"))
         if "feedback_count" not in existing_cols:
             await db.execute(text("ALTER TABLE projects ADD COLUMN feedback_count INTEGER DEFAULT 0"))
+        if "art_assets_path" not in existing_cols:
+            await db.execute(text("ALTER TABLE projects ADD COLUMN art_assets_path TEXT DEFAULT ''"))
+
+        await db.execute(text("CREATE INDEX IF NOT EXISTS idx_projects_phase ON projects(phase)"))
+        await db.execute(text("CREATE INDEX IF NOT EXISTS idx_projects_updated_at ON projects(updated_at)"))
+        await db.execute(text("CREATE INDEX IF NOT EXISTS idx_tasks_project_id ON tasks(project_id)"))
+        await db.execute(text("CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)"))
+        await db.execute(text("CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON tasks(created_at)"))
+        await db.execute(text("CREATE INDEX IF NOT EXISTS idx_decisions_project_id ON decisions(project_id)"))
+        await db.execute(text("CREATE INDEX IF NOT EXISTS idx_decisions_status ON decisions(status)"))
+        await db.execute(text("CREATE INDEX IF NOT EXISTS idx_game_feedback_project_id ON game_feedback(project_id)"))
+        await db.execute(text("CREATE INDEX IF NOT EXISTS idx_game_feedback_processed ON game_feedback(processed)"))
+        await db.execute(text("CREATE INDEX IF NOT EXISTS idx_game_versions_project_id ON game_versions(project_id)"))
+        await db.execute(text("CREATE INDEX IF NOT EXISTS idx_game_metrics_project_id ON game_metrics(project_id)"))
+        await db.execute(text("CREATE INDEX IF NOT EXISTS idx_api_usage_logs_project_name ON api_usage_logs(project_name)"))
+        await db.execute(text("CREATE INDEX IF NOT EXISTS idx_api_usage_logs_created_at ON api_usage_logs(created_at)"))
+        await db.execute(text("CREATE INDEX IF NOT EXISTS idx_chat_messages_role ON chat_messages(role)"))
+        await db.execute(text("CREATE INDEX IF NOT EXISTS idx_market_signals_captured_at ON market_signals(captured_at)"))
+        await db.execute(text("CREATE INDEX IF NOT EXISTS idx_event_logs_event_type ON event_logs(event_type)"))
+        await db.execute(text("CREATE INDEX IF NOT EXISTS idx_event_logs_created_at ON event_logs(created_at)"))
 
         await db.commit()
 
@@ -418,13 +439,16 @@ async def get_unprocessed_feedback(project_id: int) -> list[dict]:
 
 
 async def mark_feedback_processed(feedback_ids: list[int]) -> None:
+    if not feedback_ids:
+        return
     engine = _get_engine()
     async with AsyncSession(engine) as db:
-        for fid in feedback_ids:
-            await db.execute(
-                text("UPDATE game_feedback SET processed = 1 WHERE id = :fid"),
-                {"fid": fid},
-            )
+        placeholders = ", ".join(f":fid{i}" for i in range(len(feedback_ids)))
+        params = {f"fid{i}": fid for i, fid in enumerate(feedback_ids)}
+        await db.execute(
+            text(f"UPDATE game_feedback SET processed = 1 WHERE id IN ({placeholders})"),
+            params,
+        )
         await db.commit()
 
 
@@ -797,16 +821,20 @@ async def get_pending_instructions(agent_name: str) -> list[dict]:
             text("SELECT * FROM chat_messages WHERE role = 'user' ORDER BY created_at ASC"),
         )
         results = []
+        to_mark: list[tuple[str, str]] = []
         for r in rows.fetchall():
             d = dict(r._mapping)
             meta = json.loads(d.get("metadata_json", "{}"))
             if meta.get("target_agent") == agent_name and not meta.get("processed", False):
                 results.append(d)
                 meta["processed"] = True
-                await db.execute(
-                    text("UPDATE chat_messages SET metadata_json=:meta WHERE id=:id"),
-                    {"meta": json.dumps(meta), "id": d["id"]},
-                )
+                to_mark.append((json.dumps(meta), d["id"]))
+
+        for meta_json, msg_id in to_mark:
+            await db.execute(
+                text("UPDATE chat_messages SET metadata_json=:meta WHERE id=:id"),
+                {"meta": meta_json, "id": msg_id},
+            )
         await db.commit()
         return results
 
@@ -878,7 +906,8 @@ async def save_project(project) -> str:
                 text("""
                     UPDATE projects SET name=:name, genre=:genre, phase=:phase,
                         progress=:progress, proposal=:proposal, gdd=:gdd,
-                        code_path=:code_path, art_status=:art_status,
+                        code_path=:code_path, art_assets_path=:art_assets_path,
+                        art_status=:art_status,
                         music_status=:music_status,
                         qa_result=:qa_result, itch_url=:itch_url,
                         version=:version, awaiting_decision=:awaiting_decision,
@@ -894,6 +923,7 @@ async def save_project(project) -> str:
                     "proposal": json.dumps(project.proposal) if project.proposal else None,
                     "gdd": json.dumps(project.gdd) if project.gdd else None,
                     "code_path": project.code_path,
+                    "art_assets_path": project.art_assets_path,
                     "art_status": project.art_status,
                     "music_status": project.music_status,
                     "qa_result": json.dumps(project.qa_result) if project.qa_result else None,
@@ -907,10 +937,10 @@ async def save_project(project) -> str:
             await db.execute(
                 text("""
                     INSERT INTO projects (id, name, genre, phase, progress, proposal, gdd,
-                        code_path, art_status, music_status, qa_result, itch_url, version,
+                        code_path, art_assets_path, art_status, music_status, qa_result, itch_url, version,
                         awaiting_decision, created_at, updated_at)
                     VALUES (:id, :name, :genre, :phase, :progress, :proposal, :gdd,
-                        :code_path, :art_status, :music_status, :qa_result, :itch_url, :version,
+                        :code_path, :art_assets_path, :art_status, :music_status, :qa_result, :itch_url, :version,
                         :awaiting_decision, :created_at, :updated_at)
                 """),
                 {
@@ -922,6 +952,7 @@ async def save_project(project) -> str:
                     "proposal": json.dumps(project.proposal) if project.proposal else None,
                     "gdd": json.dumps(project.gdd) if project.gdd else None,
                     "code_path": project.code_path,
+                    "art_assets_path": project.art_assets_path,
                     "art_status": project.art_status,
                     "music_status": project.music_status,
                     "qa_result": json.dumps(project.qa_result) if project.qa_result else None,
@@ -1007,6 +1038,7 @@ def _row_to_project(d: dict) -> ProjectState:
         proposal=json.loads(d["proposal"]) if d.get("proposal") else None,
         gdd=json.loads(d["gdd"]) if d.get("gdd") else None,
         code_path=d.get("code_path"),
+        art_assets_path=d.get("art_assets_path", ""),
         art_status=d.get("art_status", "pending"),
         music_status=d.get("music_status", "pending"),
         qa_result=json.loads(d["qa_result"]) if d.get("qa_result") else None,
@@ -1174,6 +1206,27 @@ async def get_pending_tasks() -> list[TaskRecord]:
         return [_row_to_task(dict(r._mapping)) for r in rows.fetchall()]
 
 
+async def claim_next_task() -> TaskRecord | None:
+    engine = _get_engine()
+    async with AsyncSession(engine) as db:
+        now = datetime.now(timezone.utc).isoformat()
+        row = await db.execute(
+            text(
+                "UPDATE tasks SET status='running', started_at=:now "
+                "WHERE id = ("
+                "  SELECT id FROM tasks WHERE status='pending' ORDER BY created_at ASC LIMIT 1"
+                ") "
+                "RETURNING *"
+            ),
+            {"now": now},
+        )
+        claimed = row.fetchone()
+        await db.commit()
+        if claimed:
+            return _row_to_task(dict(claimed._mapping))
+        return None
+
+
 async def update_task_status(
     task_id: str,
     status: str,
@@ -1311,8 +1364,19 @@ async def update_project_build_path(project_id: str, build_path: str) -> None:
     async with AsyncSession(engine) as db:
         now = datetime.now(timezone.utc).isoformat()
         await db.execute(
-            text("UPDATE projects SET code_path=:bp, updated_at=:now WHERE id=:id"),
+            text("UPDATE projects SET build_path=:bp, updated_at=:now WHERE id=:id"),
             {"bp": build_path, "now": now, "id": project_id},
+        )
+        await db.commit()
+
+
+async def update_project_art_assets_path(project_id: str, art_assets_path: str) -> None:
+    engine = _get_engine()
+    async with AsyncSession(engine) as db:
+        now = datetime.now(timezone.utc).isoformat()
+        await db.execute(
+            text("UPDATE projects SET art_assets_path=:aap, updated_at=:now WHERE id=:id"),
+            {"aap": art_assets_path, "now": now, "id": project_id},
         )
         await db.commit()
 
@@ -1402,6 +1466,16 @@ async def count_completed_tasks(project_id: str) -> int:
         rows = await db.execute(
             text("SELECT COUNT(*) FROM tasks WHERE project_id=:pid AND status='completed'"),
             {"pid": project_id},
+        )
+        return rows.scalar() or 0
+
+
+async def count_completed_tasks_by_type(project_id: str, task_type: str) -> int:
+    engine = _get_engine()
+    async with AsyncSession(engine) as db:
+        rows = await db.execute(
+            text("SELECT COUNT(*) FROM tasks WHERE project_id=:pid AND task_type=:task_type AND status='completed'"),
+            {"pid": project_id, "task_type": task_type},
         )
         return rows.scalar() or 0
 
