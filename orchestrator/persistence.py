@@ -72,7 +72,7 @@ async def ensure_tables():
         await db.execute(text("""
             CREATE TABLE IF NOT EXISTS game_versions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                project_id INTEGER NOT NULL,
+                project_id TEXT NOT NULL,
                 version TEXT NOT NULL,
                 gdd_snapshot TEXT,
                 changelog TEXT DEFAULT '',
@@ -477,7 +477,7 @@ async def mark_feedback_processed(feedback_ids: list[int]) -> None:
 # ── Game Versions ───────────────────────────────────────────────────────────
 
 async def save_game_version(
-    project_id: int,
+    project_id: str,
     version: str,
     gdd_snapshot: dict | None = None,
     changelog: str = "",
@@ -502,18 +502,18 @@ async def save_game_version(
             },
         )
         await db.execute(
-            text("UPDATE game_projects SET current_version = :ver, updated_at = :now WHERE id = :pid"),
+            text("UPDATE projects SET version = :ver, updated_at = :now WHERE id = :pid"),
             {"ver": version, "now": datetime.now(timezone.utc).isoformat(), "pid": project_id},
         )
         await db.commit()
         return result.lastrowid or 0
 
 
-async def get_latest_version(project_id: int) -> str:
+async def get_latest_version(project_id: str) -> str:
     engine = _get_engine()
     async with AsyncSession(engine) as db:
         row = await db.execute(
-            text("SELECT current_version FROM game_projects WHERE id = :pid"),
+            text("SELECT version FROM projects WHERE id = :pid"),
             {"pid": project_id},
         )
         result = row.fetchone()

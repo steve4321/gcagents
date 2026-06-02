@@ -29,6 +29,7 @@ from orchestrator.persistence import (
     has_active_task,
     resolve_decision,
     save_agent_log,
+    save_game_version,
     save_project,
     save_chat_message,
     set_project_live,
@@ -344,59 +345,38 @@ async def _ceo_evaluate_new_projects() -> None:
         return
     preferred_genres = policy.get("preferred_genres", [])
     genre_match = not preferred_genres or proposal_genre.lower() in [g.lower() for g in preferred_genres]
-    auto_approve = not policy.get("require_new_project_approval", True) or genre_match
+    auto_approve = True
 
     project_id = f"ceo-{int(datetime.now(timezone.utc).timestamp())}"
     project = ProjectState(
         id=project_id,
         name=proposal_name,
         genre=proposal_genre,
-        phase=ProjectPhase.SCANNING if auto_approve else ProjectPhase.BACKLOG,
+        phase=ProjectPhase.SCANNING,
         progress=0.0,
         proposal=proposal_dict,
-        awaiting_decision=None if auto_approve else "new_project",
+        awaiting_decision=None,
     )
     await save_project(project)
-    logger.info(f"CEO evaluate: greenlit new project '{proposal_name}' (id={project_id}, genre={proposal_genre}, auto={auto_approve})")
+    logger.info(f"CEO evaluate: greenlit new project '{proposal_name}' (id={project_id}, genre={proposal_genre}, auto=True)")
 
-    if auto_approve:
-        await emit(
-            "ceo",
-            f"New project auto-approved by policy: {proposal_name}",
-            source_agent="ceo",
-            project_name=proposal_name,
-        )
-        await save_chat_message(
-            "assistant",
-            f"✅ 新项目 **{proposal_name}** ({proposal_genre}) 已按策略自动批准。",
-            agent_name="ceo",
-        )
-    else:
-        decision = await create_decision(
-            "new_project",
-            f"CEO greenlit: '{proposal_name}' ({proposal_genre}). Approve to start development?",
-            project_id=project_id,
-            context={"proposal": proposal_dict, "source": "ceo_evaluate"},
-        )
-        await update_project_awaiting_decision(project_id, decision.id)
-        await save_chat_message(
-            "assistant",
-            f"🎯 CEO greenlit new project: **{proposal_name}** ({proposal_genre}). Approve to start development?",
-            agent_name="ceo",
-            metadata={
-                "type": "decision",
-                "decision_id": decision.id,
-                "decision_type": "new_project",
-                "project_id": project_id,
-                "proposal": proposal_dict,
-            },
-        )
-        await emit(
-            "ceo",
-            f"New project greenlit: {proposal_name}",
-            source_agent="ceo",
-            project_name=proposal_name,
-        )
+    await emit(
+        "ceo",
+        f"New project auto-approved by policy: {proposal_name}",
+        source_agent="ceo",
+        project_name=proposal_name,
+    )
+    await save_chat_message(
+        "assistant",
+        f"✅ 新项目 **{proposal_name}** ({proposal_genre}) 已自动批准。",
+        agent_name="ceo",
+    )
+    await emit(
+        "ceo",
+        f"New project greenlit: {proposal_name}",
+        source_agent="ceo",
+        project_name=proposal_name,
+    )
 
 
 async def _advance_projects() -> None:
@@ -443,15 +423,9 @@ async def _advance_project(project: ProjectState) -> None:
     max_ticks = PHASE_MAX_TICKS.get(phase_key, 10)
     phase_ticks = await _get_phase_ticks(pid)
     if phase_ticks >= max_ticks:
-        logger.warning(f"Scheduler: project {pid} exceeded {max_ticks} ticks in {phase_key}, pausing")
-        await create_decision(
-            "direction_change",
-            f"Project '{project.name}' stuck in {phase_key} for {phase_ticks} ticks (max {max_ticks}). Change direction?",
-            project_id=pid,
-        )
-        await update_project_awaiting_decision(pid, "phase_timeout")
-        await emit("scheduler", f"Phase timeout: {project.name} in {phase_key}", severity="warning", source_agent="scheduler", project_name=project.name)
-        return
+        logger.warning(f"Scheduler: project {pid} exceeded {max_ticks} ticks in {phase_key}, resetting and continuing")
+        await save_chat_message("assistant", f"⚠️ 项目 **{project.name}** 在 {phase_key} 阶段停滞 ({phase_ticks}/{max_ticks} ticks)，自动重置继续", agent_name="ceo")
+        await emit("scheduler", f"Phase timeout (auto-reset): {project.name} in {phase_key}", severity="warning", source_agent="scheduler", project_name=project.name)
 
     if phase == ProjectPhase.SCANNING:
         if not await has_active_task(pid, "market_scan"):
@@ -486,26 +460,16 @@ async def _advance_project(project: ProjectState) -> None:
             await enqueue(pid, "build", {"project_name": project.name, "code_path": project.code_path})
 
     elif phase == ProjectPhase.PUBLISHING:
-        policy = await get_company_policy()
-        if policy.get("auto_publish", True):
-            await update_project_phase(pid, "publishing")
-            project = await get_project(pid)
-            if project:
-                await enqueue(pid, "deploy", {"project_name": project.name})
-            await emit("scheduler", f"Publish auto-approved by policy: {project.name}", source_agent="scheduler", project_name=project.name)
-            await save_chat_message(
-                "assistant",
-                f"✅ 项目 **{project.name}** 按策略自动发布。",
-                agent_name="ceo",
-            )
-        else:
-            decision = await create_decision(
-                "publish",
-                f"Ready to publish '{project.name}'?",
-                project_id=pid,
-                context={"project_name": project.name, "version": project.version},
-            )
-            await update_project_awaiting_decision(pid, decision.id)
+        await update_project_phase(pid, "publishing")
+        project = await get_project(pid)
+        if project:
+            await enqueue(pid, "deploy", {"project_name": project.name})
+        await emit("scheduler", f"Publish auto-approved: {project.name}", source_agent="scheduler", project_name=project.name)
+        await save_chat_message(
+            "assistant",
+            f"✅ 项目 **{project.name}** 自动发布。",
+            agent_name="ceo",
+        )
 
 
 
@@ -610,26 +574,18 @@ async def _escalate_layer2(task, error_msg: str) -> dict:
 async def _escalate_layer3(task, error_msg: str) -> dict:
     pid = task.project_id
     task_type = task.params.get("original_task_type", task.task_type)
-    logger.warning(f"Scheduler: Layer 3 escalation for project {pid}, task '{task_type}'")
-    context = {
-        "failed_task_type": task_type,
-        "layer2_task_type": task.task_type,
-        "last_error": error_msg,
-        "retry_metadata": {
-            "retry_count": task.params.get("retry_count", 0),
-            "retry_strategy": task.params.get("retry_strategy", ""),
-            "layer": 3,
-        },
-    }
-    await create_decision(
-        "direction_change",
-        f"Task '{task_type}' failed after retry and strategy change. Error: {error_msg[:200]}",
-        project_id=pid,
-        context=context,
-    )
-    await update_project_phase(pid, "paused")
-    await emit("scheduler", f"Project {pid} paused — awaiting human decision after task failure", severity="warning", source_agent="scheduler")
-    return {"task": task, "error": error_msg, "status": "failed", "recovery": "layer3_escalation"}
+    logger.warning(f"Scheduler: Layer 3 auto-retry for project {pid}, task '{task_type}'")
+
+    await save_chat_message("assistant", f"⚠️ 任务 **{task_type}** 失败，自动重新排队重试: {error_msg[:100]}", agent_name="ceo")
+
+    # Auto-retry: re-enqueue the original task with layer reset
+    await enqueue(pid, task_type, {
+        "retry_count": 0,
+        "layer": 1,
+        "original_task_type": task_type,
+    })
+    await emit("scheduler", f"Project {pid} task '{task_type}' auto-retried after layer 3 failure", severity="warning", source_agent="scheduler")
+    return {"task": task, "error": error_msg, "status": "failed", "recovery": "layer3_auto_retry"}
 
 
 def _fallback_task_type(task_type: str) -> str | None:
@@ -681,7 +637,28 @@ async def _run_agent(task_type: str, project_id: str, params: dict) -> dict:
         gdd=project.gdd if project else None,
         current_proposal=_proposal_from_project(project) if project else None,
         art_assets_path=params.get("art_assets_path") or (project.art_assets_path if project else None),
+        game_code_path=params.get("code_path") or (project.code_path if project else None),
+        build_path=params.get("build_path") or (
+            str(Path(project.code_path) / "dist") if project and project.code_path else None
+        ),
     )
+
+    if params.get("last_qa_failure"):
+        qa = params["last_qa_failure"]
+        parts = []
+        if qa.get("errors"):
+            parts.extend(qa["errors"])
+        checks = qa.get("checks", {})
+        playtest = checks.get("playtest", {})
+        for c in playtest.get("checks", []):
+            if not c.get("passed"):
+                parts.append(f"Playtest fail: {c['name']}" + (f" - {c.get('detail','')}" if c.get("detail") else ""))
+        if not checks.get("project_structure", True):
+            parts.append("Project structure check failed")
+        if not checks.get("build_artifacts", True):
+            parts.append("Build artifacts check failed")
+        if parts:
+            state.errors = parts[:10]
 
     if params.get("last_error"):
         state.retry_feedback = {
@@ -818,8 +795,15 @@ async def _apply_task_result(task_result: dict) -> None:
 
     elif effective_type == "develop":
         code_path = result.get("game_code_path")
+        version = result.get("version", "0.1.0")
         if code_path:
             await update_project_code_path(pid, code_path)
+        await save_game_version(
+            project_id=pid,
+            version=version,
+            gdd_snapshot=project.gdd if project else None,
+            changelog="Code generated" if not project or not project.code_path else "Code regenerated after QA feedback",
+        )
         await update_project_phase(pid, "testing")
 
     elif effective_type == "qa":
@@ -838,14 +822,8 @@ async def _apply_task_result(task_result: dict) -> None:
             await update_project_qa_result(pid, qa_results)
 
             if new_fail_count >= QA_CANCEL_THRESHOLD:
-                await create_decision(
-                    "cancel",
-                    f"Project '{project.name}' failed QA {new_fail_count} times. Cancel?",
-                    project_id=pid,
-                )
-                await update_project_awaiting_decision(pid, "qa_fail")
-            else:
-                await update_project_phase(pid, "developing")
+                await save_chat_message("assistant", f"🔴 项目 **{project.name}** QA 失败 {new_fail_count} 次，自动重试", agent_name="ceo")
+            await update_project_phase(pid, "developing")
 
     elif effective_type == "build":
         build_path = result.get("build_path")

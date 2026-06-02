@@ -494,7 +494,7 @@ function renderDecisionHistoryList() {
   container.innerHTML = html;
 }
 
-function _renderQaBadge(qaResult) {
+function _renderQaBadge(qaResult, projectId) {
   if (!qaResult || typeof qaResult !== 'object') return '';
   const failCount = qaResult.fail_count || 0;
   const passed = qaResult.passed;
@@ -502,18 +502,52 @@ function _renderQaBadge(qaResult) {
     return '<div class="qa-badge qa-passed">QA ✓ PASS</div>';
   }
   if (passed === false) {
-    const errors = (qaResult.errors || []).join('; ');
-    const checks = qaResult.checks || {};
-    const playtest = checks.playtest || {};
-    const score = playtest.score;
-    const failedChecks = (playtest.checks || []).filter(c => !c.passed).map(c => c.name).join(', ');
-    let tip = '';
-    if (failedChecks) tip = `Failed: ${failedChecks}`;
-    else if (errors) tip = errors.slice(0, 100);
-    const scoreStr = score !== undefined ? ` (${(score * 100).toFixed(0)}%)` : '';
-    return `<div class="qa-badge qa-failed" title="${escapeHtml(tip)}">QA ✗ FAIL${scoreStr}${failCount > 0 ? ` ×${failCount}` : ''}</div>`;
+    const scoreStr = qaResult.checks?.playtest?.score !== undefined
+      ? ` (${(qaResult.checks.playtest.score * 100).toFixed(0)}%)` : '';
+    return `<div class="qa-badge qa-failed" data-qa-project="${escapeHtml(projectId || '')}">QA ✗ FAIL${scoreStr}${failCount > 0 ? ` ×${failCount}` : ''}</div>`;
+  }
+  if (failCount > 0 && passed === null) {
+    return `<div class="qa-badge qa-failed" data-qa-project="${escapeHtml(projectId || '')}">QA ✗ ×${failCount}</div>`;
   }
   return '';
+}
+
+function _renderQaDetail(qaResult) {
+  if (!qaResult || typeof qaResult !== 'object') return '';
+  const lines = [];
+
+  if (qaResult.errors && qaResult.errors.length > 0) {
+    lines.push('<div class="qa-section"><div class="qa-section-title">Errors</div>');
+    qaResult.errors.forEach(e => { lines.push(`<div class="qa-error-item">${escapeHtml(e)}</div>`); });
+    lines.push('</div>');
+  }
+
+  const checks = qaResult.checks || {};
+  const playtest = checks.playtest;
+  if (playtest) {
+    lines.push('<div class="qa-section"><div class="qa-section-title">Playtest</div>');
+    if (playtest.score !== undefined) lines.push(`<div class="qa-score">Score: ${(playtest.score * 100).toFixed(0)}%</div>`);
+    if (playtest.duration_ms) lines.push(`<div class="qa-meta">Duration: ${playtest.duration_ms}ms</div>`);
+    if (playtest.checks) {
+      playtest.checks.forEach(c => {
+        const icon = c.passed ? '✓' : '✗';
+        const cls = c.passed ? 'qa-check-pass' : 'qa-check-fail';
+        lines.push(`<div class="qa-check ${cls}">${icon} ${escapeHtml(c.name)}${c.detail ? ': ' + escapeHtml(c.detail) : ''}</div>`);
+      });
+    }
+    lines.push('</div>');
+  }
+
+  const structOk = checks.project_structure;
+  const buildOk = checks.build_artifacts;
+  if (structOk !== undefined || buildOk !== undefined) {
+    lines.push('<div class="qa-section"><div class="qa-section-title">Checks</div>');
+    if (structOk !== undefined) lines.push(`<div class="qa-check ${structOk ? 'qa-check-pass' : 'qa-check-fail'}">${structOk ? '✓' : '✗'} Project Structure</div>`);
+    if (buildOk !== undefined) lines.push(`<div class="qa-check ${buildOk ? 'qa-check-pass' : 'qa-check-fail'}">${buildOk ? '✓' : '✗'} Build Artifacts</div>`);
+    lines.push('</div>');
+  }
+
+  return lines.length ? `<div class="qa-detail-panel">${lines.join('')}</div>` : '';
 }
 
 async function renderProjectBoard() {
@@ -560,7 +594,8 @@ async function renderProjectBoard() {
                   <div class="project-progress-bar" style="width:${p.progress || 0}%"></div>
                 </div>
                 <div class="project-phase-indicator">${phaseLabels[phase] || phase}</div>
-                ${_renderQaBadge(p.qa_result)}
+                ${_renderQaBadge(p.qa_result, p.id)}
+                ${_renderQaDetail(p.qa_result)}
                 <div class="project-card-actions">
                   <button class="card-btn card-btn-docs" onclick="openProjectDocs('${p.id}', '${escapeHtml(p.name)}')">📄 文档</button>
                 </div>
@@ -810,10 +845,10 @@ function _renderGameCard(p, di, isLive) {
           <span class="build-stat-label">size</span>
         </div>
       </div>
-      ${_renderQaBadge(p.qa_result)}
-      <div class="game-footer">
+      ${_renderQaBadge(p.qa_result, p.id)}
+      ${_renderQaDetail(p.qa_result)}<div class="game-footer">
         <div class="game-footer-left">
-          <button class="play-btn" data-play="${escapeHtml(p.name || '')}" title="Preview Game">▶</button>
+          <button class="play-btn" data-play-dir="${escapeHtml((p.code_path || '').split('/').pop())}" data-play="${escapeHtml(p.name || '')}" title="Preview Game">▶</button>
         </div>
         ${p.itch_url ? `
           <a href="${p.itch_url}" class="game-url" target="_blank" rel="noopener">
@@ -843,19 +878,21 @@ async function renderProjects() {
     const diskMap = {};
     gamesOnDisk.forEach(g => { diskMap[g.name] = g; });
 
-    const builtProjects = projects.filter(p => p.code_path || diskMap[p.name]);
-    const liveProjects = builtProjects.filter(p => p.phase === 'live');
-    const devProjects = builtProjects.filter(p => p.phase !== 'live');
+    const diskInfo = (p) => {
+      const dirName = (p.code_path || '').split('/').pop();
+      const d = diskMap[dirName] || {};
+      return { files: d.file_count || 0, size: d.dist_size || 0 };
+    };
 
-    if (builtProjects.length === 0) {
+    const liveProjects = projects.filter(p => p.phase === 'live');
+    const builtProjects = projects.filter(p =>
+      p.phase !== 'live' && p.code_path && p.phase !== 'developing' && p.phase !== 'designing'
+    );
+
+    if (liveProjects.length === 0 && builtProjects.length === 0) {
       showEmpty(container, 'No game projects yet. They will appear as the pipeline creates them.');
       return;
     }
-
-    const diskInfo = (p) => {
-      const d = diskMap[p.name] || {};
-      return { files: d.file_count || 0, size: d.dist_size || 0 };
-    };
 
     let html = '';
 
@@ -869,10 +906,10 @@ async function renderProjects() {
       html += '</div>';
     }
 
-    if (devProjects.length > 0) {
+    if (builtProjects.length > 0) {
       html += '<div class="games-section-label"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.77-3.77a6 6 0 01-7.94 7.94l-6.91 6.91a2.12 2.12 0 01-3-3l6.91-6.91a6 6 0 017.94-7.94l-3.76 3.76z"/></svg> Built (not published)</div>';
       html += '<div class="games-grid">';
-      devProjects.forEach(p => {
+      builtProjects.forEach(p => {
         const di = diskInfo(p);
         html += _renderGameCard(p, di, false);
       });
@@ -909,8 +946,9 @@ async function renderProjects() {
 
     container.querySelectorAll('.play-btn').forEach(btn => {
       btn.addEventListener('click', () => {
+        const dir = btn.dataset.playDir;
         const gameName = btn.dataset.play;
-        if (gameName) openPreview(gameName);
+        if (dir) openPreview(dir, gameName);
       });
     });
 
@@ -1155,12 +1193,12 @@ async function checkPipelineStatus() {
   }
 }
 
-function openPreview(gameName) {
+function openPreview(dirName, gameName) {
   const modal = $('#previewModal');
   const iframe = $('#previewIframe');
   if (!modal || !iframe) return;
 
-  iframe.src = `/games-preview/${gameName}/dist/index.html`;
+  iframe.src = `/games-preview/${encodeURIComponent(dirName)}/dist/index.html`;
   modal.classList.add('visible');
 }
 
