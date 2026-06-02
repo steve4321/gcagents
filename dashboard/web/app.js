@@ -155,6 +155,8 @@ async function renderAgents() {
       const log = logsMap[agent.id] || {};
       const status = log.status || 'idle';
       const statusClass = getStatusClass(status);
+      const projectName = log.project_name || '';
+      const error = log.error || '';
 
       html += `
         <div class="agent-card status-${statusClass}">
@@ -167,6 +169,8 @@ async function renderAgents() {
             <span class="agent-status-badge ${statusClass}">${status}</span>
           </div>
           <div class="agent-name">${agent.name}</div>
+          ${projectName ? `<div class="agent-project">${escapeHtml(projectName)}</div>` : ''}
+          ${error ? `<div class="agent-error" title="${escapeHtml(error)}">⚠ ${escapeHtml(error).slice(0, 40)}${error.length > 40 ? '...' : ''}</div>` : ''}
           <div class="agent-stats">
             <div class="agent-stat">
               <div class="agent-stat-value" data-tooltip="${fmtDuration(log.duration_ms) || '--'}">${fmtDuration(log.duration_ms) || '--'}</div>
@@ -190,6 +194,326 @@ async function renderAgents() {
   } catch (err) {
     showError(container, 'Failed to load agents', err.message);
   }
+}
+
+async function renderAnalytics() {
+  const container = $('#analyticsGrid');
+  if (!container) return;
+
+  container.innerHTML = '<div class="analytics-card skeleton" style="height:120px"></div>'.repeat(3);
+
+  try {
+    const data = await fetchJSON(`${API_BASE}/analytics/summary`);
+    const projects = data.projects || [];
+
+    if (projects.length === 0) {
+      container.innerHTML = '<div class="analytics-empty">No published games yet.</div>';
+      return;
+    }
+
+    let totalPlays = 0;
+    let totalSessions = 0;
+    let totalFeedback = 0;
+    const genreStats = {};
+
+    projects.forEach(p => {
+      const metrics = p.metrics || {};
+      const plays = metrics.play_count?.value || 0;
+      const sessions = metrics.avg_session_s?.value || 0;
+      totalPlays += plays;
+      totalSessions += sessions;
+      totalFeedback += p.feedback_count || 0;
+
+      const genre = p.genre || 'Unknown';
+      if (!genreStats[genre]) genreStats[genre] = { plays: 0, count: 0 };
+      genreStats[genre].plays += plays;
+      genreStats[genre].count += 1;
+    });
+
+    const avgSession = totalPlays > 0 ? Math.round(totalSessions / totalPlays) : 0;
+
+    container.innerHTML = `
+      <div class="analytics-card">
+        <div class="analytics-card-value">${totalPlays.toLocaleString()}</div>
+        <div class="analytics-card-label">Total Plays</div>
+        <div class="analytics-card-sub">${projects.length} games</div>
+      </div>
+      <div class="analytics-card">
+        <div class="analytics-card-value">${avgSession}s</div>
+        <div class="analytics-card-label">Avg Session</div>
+        <div class="analytics-card-sub">per player</div>
+      </div>
+      <div class="analytics-card">
+        <div class="analytics-card-value">${totalFeedback}</div>
+        <div class="analytics-card-label">Total Feedback</div>
+        <div class="analytics-card-sub">${projects.length > 0 ? Math.round(totalFeedback / projects.length) : 0} avg/game</div>
+      </div>
+    `;
+
+  } catch (err) {
+    container.innerHTML = '<div class="analytics-empty">Failed to load analytics.</div>';
+  }
+}
+
+async function renderFinance() {
+  const summaryContainer = $('#financeSummary');
+  const breakdownContainer = $('#financeBreakdown');
+  if (!summaryContainer || !breakdownContainer) return;
+
+  summaryContainer.innerHTML = '<div class="finance-card skeleton" style="height:80px"></div>'.repeat(4);
+
+  try {
+    const data = await fetchJSON(`${API_BASE}/finance/summary?days=30`);
+    const usage = data.usage || {};
+    const budgets = data.budgets || [];
+
+    const totalCost = usage.total_cost || 0;
+    const totalTokens = usage.total_tokens || 0;
+    const byModel = usage.by_model || {};
+    const dailyTrend = usage.daily_trend || [];
+
+    const modelNames = Object.keys(byModel);
+    const topModel = modelNames.length > 0
+      ? modelNames.reduce((a, b) => (byModel[a].cost > byModel[b].cost ? a : b))
+      : null;
+
+    const monthlyBudget = budgets.find(b => b.category === 'monthly');
+    const budgetLimit = monthlyBudget ? monthlyBudget.budget_limit_usd : 0;
+    const budgetSpent = monthlyBudget ? monthlyBudget.spent_usd : totalCost;
+    const budgetPct = budgetLimit > 0 ? Math.round((budgetSpent / budgetLimit) * 100) : 0;
+
+    summaryContainer.innerHTML = `
+      <div class="finance-card">
+        <div class="finance-card-value">$${totalCost.toFixed(2)}</div>
+        <div class="finance-card-label">Total Cost (30d)</div>
+      </div>
+      <div class="finance-card">
+        <div class="finance-card-value">${(totalTokens / 1000).toFixed(1)}K</div>
+        <div class="finance-card-label">Total Tokens</div>
+      </div>
+      <div class="finance-card">
+        <div class="finance-card-value">${topModel || '--'}</div>
+        <div class="finance-card-label">Top Model</div>
+        <div class="finance-card-sub">$${topModel ? byModel[topModel].cost.toFixed(3) : '0'}</div>
+      </div>
+      <div class="finance-card">
+        <div class="finance-card-value">${budgetLimit > 0 ? budgetPct + '%' : '--'}</div>
+        <div class="finance-card-label">Budget Used</div>
+        ${budgetLimit > 0 ? `<div class="finance-card-sub">$${budgetSpent.toFixed(2)} / $${budgetLimit}</div>` : ''}
+      </div>
+    `;
+
+    if (dailyTrend.length > 0) {
+      const maxCost = Math.max(...dailyTrend.map(d => d.cost), 0.001);
+      const barWidth = Math.floor(100 / dailyTrend.length);
+
+      let chartHtml = '<div class="finance-chart">';
+      chartHtml += '<div class="finance-chart-bars">';
+      dailyTrend.forEach(d => {
+        const height = Math.max(4, (d.cost / maxCost) * 100);
+        chartHtml += `<div class="finance-chart-bar" style="width:${barWidth}%;height:${height}%" title="$${d.cost.toFixed(3)} on ${d.day}"></div>`;
+      });
+      chartHtml += '</div>';
+      chartHtml += '<div class="finance-chart-labels">';
+      chartHtml += `<span>$0</span><span>$${maxCost.toFixed(3)}</span>`;
+      chartHtml += '</div>';
+      chartHtml += '</div>';
+      breakdownContainer.innerHTML = chartHtml;
+    } else {
+      breakdownContainer.innerHTML = '<div class="finance-empty">No cost data yet.</div>';
+    }
+
+  } catch (err) {
+    summaryContainer.innerHTML = '<div class="finance-empty">Failed to load finance data.</div>';
+    breakdownContainer.innerHTML = '';
+  }
+}
+
+async function loadFeedbackProjects() {
+  const select = $('#feedbackProjectSelect');
+  if (!select) return;
+
+  try {
+    const projects = await fetchJSON(`${API_BASE}/orchestrator/projects`);
+    const gameProjects = await fetchJSON(`${API_BASE}/analytics/summary`);
+    const allProjects = [
+      ...(projects || []).map(p => ({ id: p.id, name: p.name })),
+      ...(gameProjects.projects || []).map(p => ({ id: p.id, name: p.name })),
+    ];
+
+    const seen = new Set();
+    const unique = allProjects.filter(p => {
+      if (seen.has(p.id)) return false;
+      seen.add(p.id);
+      return true;
+    });
+
+    select.innerHTML = '<option value="">All Projects</option>' +
+      unique.map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('');
+
+    select.onchange = () => renderFeedback(select.value);
+  } catch (err) {
+    select.innerHTML = '<option value="">Failed to load projects</option>';
+  }
+}
+
+async function renderFeedback(projectId) {
+  const container = $('#feedbackList');
+  if (!container) return;
+
+  container.innerHTML = '<div class="feedback-loading">Loading feedback...</div>';
+
+  try {
+    let feedback = [];
+    if (projectId) {
+      feedback = await fetchJSON(`${API_BASE}/feedback/${projectId}`);
+    } else {
+      const projects = await fetchJSON(`${API_BASE}/analytics/summary`);
+      for (const p of (projects.projects || [])) {
+        const fb = await fetchJSON(`${API_BASE}/feedback/${p.id}`);
+        if (fb && fb.length > 0) {
+          feedback = feedback.concat(fb.map(f => ({ ...f, project_name: p.name })));
+        }
+      }
+    }
+
+    if (!feedback || feedback.length === 0) {
+      container.innerHTML = '<div class="feedback-empty">No feedback yet.</div>';
+      return;
+    }
+
+    feedback.sort((a, b) => new Date(b.posted_at || b.created_at) - new Date(a.posted_at || a.created_at));
+
+    const categoryColors = {
+      bug: 'var(--accent-red)',
+      feature_request: 'var(--accent-cyan)',
+      praise: 'var(--accent-green)',
+      question: 'var(--accent-amber)',
+      other: 'var(--text-muted)',
+    };
+
+    let html = '';
+    feedback.forEach(f => {
+      const cat = f.category || 'other';
+      const catColor = categoryColors[cat] || 'var(--text-muted)';
+      html += `
+        <div class="feedback-item">
+          <div class="feedback-item-header">
+            <span class="feedback-author">${escapeHtml(f.author || 'Anonymous')}</span>
+            ${f.project_name ? `<span class="feedback-project">${escapeHtml(f.project_name)}</span>` : ''}
+            <span class="feedback-category" style="color:${catColor}">${cat}</span>
+          </div>
+          <div class="feedback-text">${escapeHtml(f.text || '')}</div>
+          ${f.ai_analysis ? `<div class="feedback-analysis">${escapeHtml(f.ai_analysis)}</div>` : ''}
+          <div class="feedback-meta">
+            <span class="feedback-votes">👍 ${f.vote_count || 0}</span>
+            <span class="feedback-time">${fmtRelativeTime(f.posted_at || f.created_at)}</span>
+          </div>
+        </div>
+      `;
+    });
+
+    container.innerHTML = html;
+
+  } catch (err) {
+    container.innerHTML = '<div class="feedback-empty">Failed to load feedback.</div>';
+  }
+}
+
+let allDecisionHistory = [];
+
+async function loadDecisionHistory() {
+  const container = $('#decisionHistoryList');
+  if (!container) return;
+
+  container.innerHTML = '<div class="decision-history-empty">Loading decisions...</div>';
+
+  try {
+    allDecisionHistory = await fetchJSON(`${API_BASE}/decisions/history`);
+    renderDecisionHistoryList();
+  } catch (err) {
+    container.innerHTML = '<div class="decision-history-empty">Failed to load decision history.</div>';
+  }
+}
+
+function renderDecisionHistoryList() {
+  const container = $('#decisionHistoryList');
+  if (!container) return;
+
+  const typeFilter = $('#decisionTypeFilter')?.value || '';
+  const statusFilter = $('#decisionStatusFilter')?.value || '';
+
+  let filtered = allDecisionHistory;
+  if (typeFilter) filtered = filtered.filter(d => d.decision_type === typeFilter);
+  if (statusFilter) filtered = filtered.filter(d => d.status === statusFilter);
+
+  if (filtered.length === 0) {
+    container.innerHTML = '<div class="decision-history-empty">No matching decisions.</div>';
+    return;
+  }
+
+  const typeLabels = {
+    new_project: 'New Project',
+    publish: 'Publish',
+    cancel: 'Cancel',
+    budget_overrun: 'Budget Overrun',
+    direction_change: 'Direction Change',
+  };
+
+  const typeColors = {
+    new_project: 'var(--accent-cyan)',
+    publish: 'var(--accent-green)',
+    cancel: 'var(--accent-red)',
+    budget_overrun: 'var(--accent-amber)',
+    direction_change: 'var(--accent-purple)',
+  };
+
+  let html = '';
+  filtered.forEach(d => {
+    const type = d.decision_type || 'unknown';
+    const typeLabel = typeLabels[type] || type;
+    const typeColor = typeColors[type] || 'var(--text-muted)';
+    const statusClass = d.status === 'approved' ? 'status-approved' : 'status-rejected';
+
+    html += `
+      <div class="decision-history-item ${statusClass}">
+        <div class="decision-history-header">
+          <span class="decision-history-type" style="color:${typeColor}">${typeLabel}</span>
+          <span class="decision-history-status ${statusClass}">${d.status}</span>
+        </div>
+        <div class="decision-history-question">${escapeHtml(d.question || '')}</div>
+        ${d.human_response ? `<div class="decision-history-response">Response: ${escapeHtml(d.human_response)}</div>` : ''}
+        <div class="decision-history-meta">
+          <span>${fmtRelativeTime(d.resolved_at)}</span>
+          ${d.project_id ? `<span>Project #${d.project_id}</span>` : ''}
+        </div>
+      </div>
+    `;
+  });
+
+  container.innerHTML = html;
+}
+
+function _renderQaBadge(qaResult) {
+  if (!qaResult || typeof qaResult !== 'object') return '';
+  const failCount = qaResult.fail_count || 0;
+  const passed = qaResult.passed;
+  if (passed === true) {
+    return '<div class="qa-badge qa-passed">QA ✓ PASS</div>';
+  }
+  if (passed === false) {
+    const errors = (qaResult.errors || []).join('; ');
+    const checks = qaResult.checks || {};
+    const playtest = checks.playtest || {};
+    const score = playtest.score;
+    const failedChecks = (playtest.checks || []).filter(c => !c.passed).map(c => c.name).join(', ');
+    let tip = '';
+    if (failedChecks) tip = `Failed: ${failedChecks}`;
+    else if (errors) tip = errors.slice(0, 100);
+    const scoreStr = score !== undefined ? ` (${(score * 100).toFixed(0)}%)` : '';
+    return `<div class="qa-badge qa-failed" title="${escapeHtml(tip)}">QA ✗ FAIL${scoreStr}${failCount > 0 ? ` ×${failCount}` : ''}</div>`;
+  }
+  return '';
 }
 
 async function renderProjectBoard() {
@@ -236,6 +560,7 @@ async function renderProjectBoard() {
                   <div class="project-progress-bar" style="width:${p.progress || 0}%"></div>
                 </div>
                 <div class="project-phase-indicator">${phaseLabels[phase] || phase}</div>
+                ${_renderQaBadge(p.qa_result)}
                 <div class="project-card-actions">
                   <button class="card-btn card-btn-docs" onclick="openProjectDocs('${p.id}', '${escapeHtml(p.name)}')">📄 文档</button>
                 </div>
@@ -265,14 +590,29 @@ async function renderTaskMonitor() {
     // Filter out system tasks, only show project-specific tasks
     const projectTasks = (tasks || []).filter(t => t.project_id && t.project_id !== '__system__');
 
-    if (!projectTasks || projectTasks.length === 0) {
+    const seen = new Map();
+    const uniqueTasks = [];
+    for (const t of projectTasks) {
+      const key = `${t.project_id}:${t.task_type}`;
+      const existing = seen.get(key);
+      if (!existing || new Date(t.created_at) > new Date(existing.created_at)) {
+        if (existing) {
+          const idx = uniqueTasks.indexOf(existing);
+          if (idx !== -1) uniqueTasks.splice(idx, 1);
+        }
+        seen.set(key, t);
+        uniqueTasks.push(t);
+      }
+    }
+
+    if (!uniqueTasks || uniqueTasks.length === 0) {
       container.innerHTML = '';
       showEmpty(container.parentElement, '没有活跃任务。任务会在项目推进时出现。', '<path d="M12 20V10"/><path d="M18 20V4"/><path d="M6 20v-4"/>');
       return;
     }
 
     let html = '<div class="task-list">';
-    projectTasks.forEach(task => {
+    uniqueTasks.forEach(task => {
       const statusClass = getStatusClass(task.status);
       const isRunning = task.status === 'running' || task.status === 'pending';
       html += `
@@ -447,6 +787,45 @@ async function renderMarket() {
   }
 }
 
+function _renderGameCard(p, di, isLive) {
+  const phaseLabel = isLive ? 'live' : (p.phase || 'unknown');
+  return `
+    <div class="game-card ${isLive ? 'game-card-live' : 'game-card-built'}" data-game-name="${escapeHtml(p.name || '')}">
+      <div class="game-header">
+        <div class="game-info">
+          <div class="game-name">${escapeHtml(p.name || 'Unnamed Game')}</div>
+          <div class="game-genre">${escapeHtml(p.genre || 'General')}</div>
+        </div>
+        <span class="game-status-tag ${isLive ? 'status-live' : 'status-built'}">${isLive ? 'Live' : phaseLabel}</span>
+      </div>
+      <div class="game-build-info">
+        <div class="build-stat">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>
+          <span class="build-stat-value">${di.files}</span>
+          <span class="build-stat-label">files</span>
+        </div>
+        <div class="build-stat">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          <span class="build-stat-value">${fmtFileSize(di.size)}</span>
+          <span class="build-stat-label">size</span>
+        </div>
+      </div>
+      ${_renderQaBadge(p.qa_result)}
+      <div class="game-footer">
+        <div class="game-footer-left">
+          <button class="play-btn" data-play="${escapeHtml(p.name || '')}" title="Preview Game">▶</button>
+        </div>
+        ${p.itch_url ? `
+          <a href="${p.itch_url}" class="game-url" target="_blank" rel="noopener">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+            itch.io
+          </a>
+        ` : ''}
+      </div>
+    </div>
+  `;
+}
+
 async function renderProjects() {
   const container = $('#projectsContent');
   if (!container) return;
@@ -459,69 +838,47 @@ async function renderProjects() {
       fetchJSON(`${API_BASE}/projects`)
     ]);
 
-    const games = statusData.games || [];
+    const gamesOnDisk = statusData.games || [];
     const projects = projectsData || [];
+    const diskMap = {};
+    gamesOnDisk.forEach(g => { diskMap[g.name] = g; });
 
-    if (games.length === 0 && projects.length === 0) {
+    const builtProjects = projects.filter(p => p.code_path || diskMap[p.name]);
+    const liveProjects = builtProjects.filter(p => p.phase === 'live');
+    const devProjects = builtProjects.filter(p => p.phase !== 'live');
+
+    if (builtProjects.length === 0) {
       showEmpty(container, 'No game projects yet. They will appear as the pipeline creates them.');
       return;
     }
 
-    const projectsMap = {};
-    projects.forEach(p => { projectsMap[p.id] = p; });
+    const diskInfo = (p) => {
+      const d = diskMap[p.name] || {};
+      return { files: d.file_count || 0, size: d.dist_size || 0 };
+    };
 
-    const allGames = [...games];
-    if (projects.length > games.length) {
-      projects.forEach(p => {
-        if (!allGames.find(g => g.name === p.name)) {
-          allGames.push({ name: p.name, status: p.status });
-        }
+    let html = '';
+
+    if (liveProjects.length > 0) {
+      html += '<div class="games-section-label"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg> Live on itch.io</div>';
+      html += '<div class="games-grid">';
+      liveProjects.forEach(p => {
+        const di = diskInfo(p);
+        html += _renderGameCard(p, di, true);
       });
+      html += '</div>';
     }
 
-    let html = '<div class="games-grid">';
-    allGames.forEach(game => {
-      const project = projects.find(p => p.name === game.name) || {};
-      const statusClass = getStatusClass(game.status);
+    if (devProjects.length > 0) {
+      html += '<div class="games-section-label"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.77-3.77a6 6 0 01-7.94 7.94l-6.91 6.91a2.12 2.12 0 01-3-3l6.91-6.91a6 6 0 017.94-7.94l-3.76 3.76z"/></svg> Built (not published)</div>';
+      html += '<div class="games-grid">';
+      devProjects.forEach(p => {
+        const di = diskInfo(p);
+        html += _renderGameCard(p, di, false);
+      });
+      html += '</div>';
+    }
 
-      html += `
-        <div class="game-card" data-game-name="${game.name || ''}">
-          <div class="game-header">
-            <div class="game-info">
-              <div class="game-name">${game.name || 'Unnamed Game'}</div>
-              <div class="game-genre">${project.genre || game.genre || 'General'}</div>
-            </div>
-            <span class="game-status ${statusClass}">${game.status || 'unknown'}</span>
-          </div>
-          <div class="game-build-info">
-            <div class="build-stat">
-              <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>
-              <span class="build-stat-value">${game.file_count || 0}</span>
-              <span class="build-stat-label">files</span>
-            </div>
-            <div class="build-stat">
-              <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-              <span class="build-stat-value">${fmtFileSize(game.dist_size)}</span>
-              <span class="build-stat-label">size</span>
-            </div>
-          </div>
-          <div class="game-footer">
-            <div class="game-footer-left">
-              <button class="play-btn" data-play="${game.name || ''}" title="Preview Game">▶</button>
-            </div>
-            ${project.itch_url ? `
-              <a href="${project.itch_url}" class="game-url" target="_blank" rel="noopener">
-                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
-                Play on itch.io
-              </a>
-            ` : '<span></span>'}
-            ${project.id ? `<button class="gdd-toggle" data-project-id="${project.id}">View GDD</button>` : ''}
-          </div>
-          ${project.id ? `<div class="gdd-preview" id="gdd-preview-${project.id}"></div>` : ''}
-        </div>
-      `;
-    });
-    html += '</div>';
     container.innerHTML = html;
 
     container.querySelectorAll('.gdd-toggle').forEach(btn => {
@@ -1175,6 +1532,9 @@ async function refreshAll() {
   updateTimestamp();
   await Promise.allSettled([
     renderAgents(),
+    renderAnalytics(),
+    renderFinance(),
+    renderFeedback(),
     renderProjectBoard(),
     renderTaskMonitor(),
     renderMarket(),
@@ -1236,6 +1596,20 @@ function init() {
     previewCloseBtn.addEventListener('click', closePreview);
   }
 
+  loadFeedbackProjects();
+
+  const decisionTypeFilter = $('#decisionTypeFilter');
+  if (decisionTypeFilter) {
+    decisionTypeFilter.onchange = () => renderDecisionHistoryList();
+  }
+
+  const decisionStatusFilter = $('#decisionStatusFilter');
+  if (decisionStatusFilter) {
+    decisionStatusFilter.onchange = () => renderDecisionHistoryList();
+  }
+
+  loadDecisionHistory();
+
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       closePreview();
@@ -1247,7 +1621,11 @@ function init() {
   renderChat();
   loadEvents();
 
+  checkPipelineStatus();
+  pipelineStatusInterval = setInterval(checkPipelineStatus, PIPELINE_POLL_INTERVAL);
+
   refreshAll();
+  setInterval(refreshAll, REFRESH_INTERVAL);
 
   setInterval(() => {
     const btn = $('.refresh-btn');
@@ -1309,3 +1687,113 @@ async function submitPrototype() {
 
   btn.disabled = false;
 }
+
+let lastKnownPendingDecisions = 0;
+
+async function loadPolicy() {
+  try {
+    const policy = await fetchJSON(`${API_BASE}/policy`);
+    const budget = document.getElementById('policyBudget');
+    const genres = document.getElementById('policyGenres');
+    const autoPublish = document.getElementById('policyAutoPublish');
+    const autoCancel = document.getElementById('policyAutoCancel');
+    const requireApproval = document.getElementById('policyRequireApproval');
+    const workStart = document.getElementById('policyWorkStart');
+    const workEnd = document.getElementById('policyWorkEnd');
+    const devProjects = document.getElementById('policyDevProjects');
+    const liveProjects = document.getElementById('policyLiveProjects');
+    const timeout = document.getElementById('policyTimeout');
+    const timeoutAction = document.getElementById('policyTimeoutAction');
+
+    if (budget) budget.value = policy.budget_limit_usd || 5;
+    if (genres) genres.value = (policy.preferred_genres || []).join(', ');
+    if (autoPublish) autoPublish.checked = policy.auto_publish !== false;
+    if (autoCancel) autoCancel.checked = policy.auto_cancel !== false;
+    if (requireApproval) requireApproval.checked = policy.require_new_project_approval !== false;
+    if (workStart) workStart.value = policy.working_hours_start || 9;
+    if (workEnd) workEnd.value = policy.working_hours_end || 23;
+    if (devProjects) devProjects.value = policy.max_dev_projects || 3;
+    if (liveProjects) liveProjects.value = policy.max_live_projects || 5;
+    if (timeout) timeout.value = policy.decision_timeout_hours || 24;
+    if (timeoutAction) timeoutAction.value = policy.timeout_action || 'reject';
+  } catch (err) {
+    console.error('Failed to load policy:', err);
+  }
+}
+
+async function savePolicy() {
+  const btn = document.getElementById('policySaveBtn');
+  const status = document.getElementById('policyStatus');
+  if (!btn || !status) return;
+
+  const genresRaw = document.getElementById('policyGenres')?.value || '';
+  const genres = genresRaw.split(',').map(g => g.trim()).filter(g => g);
+
+  const policy = {
+    budget_limit_usd: parseFloat(document.getElementById('policyBudget')?.value) || 5,
+    preferred_genres: genres,
+    auto_publish: document.getElementById('policyAutoPublish')?.checked ?? true,
+    auto_cancel: document.getElementById('policyAutoCancel')?.checked ?? true,
+    require_new_project_approval: document.getElementById('policyRequireApproval')?.checked ?? true,
+    working_hours_start: parseInt(document.getElementById('policyWorkStart')?.value) || 9,
+    working_hours_end: parseInt(document.getElementById('policyWorkEnd')?.value) || 23,
+    max_dev_projects: parseInt(document.getElementById('policyDevProjects')?.value) || 3,
+    max_live_projects: parseInt(document.getElementById('policyLiveProjects')?.value) || 5,
+    decision_timeout_hours: parseInt(document.getElementById('policyTimeout')?.value) || 24,
+    timeout_action: document.getElementById('policyTimeoutAction')?.value || 'reject',
+  };
+
+  btn.disabled = true;
+  btn.textContent = 'Saving...';
+
+  try {
+    await fetchJSON(`${API_BASE}/policy`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(policy),
+    });
+    status.textContent = '✓ Saved';
+    status.className = 'policy-status success';
+    setTimeout(() => { status.textContent = ''; status.className = 'policy-status'; }, 2000);
+  } catch (err) {
+    status.textContent = '✗ Failed: ' + err.message;
+    status.className = 'policy-status error';
+  }
+
+  btn.disabled = false;
+  btn.textContent = 'Save Policy';
+}
+
+function requestNotificationPermission() {
+  if ('Notification' in window && Notification.permission === 'default') {
+    Notification.requestPermission();
+  }
+}
+
+function checkAndNotifyDecisions(pendingCount) {
+  if (pendingCount > lastKnownPendingDecisions && pendingCount > 0) {
+    if ('Notification' in window && Notification.permission === 'granted') {
+      new Notification('GCAgents', {
+        body: `${pendingCount} 个待决策 — 点击 Dashboard 查看`,
+        icon: '/favicon.ico',
+      });
+    }
+  }
+  lastKnownPendingDecisions = pendingCount;
+}
+
+async function checkPendingDecisions() {
+  try {
+    const decisions = await fetchJSON(`${API_BASE}/decisions`);
+    const pending = Array.isArray(decisions) ? decisions.length : 0;
+    checkAndNotifyDecisions(pending);
+  } catch {}
+}
+
+const originalInit = init;
+init = function() {
+  originalInit();
+  requestNotificationPermission();
+  loadPolicy();
+  setInterval(checkPendingDecisions, 30000);
+};

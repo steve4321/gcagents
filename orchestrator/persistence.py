@@ -205,6 +205,22 @@ async def ensure_tables():
             )
         """))
         await db.execute(text("""
+            CREATE TABLE IF NOT EXISTS company_policy (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                budget_limit_usd REAL DEFAULT 5.0,
+                preferred_genres TEXT DEFAULT '[]',
+                auto_publish INTEGER DEFAULT 1,
+                auto_cancel INTEGER DEFAULT 1,
+                require_new_project_approval INTEGER DEFAULT 1,
+                working_hours_start INTEGER DEFAULT 9,
+                working_hours_end INTEGER DEFAULT 23,
+                max_active_projects INTEGER DEFAULT 3,
+                decision_timeout_hours INTEGER DEFAULT 24,
+                timeout_action TEXT DEFAULT 'reject',
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        """))
+        await db.execute(text("""
             CREATE TABLE IF NOT EXISTS market_signals (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 source TEXT NOT NULL,
@@ -251,6 +267,12 @@ async def ensure_tables():
             await db.execute(text("ALTER TABLE projects ADD COLUMN feedback_count INTEGER DEFAULT 0"))
         if "art_assets_path" not in existing_cols:
             await db.execute(text("ALTER TABLE projects ADD COLUMN art_assets_path TEXT DEFAULT ''"))
+
+        policy_cols = {row[1] for row in (await db.execute(text("PRAGMA table_info(company_policy)"))).fetchall()}
+        if "max_dev_projects" not in policy_cols:
+            await db.execute(text("ALTER TABLE company_policy ADD COLUMN max_dev_projects INTEGER DEFAULT 3"))
+        if "max_live_projects" not in policy_cols:
+            await db.execute(text("ALTER TABLE company_policy ADD COLUMN max_live_projects INTEGER DEFAULT 5"))
 
         await db.execute(text("CREATE INDEX IF NOT EXISTS idx_projects_phase ON projects(phase)"))
         await db.execute(text("CREATE INDEX IF NOT EXISTS idx_projects_updated_at ON projects(updated_at)"))
@@ -891,6 +913,110 @@ async def get_recent_events(limit: int = 200, event_type: str = "") -> list[dict
         return [dict(r._mapping) for r in rows.fetchall()]
 
 
+# ── Company Policy ───────────────────────────────────────────────────────────
+
+async def get_company_policy() -> dict:
+    """Get the company policy (singleton row). Returns default policy if none exists."""
+    engine = _get_engine()
+    async with AsyncSession(engine) as db:
+        row = await db.execute(text("SELECT * FROM company_policy WHERE id = 1"))
+        result = row.fetchone()
+        if not result:
+            return {
+                "budget_limit_usd": 5.0,
+                "preferred_genres": [],
+                "auto_publish": True,
+                "auto_cancel": True,
+                "require_new_project_approval": True,
+                "working_hours_start": 9,
+                "working_hours_end": 23,
+                "max_active_projects": 3,
+                "max_dev_projects": 3,
+                "max_live_projects": 5,
+                "decision_timeout_hours": 24,
+                "timeout_action": "reject",
+            }
+        d = dict(result._mapping)
+        d["preferred_genres"] = json.loads(d.get("preferred_genres", "[]"))
+        d["auto_publish"] = bool(d.get("auto_publish", 1))
+        d["auto_cancel"] = bool(d.get("auto_cancel", 1))
+        d["require_new_project_approval"] = bool(d.get("require_new_project_approval", 1))
+        return d
+
+
+async def set_company_policy(policy: dict) -> None:
+    """Upsert the company policy (singleton row)."""
+    engine = _get_engine()
+    async with AsyncSession(engine) as db:
+        now = datetime.now(timezone.utc).isoformat()
+        existing = await db.execute(text("SELECT id FROM company_policy WHERE id = 1"))
+        if existing.fetchone():
+            await db.execute(
+                text("""
+                    UPDATE company_policy SET
+                        budget_limit_usd=:budget_limit_usd,
+                        preferred_genres=:preferred_genres,
+                        auto_publish=:auto_publish,
+                        auto_cancel=:auto_cancel,
+                        require_new_project_approval=:require_new_project_approval,
+                        working_hours_start=:working_hours_start,
+                        working_hours_end=:working_hours_end,
+                        max_active_projects=:max_active_projects,
+                        max_dev_projects=:max_dev_projects,
+                        max_live_projects=:max_live_projects,
+                        decision_timeout_hours=:decision_timeout_hours,
+                        timeout_action=:timeout_action,
+                        updated_at=:updated_at
+                    WHERE id = 1
+                """),
+                {
+                    "budget_limit_usd": policy.get("budget_limit_usd", 5.0),
+                    "preferred_genres": json.dumps(policy.get("preferred_genres", [])),
+                    "auto_publish": 1 if policy.get("auto_publish", True) else 0,
+                    "auto_cancel": 1 if policy.get("auto_cancel", True) else 0,
+                    "require_new_project_approval": 1 if policy.get("require_new_project_approval", True) else 0,
+                    "working_hours_start": policy.get("working_hours_start", 9),
+                    "working_hours_end": policy.get("working_hours_end", 23),
+                    "max_active_projects": policy.get("max_active_projects", 3),
+                    "max_dev_projects": policy.get("max_dev_projects", 3),
+                    "max_live_projects": policy.get("max_live_projects", 5),
+                    "decision_timeout_hours": policy.get("decision_timeout_hours", 24),
+                    "timeout_action": policy.get("timeout_action", "reject"),
+                    "updated_at": now,
+                },
+            )
+        else:
+            await db.execute(
+                text("""
+                    INSERT INTO company_policy
+                        (id, budget_limit_usd, preferred_genres, auto_publish, auto_cancel,
+                         require_new_project_approval, working_hours_start, working_hours_end,
+                         max_active_projects, max_dev_projects, max_live_projects,
+                         decision_timeout_hours, timeout_action, updated_at)
+                    VALUES (1, :budget_limit_usd, :preferred_genres, :auto_publish, :auto_cancel,
+                            :require_new_project_approval, :working_hours_start, :working_hours_end,
+                            :max_active_projects, :max_dev_projects, :max_live_projects,
+                            :decision_timeout_hours, :timeout_action, :updated_at)
+                """),
+                {
+                    "budget_limit_usd": policy.get("budget_limit_usd", 5.0),
+                    "preferred_genres": json.dumps(policy.get("preferred_genres", [])),
+                    "auto_publish": 1 if policy.get("auto_publish", True) else 0,
+                    "auto_cancel": 1 if policy.get("auto_cancel", True) else 0,
+                    "require_new_project_approval": 1 if policy.get("require_new_project_approval", True) else 0,
+                    "working_hours_start": policy.get("working_hours_start", 9),
+                    "working_hours_end": policy.get("working_hours_end", 23),
+                    "max_active_projects": policy.get("max_active_projects", 3),
+                    "max_dev_projects": policy.get("max_dev_projects", 3),
+                    "max_live_projects": policy.get("max_live_projects", 5),
+                    "decision_timeout_hours": policy.get("decision_timeout_hours", 24),
+                    "timeout_action": policy.get("timeout_action", "reject"),
+                    "updated_at": now,
+                },
+            )
+        await db.commit()
+
+
 # ── Projects (multi-project) ──────────────────────────────────────────────────
 
 async def save_project(project) -> str:
@@ -1127,6 +1253,23 @@ async def resolve_decision(decision_id: str, response: str) -> None:
         await db.commit()
 
 
+async def get_decision_history(limit: int = 50) -> list[dict]:
+    engine = _get_engine()
+    async with AsyncSession(engine) as db:
+        rows = (await db.execute(
+            text("""
+                SELECT id, project_id, decision_type, question, options, context,
+                       status, human_response, created_at, resolved_at
+                FROM decisions
+                WHERE status IN ('approved', 'rejected')
+                ORDER BY resolved_at DESC
+                LIMIT :lim
+            """),
+            {"lim": limit},
+        )).fetchall()
+    return [dict(r._mapping) for r in rows]
+
+
 def _row_to_decision(d: dict) -> DecisionPoint:
     from shared.models import DecisionPoint, DecisionType, DecisionStatus
     return DecisionPoint(
@@ -1204,6 +1347,16 @@ async def get_pending_tasks() -> list[TaskRecord]:
             text("SELECT * FROM tasks WHERE status IN ('pending', 'running') ORDER BY created_at ASC")
         )
         return [_row_to_task(dict(r._mapping)) for r in rows.fetchall()]
+
+
+async def has_active_task(project_id: str, task_type: str) -> bool:
+    engine = _get_engine()
+    async with AsyncSession(engine) as db:
+        row = await db.execute(
+            text("SELECT 1 FROM tasks WHERE project_id=:pid AND task_type=:type AND status IN ('pending','running') LIMIT 1"),
+            {"pid": project_id, "type": task_type},
+        )
+        return row.fetchone() is not None
 
 
 async def claim_next_task() -> TaskRecord | None:
@@ -1671,3 +1824,44 @@ async def get_company_memory(limit: int = 50) -> list[dict]:
                 pass
         memories.append(d)
     return memories
+
+
+async def get_analytics_summary() -> dict:
+    engine = _get_engine()
+    async with AsyncSession(engine) as db:
+        projects = (await db.execute(
+            text("""
+                SELECT id, name, genre, status, feedback_count, current_version
+                FROM game_projects
+                WHERE status IN ('live', 'updating')
+                ORDER BY updated_at DESC
+            """)
+        )).fetchall()
+
+        metrics_rows = (await db.execute(
+            text("""
+                SELECT project_id, metric_name,
+                       SUM(metric_value) as total_value,
+                       COUNT(*) as sample_count
+                FROM game_metrics
+                GROUP BY project_id, metric_name
+            """)
+        )).fetchall()
+
+        metrics_by_project: dict[int, dict] = {}
+        for row in metrics_rows:
+            pid = row._mapping["project_id"]
+            if pid not in metrics_by_project:
+                metrics_by_project[pid] = {}
+            metrics_by_project[pid][row._mapping["metric_name"]] = {
+                "value": float(row._mapping["total_value"]),
+                "samples": int(row._mapping["sample_count"]),
+            }
+
+        result = []
+        for p in projects:
+            pd = dict(p._mapping)
+            pd["metrics"] = metrics_by_project.get(pd["id"], {})
+            result.append(pd)
+
+        return {"projects": result}

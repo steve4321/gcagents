@@ -20,11 +20,15 @@ from orchestrator.persistence import (
     count_completed_tasks_by_type,
     get_all_projects,
     get_api_usage_summary,
+    get_company_policy,
     get_latest_market_report,
     get_pending_decisions,
     get_pending_instructions,
     get_project,
     get_recent_completed_tasks,
+    has_active_task,
+    resolve_decision,
+    save_agent_log,
     save_project,
     save_chat_message,
     set_project_live,
@@ -68,6 +72,12 @@ CEO_EVALUATE_INTERVAL = _SCHED_CFG.get("ceo_evaluate_interval", 1)
 MAX_ACTIVE_PROJECTS = _SCHED_CFG.get("max_active_projects", 3)
 REPORT_INTERVAL = _SCHED_CFG.get("report_interval", 5)
 
+TASK_NODE_MAP = {
+    "market_scan": "scan", "design_game": "design", "art_gen": "art",
+    "generate_music": "music", "develop": "develop", "develop_simple": "develop",
+    "qa": "qa", "build": "build", "localize": "build", "deploy": "deploy",
+}
+
 _PAUSE_FLAG_PATH = os.path.join(tempfile.gettempdir(), "gcagents_paused")
 
 
@@ -108,8 +118,13 @@ async def scheduler_tick() -> dict | None:
 
     await _advance_projects()
 
-    task_result = await _execute_one_task()
-    if task_result:
+    policy = await get_company_policy()
+    max_concurrent = policy.get("max_dev_projects", 3)
+
+    for _ in range(max_concurrent):
+        task_result = await _execute_one_task()
+        if not task_result:
+            break
         await _apply_task_result(task_result)
         task = task_result["task"]
         pid = task.project_id
@@ -174,6 +189,10 @@ async def _handle_instruction(content: str) -> None:
 
 async def _resolve_answered_decisions() -> None:
     decisions = await get_pending_decisions()
+    policy = await get_company_policy()
+    timeout_hours = policy.get("decision_timeout_hours", 24)
+    timeout_action = policy.get("timeout_action", "reject")
+
     for d in decisions:
         if d.status.value != "pending":
             continue
@@ -186,6 +205,21 @@ async def _resolve_answered_decisions() -> None:
                 await _handle_approved_decision(resolved)
             elif response in ("reject", "rejected"):
                 await _handle_rejected_decision(resolved)
+        else:
+            created = d.created_at
+            if created:
+                now = datetime.now(timezone.utc)
+                if created.tzinfo is None:
+                    created = created.replace(tzinfo=timezone.utc)
+                hours_elapsed = (now - created).total_seconds() / 3600
+                if hours_elapsed >= timeout_hours:
+                    logger.info(f"Decision {d.id} timed out after {hours_elapsed:.1f}h, applying default: {timeout_action}")
+                    await resolve_decision(d.id, timeout_action)
+                    if timeout_action == "approve":
+                        await _handle_approved_decision(d)
+                    else:
+                        await _handle_rejected_decision(d)
+                    await emit("scheduler", f"Decision timed out: {d.question[:50]}", severity="warning", source_agent="scheduler")
 
 
 async def _handle_approved_decision(decision) -> None:
@@ -301,58 +335,101 @@ async def _ceo_evaluate_new_projects() -> None:
         logger.info(f"CEO evaluate: project '{proposal_name}' already exists, skipping")
         return
 
+    policy = await get_company_policy()
+    max_dev = policy.get("max_dev_projects", 3)
+    dev_phases = {"scanning", "designing", "developing", "testing", "building", "publishing"}
+    dev_count = sum(1 for p in existing if p.phase.value in dev_phases)
+    if dev_count >= max_dev:
+        logger.info(f"CEO evaluate: dev capacity reached ({dev_count}/{max_dev}), skipping '{proposal_name}'")
+        return
+    preferred_genres = policy.get("preferred_genres", [])
+    genre_match = not preferred_genres or proposal_genre.lower() in [g.lower() for g in preferred_genres]
+    auto_approve = not policy.get("require_new_project_approval", True) or genre_match
+
     project_id = f"ceo-{int(datetime.now(timezone.utc).timestamp())}"
     project = ProjectState(
         id=project_id,
         name=proposal_name,
         genre=proposal_genre,
-        phase=ProjectPhase.BACKLOG,
+        phase=ProjectPhase.SCANNING if auto_approve else ProjectPhase.BACKLOG,
         progress=0.0,
         proposal=proposal_dict,
-        awaiting_decision="new_project",
+        awaiting_decision=None if auto_approve else "new_project",
     )
     await save_project(project)
-    logger.info(f"CEO evaluate: greenlit new project '{proposal_name}' (id={project_id}, genre={proposal_genre})")
+    logger.info(f"CEO evaluate: greenlit new project '{proposal_name}' (id={project_id}, genre={proposal_genre}, auto={auto_approve})")
 
-    decision = await create_decision(
-        "new_project",
-        f"CEO greenlit: '{proposal_name}' ({proposal_genre}). Approve to start development?",
-        project_id=project_id,
-        context={"proposal": proposal_dict, "source": "ceo_evaluate"},
-    )
-    await update_project_awaiting_decision(project_id, decision.id)
-    await save_chat_message(
-        "assistant",
-        f"🎯 CEO greenlit new project: **{proposal_name}** ({proposal_genre}). Approve to start development?",
-        agent_name="ceo",
-        metadata={
-            "type": "decision",
-            "decision_id": decision.id,
-            "decision_type": "new_project",
-            "project_id": project_id,
-            "proposal": proposal_dict,
-        },
-    )
-    await emit(
-        "ceo",
-        f"New project greenlit: {proposal_name}",
-        source_agent="ceo",
-        project_name=proposal_name,
-    )
+    if auto_approve:
+        await emit(
+            "ceo",
+            f"New project auto-approved by policy: {proposal_name}",
+            source_agent="ceo",
+            project_name=proposal_name,
+        )
+        await save_chat_message(
+            "assistant",
+            f"✅ 新项目 **{proposal_name}** ({proposal_genre}) 已按策略自动批准。",
+            agent_name="ceo",
+        )
+    else:
+        decision = await create_decision(
+            "new_project",
+            f"CEO greenlit: '{proposal_name}' ({proposal_genre}). Approve to start development?",
+            project_id=project_id,
+            context={"proposal": proposal_dict, "source": "ceo_evaluate"},
+        )
+        await update_project_awaiting_decision(project_id, decision.id)
+        await save_chat_message(
+            "assistant",
+            f"🎯 CEO greenlit new project: **{proposal_name}** ({proposal_genre}). Approve to start development?",
+            agent_name="ceo",
+            metadata={
+                "type": "decision",
+                "decision_id": decision.id,
+                "decision_type": "new_project",
+                "project_id": project_id,
+                "proposal": proposal_dict,
+            },
+        )
+        await emit(
+            "ceo",
+            f"New project greenlit: {proposal_name}",
+            source_agent="ceo",
+            project_name=proposal_name,
+        )
 
 
 async def _advance_projects() -> None:
     """Advance all active (non-blocked) projects by enqueueing their next task."""
     projects = await get_all_projects()
-    active = [p for p in projects
-              if p.phase not in (ProjectPhase.BACKLOG, ProjectPhase.CANCELLED, ProjectPhase.LIVE, ProjectPhase.PAUSED)
-              and not p.awaiting_decision]
+    policy = await get_company_policy()
+    max_dev = policy.get("max_dev_projects", 3)
+    max_live = policy.get("max_live_projects", 5)
 
-    if len(active) > MAX_ACTIVE_PROJECTS:
-        active.sort(key=lambda p: p.progress or 0, reverse=True)
-        for p in active[MAX_ACTIVE_PROJECTS:]:
-            logger.debug(f"Scheduler: project {p.name} deferred ({len(active)} active, max {MAX_ACTIVE_PROJECTS})")
-        active = active[:MAX_ACTIVE_PROJECTS]
+    dev_phases = {ProjectPhase.SCANNING, ProjectPhase.DESIGNING, ProjectPhase.DEVELOPING,
+                  ProjectPhase.TESTING, ProjectPhase.BUILDING, ProjectPhase.PUBLISHING}
+
+    dev_projects = [p for p in projects
+                    if p.phase in dev_phases
+                    and not p.awaiting_decision]
+
+    live_projects = [p for p in projects
+                     if p.phase == ProjectPhase.LIVE
+                     and not p.awaiting_decision]
+
+    if len(dev_projects) > max_dev:
+        dev_projects.sort(key=lambda p: p.progress or 0, reverse=True)
+        for p in dev_projects[max_dev:]:
+            logger.debug(f"Scheduler: project {p.name} deferred ({len(dev_projects)} dev, max {max_dev})")
+        dev_projects = dev_projects[:max_dev]
+
+    if len(live_projects) > max_live:
+        live_projects.sort(key=lambda p: p.progress or 0, reverse=True)
+        for p in live_projects[max_live:]:
+            logger.debug(f"Scheduler: project {p.name} deferred ({len(live_projects)} live, max {max_live})")
+        live_projects = live_projects[:max_live]
+
+    active = dev_projects + live_projects
 
     for project in active:
         await _advance_project(project)
@@ -377,36 +454,58 @@ async def _advance_project(project: ProjectState) -> None:
         return
 
     if phase == ProjectPhase.SCANNING:
-        await enqueue(pid, "market_scan", {"project_name": project.name})
+        if not await has_active_task(pid, "market_scan"):
+            await enqueue(pid, "market_scan", {"project_name": project.name})
 
     elif phase == ProjectPhase.DESIGNING:
-        await enqueue(pid, "design_game", {"project_name": project.name, "genre": project.genre})
+        if not await has_active_task(pid, "design_game"):
+            await enqueue(pid, "design_game", {"project_name": project.name, "genre": project.genre})
 
     elif phase == ProjectPhase.DEVELOPING:
         if project.art_status != "done":
-            await enqueue(pid, "art_gen", {"project_name": project.name, "gdd": project.gdd})
+            if not await has_active_task(pid, "art_gen"):
+                await enqueue(pid, "art_gen", {"project_name": project.name, "gdd": project.gdd})
         elif project.music_status != "done":
-            await enqueue(pid, "generate_music", {"project_name": project.name, "gdd": project.gdd})
+            if not await has_active_task(pid, "generate_music"):
+                await enqueue(pid, "generate_music", {"project_name": project.name, "gdd": project.gdd})
         else:
-            params = {"project_name": project.name, "gdd": project.gdd}
-            if project.art_assets_path:
-                params["art_assets_path"] = project.art_assets_path
-            await enqueue(pid, "develop", params)
+            if not await has_active_task(pid, "develop"):
+                params = {"project_name": project.name, "gdd": project.gdd}
+                if project.art_assets_path:
+                    params["art_assets_path"] = project.art_assets_path
+                if project.qa_result and isinstance(project.qa_result, dict):
+                    params["last_qa_failure"] = project.qa_result
+                await enqueue(pid, "develop", params)
 
     elif phase == ProjectPhase.TESTING:
-        await enqueue(pid, "qa", {"project_name": project.name, "code_path": project.code_path})
+        if not await has_active_task(pid, "qa"):
+            await enqueue(pid, "qa", {"project_name": project.name, "code_path": project.code_path})
 
     elif phase == ProjectPhase.BUILDING:
-        await enqueue(pid, "build", {"project_name": project.name, "code_path": project.code_path})
+        if not await has_active_task(pid, "build"):
+            await enqueue(pid, "build", {"project_name": project.name, "code_path": project.code_path})
 
     elif phase == ProjectPhase.PUBLISHING:
-        decision = await create_decision(
-            "publish",
-            f"Ready to publish '{project.name}'?",
-            project_id=pid,
-            context={"project_name": project.name, "version": project.version},
-        )
-        await update_project_awaiting_decision(pid, decision.id)
+        policy = await get_company_policy()
+        if policy.get("auto_publish", True):
+            await update_project_phase(pid, "publishing")
+            project = await get_project(pid)
+            if project:
+                await enqueue(pid, "deploy", {"project_name": project.name})
+            await emit("scheduler", f"Publish auto-approved by policy: {project.name}", source_agent="scheduler", project_name=project.name)
+            await save_chat_message(
+                "assistant",
+                f"✅ 项目 **{project.name}** 按策略自动发布。",
+                agent_name="ceo",
+            )
+        else:
+            decision = await create_decision(
+                "publish",
+                f"Ready to publish '{project.name}'?",
+                project_id=pid,
+                context={"project_name": project.name, "version": project.version},
+            )
+            await update_project_awaiting_decision(pid, decision.id)
 
 
 
@@ -426,12 +525,23 @@ async def _execute_one_task() -> dict | None:
 
     logger.info(f"Scheduler: executing task '{task_type}' for project {pid} (layer={layer}, retry={retry_count})")
 
+    project = await get_project(pid) if pid != "__system__" else None
+    project_name = project.name if project else ""
+    node_name = TASK_NODE_MAP.get(task_type, task_type)
+    started_at = datetime.now(timezone.utc).isoformat()
+
     try:
         result = await _run_agent(task_type, pid, params)
         await complete_task(task.id, result)
+        duration = int((datetime.now(timezone.utc) - datetime.fromisoformat(started_at)).total_seconds() * 1000)
+        await save_agent_log(node_name, "completed", phase=task_type, duration_ms=duration,
+                             started_at=started_at, project_name=project_name)
         return {"task": task, "result": result, "status": "completed"}
     except Exception as e:
         error_msg = str(e)
+        duration = int((datetime.now(timezone.utc) - datetime.fromisoformat(started_at)).total_seconds() * 1000)
+        await save_agent_log(node_name, "failed", phase=task_type, error=error_msg, duration_ms=duration,
+                             started_at=started_at, project_name=project_name)
         logger.error(f"Scheduler: task '{task_type}' failed (layer={layer}, retry={retry_count}): {e}")
         await fail_task(task.id, error_msg)
         recovery = await _handle_retry_recovery(task, error_msg)
@@ -725,9 +835,9 @@ async def _apply_task_result(task_result: dict) -> None:
                 prev_fail_count = project.qa_result.get("fail_count", 0)
             new_fail_count = prev_fail_count + 1
             qa_results["fail_count"] = new_fail_count
+            await update_project_qa_result(pid, qa_results)
 
             if new_fail_count >= QA_CANCEL_THRESHOLD:
-                await update_project_qa_result(pid, qa_results)
                 await create_decision(
                     "cancel",
                     f"Project '{project.name}' failed QA {new_fail_count} times. Cancel?",
@@ -735,7 +845,6 @@ async def _apply_task_result(task_result: dict) -> None:
                 )
                 await update_project_awaiting_decision(pid, "qa_fail")
             else:
-                await update_project_qa_result(pid, {"fail_count": 0})
                 await update_project_phase(pid, "developing")
 
     elif effective_type == "build":
@@ -760,12 +869,12 @@ async def _apply_task_result(task_result: dict) -> None:
 
 
 async def _generate_reports() -> None:
-    """Generate periodic CEO report with project status and API usage."""
     if _TICK_COUNT % REPORT_INTERVAL != 0:
         return
 
     projects = await get_all_projects()
     active = [p for p in projects if p.phase not in (ProjectPhase.BACKLOG, ProjectPhase.CANCELLED, ProjectPhase.LIVE)]
+    live = [p for p in projects if p.phase == ProjectPhase.LIVE]
     pending = await get_pending_decisions()
     total = len(projects)
     active_count = len(active)
@@ -776,36 +885,37 @@ async def _generate_reports() -> None:
 
     recent_rows = await get_recent_completed_tasks()
 
+    policy = await get_company_policy()
+    budget_limit = policy.get("budget_limit_usd", 5.0)
+
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     lines = [
-        "📋 公司经营报告",
+        "📊 今日汇报",
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
         f"🕐 {now_str}  |  Tick #{_TICK_COUNT}",
         "",
-        f"📊 **概览**: {active_count} 个活跃项目 / {total} 个总计",
     ]
 
-    if active:
+    if live:
+        lines.append("✅ **已上线**:")
+        for p in live:
+            lines.append(f"  • {p.name}")
         lines.append("")
-        lines.append("🏗 **活跃项目**:")
+
+    if active:
+        lines.append("🔄 **进行中**:")
         for p in active:
             phase_val = p.phase.value if hasattr(p.phase, "value") else str(p.phase)
             progress_str = f"{p.progress:.0%}" if p.progress is not None else "0%"
             lines.append(f"  • {p.name} — {phase_val} ({progress_str})")
-
-    if recent_rows:
         lines.append("")
-        lines.append("✅ **近期完成任务**:")
-        for r in recent_rows:
-            ts = r["completed_at"][:16] if r["completed_at"] else "?"
-            lines.append(f"  • [{ts}] {r['task_type']} ({r['project_id'][:20]})")
 
     pending_count = len(pending) if pending else 0
-    lines.append("")
-    lines.append(f"⏳ **待决策**: {pending_count} 项")
+    if pending_count > 0:
+        lines.append(f"📋 **待决策**: {pending_count} 项")
+        lines.append("")
 
-    lines.append("")
-    lines.append(f"💰 **API 使用**: {total_calls:,} 次调用  |  ${total_cost:.4f}")
+    lines.append(f"💰 **本月支出**: ${total_cost:.2f} / ${budget_limit:.2f} ({total_cost/budget_limit*100:.0f}%)")
 
     report = "\n".join(lines)
     await save_chat_message("assistant", report, agent_name="ceo", metadata={"type": "report"})
