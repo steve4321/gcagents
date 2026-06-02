@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import sys
 
 from loguru import logger
 from rich.console import Console
@@ -35,7 +34,7 @@ async def run_single_cycle() -> dict | None:
         if isinstance(project_name, dict):
             project_name = project_name.get("name", "N/A")
 
-        console.print(f"\n[bold]Cycle Complete[/bold]")
+        console.print("\n[bold]Cycle Complete[/bold]")
         console.print(f"  Final Phase: [yellow]{final_phase}[/yellow]")
         if project_name != "N/A":
             console.print(f"  Project: [cyan]{project_name}[/cyan]")
@@ -126,7 +125,6 @@ def cli() -> None:
 
 async def _run_scan_only() -> None:
     from agents.research.scanner import scan_market
-    from shared.config import load_sources
 
     state = CompanyState()
     result = await scan_market(state)

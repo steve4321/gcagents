@@ -5,6 +5,7 @@ const PIPELINE_FAST_REFRESH = 5000;
 let pipelineRunning = false;
 let pipelineStatusInterval = null;
 let foreverActive = false;
+let schedulerActive = false;
 const PIPELINE_PHASES = [
   { id: 'scan', label: 'Scan', icon: 'scan' },
   { id: 'evaluate', label: 'Evaluate', icon: 'evaluate' },
@@ -206,8 +207,12 @@ async function renderProjectBoard() {
       return;
     }
 
-    const phases = ['backlog', 'design', 'develop', 'test', 'build', 'live'];
-    const phaseLabels = { backlog: 'Backlog', design: 'Design', develop: 'Develop', test: 'Test', build: 'Build', live: 'Live' };
+    const phases = ['backlog', 'scanning', 'designing', 'developing', 'testing', 'building', 'publishing', 'live'];
+    const phaseLabels = {
+      backlog: 'Backlog', scanning: 'Scanning', designing: 'Design',
+      developing: 'Develop', testing: 'Test', building: 'Build',
+      publishing: 'Publish', live: 'Live', paused: 'Paused', cancelled: 'Cancelled',
+    };
 
     let html = '<div class="project-board">';
     phases.forEach(phase => {
@@ -231,6 +236,9 @@ async function renderProjectBoard() {
                   <div class="project-progress-bar" style="width:${p.progress || 0}%"></div>
                 </div>
                 <div class="project-phase-indicator">${phaseLabels[phase] || phase}</div>
+                <div class="project-card-actions">
+                  <button class="card-btn card-btn-docs" onclick="openProjectDocs('${p.id}', '${escapeHtml(p.name)}')">📄 文档</button>
+                </div>
               </div>
             `).join('') : '<div class="board-column-empty">No projects</div>'}
           </div>
@@ -254,14 +262,17 @@ async function renderTaskMonitor() {
   try {
     const tasks = await fetchJSON(`${API_BASE}/orchestrator/tasks`);
 
-    if (!tasks || tasks.length === 0) {
+    // Filter out system tasks, only show project-specific tasks
+    const projectTasks = (tasks || []).filter(t => t.project_id && t.project_id !== '__system__');
+
+    if (!projectTasks || projectTasks.length === 0) {
       container.innerHTML = '';
-      showEmpty(container.parentElement, 'No active tasks. Tasks will appear as projects progress.', '<path d="M12 20V10"/><path d="M18 20V4"/><path d="M6 20v-4"/>');
+      showEmpty(container.parentElement, '没有活跃任务。任务会在项目推进时出现。', '<path d="M12 20V10"/><path d="M18 20V4"/><path d="M6 20v-4"/>');
       return;
     }
 
     let html = '<div class="task-list">';
-    tasks.forEach(task => {
+    projectTasks.forEach(task => {
       const statusClass = getStatusClass(task.status);
       const isRunning = task.status === 'running' || task.status === 'pending';
       html += `
@@ -299,7 +310,28 @@ async function renderMarket() {
       fetchJSON(`${API_BASE}/market/latest`)
     ]);
 
-    const analysis = reportData?.raw_analysis || 'No analysis available yet. The market scanner will populate this as it runs.';
+    const analysis = reportData?.raw_analysis || '暂无分析数据。市场扫描器运行后会自动填充。';
+    let analysisHtml = '';
+    try {
+      const analysisData = typeof analysis === 'string' ? JSON.parse(analysis) : analysis;
+      if (Array.isArray(analysisData)) {
+        analysisHtml = analysisData.map(item => `
+          <div class="analysis-item">
+            <h4>${escapeHtml(item.name || '未命名')}</h4>
+            <p><strong>类型:</strong> ${escapeHtml(item.genre || '未知')}</p>
+            <p>${escapeHtml(item.description || '')}</p>
+            ${item.estimated_dev_hours ? `<p><strong>预估开发时间:</strong> ${item.estimated_dev_hours} 小时</p>` : ''}
+            ${item.market_opportunity_score ? `<p><strong>市场机会评分:</strong> ${item.market_opportunity_score}</p>` : ''}
+          </div>
+        `).join('');
+      } else if (typeof analysisData === 'object') {
+        analysisHtml = `<pre>${escapeHtml(JSON.stringify(analysisData, null, 2))}</pre>`;
+      } else {
+        analysisHtml = `<p>${escapeHtml(String(analysisData))}</p>`;
+      }
+    } catch (e) {
+      analysisHtml = `<p>${escapeHtml(analysis)}</p>`;
+    }
     const opportunities = (reportData?.opportunities || []).slice(0, 3);
     const signals = (signalsData || []).slice(0, 20);
 
@@ -344,25 +376,25 @@ async function renderMarket() {
     grid.innerHTML = `
       <div class="market-analysis">
         <div class="market-analysis-header">
-          <span class="market-analysis-title">AI Analysis</span>
-          <span class="market-analysis-badge">${reportData?.signals_count || 0} signals</span>
+          <span class="market-analysis-title">市场分析</span>
+          <span class="market-analysis-badge">${reportData?.signals_count || 0} 个信号</span>
         </div>
-        <div class="market-analysis-content">${analysis}</div>
+        <div class="market-analysis-content">${analysisHtml}</div>
       </div>
       <div class="market-sources-section">
-        <div class="sources-title">Source Health</div>
-        <div class="market-sources">${sourceBadges || '<div class="source-badge inactive">No sources active</div>'}</div>
+        <div class="sources-title">数据源状态</div>
+        <div class="market-sources">${sourceBadges || '<div class="source-badge inactive">暂无活跃数据源</div>'}</div>
       </div>
       <div class="opportunities-section">
-        <div class="opportunities-title">Top Opportunities</div>
+        <div class="opportunities-title">最佳机会</div>
         ${opportunities.length > 0 ? opportunities.map(opp => `
           <div class="opportunity-card">
             <div class="opportunity-header">
-              <span class="opportunity-name">${opp.name || 'Unnamed'}</span>
+              <span class="opportunity-name">${opp.name || '未命名'}</span>
               <span class="opportunity-score">${(opp.market_opportunity_score || 0).toFixed(1)}</span>
             </div>
-            <div class="opportunity-genre">${opp.genre || 'General'}${getTrendBadge(opp.genre || '')}</div>
-            <div class="opportunity-description">${opp.description || 'No description available.'}</div>
+            <div class="opportunity-genre">${opp.genre || '综合'}${getTrendBadge(opp.genre || '')}</div>
+            <div class="opportunity-description">${opp.description || '暂无描述'}</div>
             <div class="opportunity-meta">
               <span>
                 <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
@@ -378,18 +410,18 @@ async function renderMarket() {
         `).join('') : '<div class="empty-state"><div class="empty-message">No opportunities detected yet.</div></div>'}
       </div>
       <div class="signals-section">
-        <div class="signals-title">Latest Signals</div>
+        <div class="signals-title">最新信号</div>
         <div class="signals-table-container">
           ${signals.length > 0 ? `
             <table class="signals-table">
               <thead>
                 <tr>
-                  <th>Source</th>
-                  <th>Type</th>
-                  <th>Title</th>
-                  <th>Genre</th>
-                  <th>Score</th>
-                  <th>Time</th>
+                  <th>来源</th>
+                  <th>类型</th>
+                  <th>标题</th>
+                  <th>类型</th>
+                  <th>评分</th>
+                  <th>时间</th>
                 </tr>
               </thead>
               <tbody>
@@ -405,7 +437,7 @@ async function renderMarket() {
                 `).join('')}
               </tbody>
             </table>
-          ` : '<div class="empty-state"><div class="empty-message">No signals captured yet.</div></div>'}
+          ` : '<div class="empty-state"><div class="empty-message">暂无信号数据</div></div>'}
         </div>
       </div>
     `;
@@ -540,7 +572,7 @@ async function renderMemory() {
     const memories = await fetchJSON(`${API_BASE}/memory`);
 
     if (!memories || memories.length === 0) {
-      showEmpty(container, 'No company memories yet. They will appear as the system learns.', '<path d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>');
+      showEmpty(container, 'Company Memory stores lessons learned from completed projects (what worked, what failed, market insights). Memories will appear here after the first project finishes.', '<path d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>');
       return;
     }
 
@@ -639,6 +671,63 @@ async function toggleForever() {
   }
 }
 
+async function toggleScheduler() {
+  const btn = $('#startSchedulerBtn');
+  const stopBtn = $('#stopSchedulerBtn');
+  if (!btn) return;
+
+  if (schedulerActive) {
+    btn.disabled = true;
+    btn.textContent = '下班中...';
+    try {
+      await fetchJSON(`${API_BASE}/pipeline/stop`, { method: 'POST' });
+    } catch { /* ignore */ }
+    schedulerActive = false;
+    btn.classList.remove('active');
+    btn.textContent = '💼 开始上班';
+    btn.disabled = false;
+    if (stopBtn) stopBtn.style.display = 'none';
+  } else {
+    btn.disabled = true;
+    btn.textContent = '启动中...';
+    try {
+      await fetchJSON(`${API_BASE}/pipeline/run-scheduler?interval=60`, { method: 'POST' });
+      schedulerActive = true;
+      btn.classList.add('active');
+      btn.textContent = '💼 运行中';
+      if (stopBtn) stopBtn.style.display = 'inline-flex';
+    } catch (err) {
+      console.error('Failed to start scheduler:', err);
+      alert('Failed to start scheduler: ' + err.message);
+      btn.textContent = '💼 开始上班';
+    } finally {
+      btn.disabled = false;
+    }
+  }
+}
+
+async function toggleSchedulerPause() {
+  const stopBtn = $('#stopSchedulerBtn');
+  if (!stopBtn) return;
+  const isPaused = stopBtn.dataset.paused === 'true';
+  try {
+    if (isPaused) {
+      await fetchJSON(`${API_BASE}/scheduler/resume`, { method: 'POST' });
+      stopBtn.dataset.paused = 'false';
+      stopBtn.textContent = '⏸ 下班';
+      stopBtn.title = 'Pause scheduler (CEO stops creating new projects, existing ones continue)';
+    } else {
+      await fetchJSON(`${API_BASE}/scheduler/pause`, { method: 'POST' });
+      stopBtn.dataset.paused = 'true';
+      stopBtn.textContent = '▶ 上班';
+      stopBtn.title = 'Resume scheduler (CEO will start creating new projects again)';
+    }
+  } catch (err) {
+    console.error('Pause toggle failed:', err);
+    alert('Pause toggle failed: ' + err.message);
+  }
+}
+
 async function checkPipelineStatus() {
   const btn = $('#runPipelineBtn');
   const foreverBtn = $('#foreverToggleBtn');
@@ -658,7 +747,19 @@ async function checkPipelineStatus() {
       }
     }
 
-    if (status.mode === 'forever') {
+    const schedulerBtn = $('#startSchedulerBtn');
+    if (schedulerBtn) {
+      schedulerActive = status.scheduler_running;
+      if (schedulerActive) {
+        schedulerBtn.classList.add('active');
+        schedulerBtn.textContent = '🏢 上班中';
+      } else {
+        schedulerBtn.classList.remove('active');
+        schedulerBtn.textContent = '💼 开始上班';
+      }
+    }
+
+    if (status.mode === 'scheduler') {
       btn.classList.add('running');
       btn.textContent = 'Running...';
       pipelineRunning = true;
@@ -713,6 +814,148 @@ function closePreview() {
 
   modal.classList.remove('visible');
   setTimeout(() => { iframe.src = ''; }, 300);
+}
+
+async function openProjectDocs(projectId, projectName) {
+  const modal = $('#docModal');
+  const title = $('#docModalTitle');
+  const body = $('#docModalBody');
+  if (!modal) return;
+
+  title.textContent = `${projectName} — 项目文档`;
+  body.innerHTML = '<div class="skeleton" style="height:100px"></div>';
+  modal.style.display = 'flex';
+
+  try {
+    const docs = await fetchJSON(`${API_BASE}/projects/${projectId}/documents`);
+    if (!docs || docs.length === 0) {
+      body.innerHTML = '<div class="empty-state">暂无文档</div>';
+      return;
+    }
+
+    let html = '<div class="doc-list">';
+    docs.forEach(doc => {
+      if (doc.available) {
+        html += `
+          <div class="doc-item">
+            <div class="doc-header" onclick="this.parentElement.classList.toggle('expanded')">
+              <span class="doc-icon">📄</span>
+              <span class="doc-title">${escapeHtml(doc.title)}</span>
+              <span class="doc-type-badge">${doc.type}</span>
+              <span class="doc-toggle">▼</span>
+            </div>
+            <div class="doc-content">
+              ${renderDocContent(doc)}
+            </div>
+          </div>
+        `;
+      } else {
+        html += `
+          <div class="doc-item doc-unavailable">
+            <div class="doc-header">
+              <span class="doc-icon">⬜</span>
+              <span class="doc-title">${escapeHtml(doc.title)}</span>
+              <span class="doc-type-badge">${doc.type}</span>
+              <span class="doc-status">未生成</span>
+            </div>
+          </div>
+        `;
+      }
+    });
+    html += '</div>';
+    body.innerHTML = html;
+  } catch (err) {
+    body.innerHTML = `<div class="error-state">加载失败: ${err.message}</div>`;
+  }
+}
+
+function renderDocContent(doc) {
+  const content = doc.content;
+  if (!content) return '<em>空</em>';
+
+  if (typeof content === 'string') {
+    return `<pre>${escapeHtml(content)}</pre>`;
+  }
+
+  if (doc.type === 'gdd' && typeof content === 'object') {
+    let html = '';
+    if (content.title) html += `<h4>${escapeHtml(content.title)}</h4>`;
+    if (content.summary) html += `<p>${escapeHtml(content.summary)}</p>`;
+    if (content.genre) html += `<p><strong>类型:</strong> ${escapeHtml(content.genre)}</p>`;
+    if (content.core_loop) {
+      html += '<h5>核心循环</h5><ul>';
+      (content.core_loop || []).forEach(item => {
+        html += `<li>${escapeHtml(typeof item === 'string' ? item : item.name || JSON.stringify(item))}</li>`;
+      });
+      html += '</ul>';
+    }
+    if (content.scenes) {
+      html += '<h5>场景</h5><ul>';
+      (content.scenes || []).forEach(s => {
+        html += `<li><strong>${escapeHtml(s.name || s.title || '')}</strong>: ${escapeHtml(s.description || '')}</li>`;
+      });
+      html += '</ul>';
+    }
+    if (content.mechanics) {
+      html += '<h5>游戏机制</h5><ul>';
+      (content.mechanics || []).forEach(m => {
+        html += `<li>${escapeHtml(typeof m === 'string' ? m : m.name || JSON.stringify(m))}</li>`;
+      });
+      html += '</ul>';
+    }
+    const shown = new Set(['title','summary','genre','scenes','mechanics','core_loop','name','description']);
+    const rest = Object.entries(content).filter(([k]) => !shown.has(k));
+    if (rest.length > 0) {
+      html += `<pre>${escapeHtml(JSON.stringify(Object.fromEntries(rest), null, 2))}</pre>`;
+    }
+    return html || `<pre>${escapeHtml(JSON.stringify(content, null, 2))}</pre>`;
+  }
+
+  if (doc.type === 'proposal' && typeof content === 'object') {
+    let html = '';
+    if (content.name) html += `<h4>${escapeHtml(content.name)}</h4>`;
+    if (content.description) html += `<p>${escapeHtml(content.description)}</p>`;
+    if (content.genre) html += `<p><strong>类型:</strong> ${escapeHtml(content.genre)}</p>`;
+    if (content.estimated_dev_hours) html += `<p><strong>预估开发时间:</strong> ${content.estimated_dev_hours} 小时</p>`;
+    if (content.market_opportunity_score) html += `<p><strong>市场机会评分:</strong> ${content.market_opportunity_score}</p>`;
+    if (content.differentiation) html += `<p><strong>差异化:</strong> ${escapeHtml(content.differentiation)}</p>`;
+    if (content.reference_games) html += `<p><strong>参考游戏:</strong> ${content.reference_games.map(g => escapeHtml(g)).join(', ')}</p>`;
+    return html || `<pre>${escapeHtml(JSON.stringify(content, null, 2))}</pre>`;
+  }
+
+  if (doc.type === 'market_scan' && typeof content === 'object') {
+    let html = '';
+    if (content.summary) html += `<p>${escapeHtml(content.summary)}</p>`;
+    if (content.opportunities) {
+      html += '<h5>市场机会</h5><ul>';
+      (content.opportunities || []).forEach(opp => {
+        html += `<li><strong>${escapeHtml(opp.name || opp.genre || '')}</strong>: ${escapeHtml(opp.description || opp.reason || '')}</li>`;
+      });
+      html += '</ul>';
+    }
+    if (content.signals_count) html += `<p><strong>数据源:</strong> ${content.signals_count} 个信号</p>`;
+    return html || `<pre>${escapeHtml(JSON.stringify(content, null, 2))}</pre>`;
+  }
+
+  if (doc.type === 'art_report' && typeof content === 'object') {
+    let html = '';
+    if (content.summary) html += `<p>${escapeHtml(content.summary)}</p>`;
+    if (content.assets) {
+      html += '<h5>生成的资源</h5><ul>';
+      (content.assets || []).forEach(a => {
+        html += `<li>${escapeHtml(a.name || a.type || '')}: ${escapeHtml(a.description || a.status || '')}</li>`;
+      });
+      html += '</ul>';
+    }
+    return html || `<pre>${escapeHtml(JSON.stringify(content, null, 2))}</pre>`;
+  }
+
+  return `<pre>${escapeHtml(JSON.stringify(content, null, 2))}</pre>`;
+}
+
+function closeDocModal() {
+  const modal = $('#docModal');
+  if (modal) modal.style.display = 'none';
 }
 
 let chatTarget = 'ceo';
@@ -973,9 +1216,19 @@ function init() {
     foreverToggleBtn.addEventListener('click', toggleForever);
   }
 
+  const startSchedulerBtn = $('#startSchedulerBtn');
+  if (startSchedulerBtn) {
+    startSchedulerBtn.addEventListener('click', toggleScheduler);
+  }
+
   const quickPrototypeBtn = $('#quickPrototypeBtn');
   if (quickPrototypeBtn) {
     quickPrototypeBtn.addEventListener('click', openPrototypeModal);
+  }
+
+  const stopSchedulerBtn = $('#stopSchedulerBtn');
+  if (stopSchedulerBtn) {
+    stopSchedulerBtn.addEventListener('click', toggleSchedulerPause);
   }
 
   const previewCloseBtn = $('#previewCloseBtn');
@@ -984,7 +1237,10 @@ function init() {
   }
 
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') closePreview();
+    if (e.key === 'Escape') {
+      closePreview();
+      closeDocModal();
+    }
   });
 
   startEventPolling();

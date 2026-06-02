@@ -25,9 +25,9 @@ def test_estimate_cost_deepseek():
 
 
 def test_estimate_cost_zhipu():
-    pricing = MODEL_PRICING["glm-4-flash"]
-    assert pricing["input_per_1k"] == 0.0
-    assert pricing["output_per_1k"] == 0.0
+    pricing = MODEL_PRICING["deepseek-v4-flash"]
+    assert pricing["input_per_1k"] == 0.00014
+    assert pricing["output_per_1k"] == 0.00028
 
 
 @pytest.mark.asyncio

@@ -17,6 +17,17 @@ async def build_game(state: CompanyState) -> dict:
     logger.info(f"Building game: {project_dir.name}")
 
     try:
+        install_result = subprocess.run(
+            ["npm", "install"],
+            cwd=str(project_dir),
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        if install_result.returncode != 0:
+            logger.error(f"npm install failed:\n{install_result.stderr}")
+            return {"phase": PipelinePhase.DEVELOPING, "errors": [f"npm install failed: {install_result.stderr[:500]}"]}
+
         result = subprocess.run(
             ["npm", "run", "build"],
             cwd=str(project_dir),

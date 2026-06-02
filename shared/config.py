@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import yaml
@@ -64,12 +63,20 @@ def load_config() -> AppConfig:
 
 def load_sources() -> AllSourcesConfig:
     path = CONFIG_DIR / "sources.yaml"
-    with open(path) as f:
-        raw = yaml.safe_load(f)
+    try:
+        with open(path) as f:
+            raw = yaml.safe_load(f)
+    except (FileNotFoundError, yaml.YAMLError) as e:
+        raise RuntimeError(f"Failed to load sources config from {path}: {e}") from e
     return AllSourcesConfig(**raw)
 
 
 def load_agents_config() -> dict:
     path = CONFIG_DIR / "agents.yaml"
-    with open(path) as f:
-        return yaml.safe_load(f)
+    try:
+        with open(path) as f:
+            return yaml.safe_load(f)
+    except (FileNotFoundError, yaml.YAMLError) as e:
+        import logging
+        logging.getLogger(__name__).warning(f"Failed to load agents config from {path}: {e}")
+        return {}

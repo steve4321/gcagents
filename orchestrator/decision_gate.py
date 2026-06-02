@@ -1,10 +1,21 @@
+"""Five-type human approval gate system.
+
+Decision types: new_project, publish, cancel, budget_overrun, direction_change.
+Each decision is persisted to DB and resolved by human response.
+"""
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
 
-from shared.models import DecisionPoint, DecisionType, DecisionStatus
-from orchestrator.persistence import save_decision, get_pending_decisions, resolve_decision as db_resolve_decision
+from orchestrator.persistence import (
+    get_decision_by_id,
+    get_pending_decisions,
+    save_decision,
+)
+from orchestrator.persistence import (
+    resolve_decision as db_resolve_decision,
+)
+from shared.models import DecisionPoint, DecisionType
 
 DECISION_TYPES = {
     "new_project": {
@@ -52,8 +63,12 @@ async def create_decision(
     context: dict | None = None,
     options: list[dict] | None = None,
 ) -> DecisionPoint:
+    """Create and persist a new decision for human approval."""
     if options is None:
-        options = DECISION_TYPES.get(decision_type, {})["default_options"]
+        options = DECISION_TYPES.get(decision_type, {}).get("default_options", [
+            {"label": "Approve", "value": "approve"},
+            {"label": "Reject", "value": "reject"},
+        ])
     decision = DecisionPoint(
         id=str(uuid.uuid4()),
         project_id=project_id,
@@ -71,6 +86,7 @@ async def get_pending() -> list[DecisionPoint]:
 
 
 async def resolve(decision_id: str, response: str) -> DecisionPoint | None:
+    """Mark a decision as resolved with the given human response."""
     await db_resolve_decision(decision_id, response)
-    from orchestrator.persistence import get_decision_by_id
-    return await get_decision_by_id(decision_id)
+    decision = await get_decision_by_id(decision_id)
+    return decision

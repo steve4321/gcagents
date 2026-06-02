@@ -26,7 +26,7 @@ async def generate_music(state: CompanyState) -> dict:
 
     code_path = state.game_code_path
     if code_path:
-        dist = Path(code_path).parent if Path(code_path).is_file() else Path(code_path)
+        dist = Path(code_path)
     else:
         dist = games_dir / title / "dist"
 

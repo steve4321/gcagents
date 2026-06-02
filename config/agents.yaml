@@ -2,14 +2,14 @@ models:
   deepseek:
     provider: openai_compatible
     base_url: "https://api.deepseek.com"
-    model: "deepseek-chat"
+    model: "deepseek-v4-flash"
     api_key_env: "DEEPSEEK_API_KEY"
     roles: [ceo, researcher, programmer, qa, analytics]
 
-  deepseek_coder:
+  deepseek_pro:
     provider: openai_compatible
     base_url: "https://api.deepseek.com"
-    model: "deepseek-coder"
+    model: "deepseek-v4-pro"
     api_key_env: "DEEPSEEK_API_KEY"
     roles: [lead_programmer]
 
@@ -65,18 +65,18 @@ agents:
     report_schedule: "0 9 * * 1"  # weekly monday 9am
 
 scheduler:
-  tick_interval_seconds: 300
-  market_scan_interval: 10
+  market_scan_interval: 5
+  ceo_evaluate_interval: 3
   max_active_projects: 3
   phase_max_ticks:
-    scanning: 3
-    designing: 2
-    developing: 10
-    testing: 6
-    building: 3
+    scanning: 5
+    designing: 10
+    developing: 20
+    testing: 5
+    building: 5
     publishing: 5
 
 deployment:
   games_output_dir: "./data/games"
   build_dir: "./data/builds"
-  dashboard_port: 3000
+  dashboard_port: 8080

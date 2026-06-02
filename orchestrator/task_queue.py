@@ -1,12 +1,18 @@
+"""SQLite-backed async task queue for the scheduler.
+
+Tasks are enqueued per project, dequeued FIFO, and tracked
+with status/progress/result/error fields.
+"""
 from __future__ import annotations
 
 import uuid
 
 from orchestrator.persistence import save_task, get_pending_tasks, update_task_status
-from shared.models import TaskRecord
+from shared.models import TaskParams, TaskRecord
 
 
-async def enqueue(project_id: str, task_type: str, params: dict | None = None) -> TaskRecord:
+async def enqueue(project_id: str, task_type: str, params: TaskParams | dict | None = None) -> TaskRecord:
+    """Create and persist a new task record."""
     task = TaskRecord(
         id=str(uuid.uuid4()),
         project_id=project_id,
@@ -18,6 +24,7 @@ async def enqueue(project_id: str, task_type: str, params: dict | None = None) -
 
 
 async def dequeue() -> TaskRecord | None:
+    """Return the oldest pending task, or None if queue is empty."""
     tasks = await get_pending_tasks()
     return tasks[0] if tasks else None
 
@@ -42,13 +49,14 @@ async def update_progress(task_id: str, progress: float) -> None:
 async def enqueue_retry(
     project_id: str,
     task_type: str,
-    params: dict | None = None,
+    params: TaskParams | dict | None = None,
     *,
     retry_count: int = 0,
     retry_strategy: str = "retry_with_feedback",
     layer: int = 1,
     last_error: str | None = None,
 ) -> TaskRecord:
+    """Enqueue a retry with recovery metadata (layer, strategy, error)."""
     base_params = dict(params or {})
     base_params["retry_count"] = retry_count
     base_params["retry_strategy"] = retry_strategy

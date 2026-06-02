@@ -6,17 +6,19 @@ from loguru import logger
 from openai import APIStatusError, AsyncOpenAI
 
 from shared.config import load_config
+from shared.constants import LLM_BACKOFF_MAX_SECONDS, LLM_MAX_RETRIES
+from shared.exceptions import LLMApiError
 
 MODEL_PRICING: dict[str, dict[str, float]] = {
+    "deepseek-v4-flash": {"input_per_1k": 0.00014, "output_per_1k": 0.00028},
+    "deepseek-v4-pro": {"input_per_1k": 0.00218, "output_per_1k": 0.00872},
     "deepseek-coder": {"input_per_1k": 0.0015, "output_per_1k": 0.002},
-    "deepseek-chat": {"input_per_1k": 0.0015, "output_per_1k": 0.002},
-    "glm-4-flash": {"input_per_1k": 0.0, "output_per_1k": 0.0},
 }
 
 _MODEL_PROVIDER: dict[str, dict[str, str]] = {
+    "deepseek-v4-flash": {"key_attr": "deepseek_api_key", "base_url": "https://api.deepseek.com"},
+    "deepseek-v4-pro": {"key_attr": "deepseek_api_key", "base_url": "https://api.deepseek.com"},
     "deepseek-coder": {"key_attr": "deepseek_api_key", "base_url": "https://api.deepseek.com"},
-    "deepseek-chat": {"key_attr": "deepseek_api_key", "base_url": "https://api.deepseek.com"},
-    "glm-4-flash": {"key_attr": "zhipu_api_key", "base_url": "https://open.bigmodel.cn/api/paas/v4"},
 }
 
 _RETRYABLE_CODES = {429, 500, 502, 503}
@@ -26,10 +28,15 @@ class LLMClient:
     """Centralized LLM client with token tracking and cost logging."""
 
     def __init__(self) -> None:
-        self._config = load_config()
+        self._config = None
         self._clients: dict[str, AsyncOpenAI] = {}
 
+    def _ensure_config(self) -> None:
+        if self._config is None:
+            self._config = load_config()
+
     def _get_client(self, model: str) -> AsyncOpenAI:
+        self._ensure_config()
         if model in self._clients:
             return self._clients[model]
         provider = _MODEL_PROVIDER.get(model)
@@ -60,7 +67,7 @@ class LLMClient:
         client = self._get_client(model)
 
         response = None
-        for attempt in range(3):
+        for attempt in range(LLM_MAX_RETRIES):
             try:
                 response = await client.chat.completions.create(
                     model=model,
@@ -70,9 +77,9 @@ class LLMClient:
                 )
                 break
             except APIStatusError as e:
-                if e.status_code not in _RETRYABLE_CODES or attempt == 2:
-                    raise
-                delay = min(2 ** attempt, 30)
+                if e.status_code not in _RETRYABLE_CODES or attempt == LLM_MAX_RETRIES - 1:
+                    raise LLMApiError(model=model, status_code=e.status_code, detail=str(e)) from e
+                delay = min(2 ** attempt, LLM_BACKOFF_MAX_SECONDS)
                 logger.warning(
                     f"LLM retry {attempt + 1}/3 for model={model}: "
                     f"status={e.status_code}, waiting {delay}s"

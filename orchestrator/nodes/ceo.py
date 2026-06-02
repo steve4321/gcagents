@@ -11,63 +11,24 @@ from orchestrator.state import CompanyState, PipelinePhase
 
 
 async def _get_completed_genres() -> set[str]:
-    from sqlalchemy import text
-    from sqlalchemy.ext.asyncio import AsyncSession
-
-    from orchestrator.persistence import _get_engine
-
-    engine = _get_engine()
-    genres = set()
-    async with AsyncSession(engine) as db:
-        rows = await db.execute(text("SELECT DISTINCT genre FROM game_projects"))
-        for row in rows.fetchall():
-            if row.genre:
-                genres.add(row.genre.lower())
-    return genres
+    from orchestrator.persistence import get_completed_genres
+    return await get_completed_genres()
 
 
 async def _find_project_to_update() -> dict | None:
-    from sqlalchemy import text
-    from sqlalchemy.ext.asyncio import AsyncSession
-
-    from orchestrator.persistence import _get_engine
-
-    engine = _get_engine()
-    async with AsyncSession(engine) as db:
-        rows = await db.execute(
-            text("""
-                SELECT p.id, p.name, p.itch_url,
-                       COUNT(f.id) AS unprocessed_count
-                FROM game_projects p
-                JOIN game_feedback f ON f.project_id = p.id AND f.processed = 0
-                WHERE p.status IN ('live', 'updating')
-                AND f.category IN ('bug', 'feature')
-                GROUP BY p.id
-                HAVING unprocessed_count >= 2
-                ORDER BY unprocessed_count DESC
-                LIMIT 1
-            """)
-        )
-        row = rows.fetchone()
-
-    if row:
-        return {"id": row.id, "name": row.name, "itch_url": row.itch_url, "unprocessed_count": row.unprocessed_count}
-    return None
+    from orchestrator.persistence import find_project_to_update
+    return await find_project_to_update()
 
 
 async def _process_ceo_instructions(state: CompanyState) -> dict:
-    from sqlalchemy import text
-    from sqlalchemy.ext.asyncio import AsyncSession
-
     from shared.llm_client import llm
 
-    from orchestrator.persistence import _get_engine, get_pending_instructions, log_event
+    from orchestrator.persistence import get_pending_instructions, log_event, mark_instruction_processed
 
     instructions = await get_pending_instructions("ceo")
     if not instructions:
         return {}
 
-    engine = _get_engine()
     updates: dict = {}
     forced_genre: str | None = None
 
@@ -78,7 +39,7 @@ async def _process_ceo_instructions(state: CompanyState) -> dict:
 
         try:
             response, usage = await llm.chat_completion(
-                model="glm-4-flash",
+                model="deepseek-v4-flash",
                 messages=[
                     {"role": "system", "content": (
                         "You are processing user instructions for an autonomous game company CEO. "
@@ -111,18 +72,8 @@ async def _process_ceo_instructions(state: CompanyState) -> dict:
             summary = content[:100]
 
         if intent == "direction" and genre:
-            async with AsyncSession(engine) as db:
-                await db.execute(
-                    text("""
-                        INSERT INTO company_memory (category, title, content, importance, created_at)
-                        VALUES ('directive', 'user_genre_directive', :content, 0.9, :now)
-                    """),
-                    {
-                        "content": json.dumps({"genre": genre, "instruction": content, "source": "user_chat"}),
-                        "now": datetime.now(timezone.utc).isoformat(),
-                    },
-                )
-                await db.commit()
+            from orchestrator.persistence import save_user_genre_directive
+            await save_user_genre_directive(genre, content, datetime.now(timezone.utc).isoformat())
 
             forced_genre = genre
             await log_event(
@@ -145,18 +96,13 @@ async def _process_ceo_instructions(state: CompanyState) -> dict:
         else:
             await log_event("system", "info", f"CEO user feedback: {summary}", source_agent="ceo")
 
-        async with AsyncSession(engine) as db:
-            metadata_raw = instruction.get("metadata_json", "{}")
-            if isinstance(metadata_raw, str):
-                metadata = json.loads(metadata_raw)
-            else:
-                metadata = metadata_raw
-            metadata["processed"] = True
-            await db.execute(
-                text("UPDATE chat_messages SET metadata_json = :meta WHERE id = :mid"),
-                {"meta": json.dumps(metadata), "mid": instruction["id"]},
-            )
-            await db.commit()
+        metadata_raw = instruction.get("metadata_json", "{}")
+        if isinstance(metadata_raw, str):
+            metadata = json.loads(metadata_raw)
+        else:
+            metadata = metadata_raw
+        metadata["processed"] = True
+        await mark_instruction_processed(instruction["id"], metadata)
 
     if forced_genre and not updates.get("phase"):
         updates["_forced_genre"] = forced_genre
@@ -211,7 +157,7 @@ async def ceo_evaluate(state: CompanyState) -> dict:
             logger.info(f"CEO: User directed genre '{forced_genre}', but no matching opportunities found")
 
     top_opportunity = max(novel, key=lambda x: x.get("market_opportunity_score", x.get("score", 0)))
-    threshold = 0.6
+    threshold = 0.2
 
     score = top_opportunity.get("market_opportunity_score") or top_opportunity.get("score", 0)
     if score < threshold:

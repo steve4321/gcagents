@@ -15,6 +15,12 @@
       </div>
       <div class="header-actions">
         <span class="last-update">Last update: <time id="lastUpdateTime">--:--:--</time></span>
+        <button id="startSchedulerBtn" class="start-scheduler-btn" title="Start Scheduler (multi-project)">
+          💼 开始上班
+        </button>
+        <button id="stopSchedulerBtn" class="stop-scheduler-btn" title="Stop running scheduler" style="display:none">
+          ⏸ 下班
+        </button>
         <button id="runPipelineBtn" class="run-pipeline-btn" title="Run Pipeline">
           ▶ Run
         </button>
@@ -49,8 +55,6 @@
       <div class="section-content" id="chatContent">
         <div class="chat-tabs">
           <button class="chat-tab active" data-agent="ceo">CEO</button>
-          <button class="chat-tab" data-agent="cfo">CFO</button>
-          <button class="chat-tab" data-agent="coo">COO</button>
         </div>
         <div class="chat-messages" id="chatMessages"></div>
         <div class="chat-input-area">
@@ -240,6 +244,17 @@
         <button class="prototype-submit-btn" id="prototypeSubmitBtn" onclick="submitPrototype()">Generate</button>
       </div>
       <div id="prototypeStatus" class="prototype-status"></div>
+    </div>
+  </div>
+
+  <div id="docModal" class="modal-overlay" style="display:none">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3 id="docModalTitle">项目文档</h3>
+        <button class="modal-close" onclick="closeDocModal()">&times;</button>
+      </div>
+      <div class="modal-body" id="docModalBody">
+      </div>
     </div>
   </div>
 </body>

@@ -1,6 +1,7 @@
 """Layered memory system for persistent learning across game projects."""
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import sqlite3
 from datetime import datetime, timezone
@@ -48,7 +49,7 @@ class MemoryStore:
 
     # ── Short-term memory ────────────────────────────────────────────────────
 
-    def store_short_term(
+    def _store_short_term_sync(
         self,
         category: str,
         content: str,
@@ -72,7 +73,19 @@ class MemoryStore:
             )
         return mem_id
 
-    def get_recent(
+    async def store_short_term(
+        self,
+        category: str,
+        content: str,
+        project_id: str,
+        tick_id: str = "",
+        importance: float = 0.5,
+    ) -> str:
+        return await asyncio.to_thread(
+            self._store_short_term_sync, category, content, project_id, tick_id, importance
+        )
+
+    def _get_recent_sync(
         self,
         project_id: str,
         category: str | None = None,
@@ -93,9 +106,17 @@ class MemoryStore:
                 ).fetchall()
             return [dict(r) for r in rows]
 
+    async def get_recent(
+        self,
+        project_id: str,
+        category: str | None = None,
+        limit: int = 10,
+    ) -> list[dict]:
+        return await asyncio.to_thread(self._get_recent_sync, project_id, category, limit)
+
     # ── Long-term memory ─────────────────────────────────────────────────────
 
-    def store_long_term(
+    def _store_long_term_sync(
         self,
         category: str,
         content: str,
@@ -113,7 +134,18 @@ class MemoryStore:
             )
         return mem_id
 
-    def search_long_term(
+    async def store_long_term(
+        self,
+        category: str,
+        content: str,
+        summary: str,
+        importance: float = 0.7,
+    ) -> str:
+        return await asyncio.to_thread(
+            self._store_long_term_sync, category, content, summary, importance
+        )
+
+    def _search_long_term_sync(
         self,
         query: str,
         category: str | None = None,
@@ -152,10 +184,18 @@ class MemoryStore:
                 )
             return results
 
+    async def search_long_term(
+        self,
+        query: str,
+        category: str | None = None,
+        limit: int = 5,
+    ) -> list[dict]:
+        return await asyncio.to_thread(self._search_long_term_sync, query, category, limit)
+
     # ── Consolidation ────────────────────────────────────────────────────────
 
-    def consolidate(self, project_id: str) -> list[str]:
-        recent = self.get_recent(project_id, limit=50)
+    def _consolidate_sync(self, project_id: str) -> list[str]:
+        recent = self._get_recent_sync(project_id, limit=50)
         if not recent:
             return []
 
@@ -166,7 +206,7 @@ class MemoryStore:
         lessons: list[str] = []
         for cat, items in by_category.items():
             summary = f"[{cat}] From {len(items)} events: " + "; ".join(items[:3])
-            self.store_long_term(
+            self._store_long_term_sync(
                 category=f"lesson:{cat}",
                 content="\n".join(items[:10]),
                 summary=summary,
@@ -177,19 +217,22 @@ class MemoryStore:
         logger.info(f"Consolidated {len(recent)} memories into {len(lessons)} lessons for project {project_id}")
         return lessons
 
+    async def consolidate(self, project_id: str) -> list[str]:
+        return await asyncio.to_thread(self._consolidate_sync, project_id)
+
     # ── Context builder ──────────────────────────────────────────────────────
 
-    def get_project_context(self, project_id: str, query: str = "") -> str:
+    def _get_project_context_sync(self, project_id: str, query: str = "") -> str:
         parts: list[str] = []
 
-        recent = self.get_recent(project_id, limit=5)
+        recent = self._get_recent_sync(project_id, limit=5)
         if recent:
             parts.append("## Recent Project Events")
             for m in recent:
                 parts.append(f"- [{m['category']}] {m['content']}")
 
         if query:
-            lessons = self.search_long_term(query, limit=3)
+            lessons = self._search_long_term_sync(query, limit=3)
             if lessons:
                 parts.append("\n## Relevant Past Lessons")
             for lesson in lessons:
@@ -199,21 +242,30 @@ class MemoryStore:
 
         return "\n".join(parts) if parts else ""
 
+    async def get_project_context(self, project_id: str, query: str = "") -> str:
+        return await asyncio.to_thread(self._get_project_context_sync, project_id, query)
+
     # ── Utilities ────────────────────────────────────────────────────────────
 
-    def get_all_lessons(self) -> list[dict]:
+    def _get_all_lessons_sync(self) -> list[dict]:
         with self._connect() as conn:
             rows = conn.execute(
                 "SELECT * FROM memories WHERE project_id = '' ORDER BY importance DESC, created_at DESC"
             ).fetchall()
             return [dict(r) for r in rows]
 
-    def delete_project_memories(self, project_id: str) -> int:
+    async def get_all_lessons(self) -> list[dict]:
+        return await asyncio.to_thread(self._get_all_lessons_sync)
+
+    def _delete_project_memories_sync(self, project_id: str) -> int:
         with self._connect() as conn:
             cursor = conn.execute(
                 "DELETE FROM memories WHERE project_id = ?", (project_id,)
             )
             return cursor.rowcount
+
+    async def delete_project_memories(self, project_id: str) -> int:
+        return await asyncio.to_thread(self._delete_project_memories_sync, project_id)
 
 
 _memory_store: MemoryStore | None = None

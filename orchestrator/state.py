@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Annotated, Literal
 
-from langgraph.graph import add_messages
 from pydantic import BaseModel
 
 from shared.models import GameProposal
@@ -24,9 +22,8 @@ class PipelinePhase(str, Enum):
 
 class CompanyState(BaseModel):
     phase: PipelinePhase = PipelinePhase.IDLE
-    messages: Annotated[list, add_messages] = []
     current_proposal: GameProposal | None = None
-    current_project_id: int | None = None
+    current_project_id: str | None = None
     market_insights: list[dict] = []
     gdd: dict | None = None
     art_assets_path: str | None = None
@@ -38,6 +35,3 @@ class CompanyState(BaseModel):
     retry_count: int = 0
     retry_feedback: dict | None = None
     project_ids: list[str] = []
-
-    class Config:
-        arbitrary_types_allowed = True

@@ -1,3 +1,9 @@
+"""Market signal analyzer — cross-source correlation and opportunity scoring.
+
+Collects market signals, builds an analysis prompt with genre counts,
+cross-source agreement, and competition density, then calls LLM to
+identify the top 3 game opportunities.
+"""
 from __future__ import annotations
 
 from collections import Counter
@@ -16,17 +22,13 @@ async def analyze_signals(
 ) -> tuple[list[dict], str]:
     """Returns (opportunities, raw_analysis_text)."""
     genre_counts = Counter(s.genre for s in signals if s.genre)
-    source_counts = Counter(s.source for s in signals)
     logger.info(f"Analyzing {len(signals)} signals: genres={dict(genre_counts.most_common(10))}")
 
     prompt = _build_analysis_prompt(signals, genre_counts)
 
-    if config.zhipu_api_key:
-        model = "glm-4-flash"
-    elif config.deepseek_api_key:
-        model = "deepseek-chat"
-    else:
-        logger.error("No AI API key configured (need ZHIPU_API_KEY or DEEPSEEK_API_KEY)")
+    model = "deepseek-v4-flash"
+    if not config.deepseek_api_key:
+        logger.error("No AI API key configured (need DEEPSEEK_API_KEY)")
         return [], ""
 
     analysis_text, usage = await llm.chat_completion(
@@ -67,6 +69,7 @@ Return ONLY a JSON array of 3 objects, no other text."""
 
 
 def _build_analysis_prompt(signals: list[MarketSignal], genre_counts: Counter) -> str:
+    """Build the LLM analysis prompt from collected signals."""
     top_genres = genre_counts.most_common(10)
     top_titles = sorted(signals, key=lambda s: s.score, reverse=True)[:15]
 
@@ -121,6 +124,7 @@ def _build_analysis_prompt(signals: list[MarketSignal], genre_counts: Counter) -
 
 
 def _parse_opportunities(text: str) -> list[dict]:
+    """Parse LLM response into structured opportunity dicts."""
     import json
 
     text = text.strip()
@@ -160,6 +164,7 @@ _FIELD_MAP = {
 
 
 def _normalize_opportunities(opportunities: list[dict]) -> list[dict]:
+    """Normalize field names in opportunity dicts using _FIELD_MAP."""
     for opp in opportunities:
         for old_key, new_key in _FIELD_MAP.items():
             if old_key in opp and new_key not in opp:

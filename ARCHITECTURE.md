@@ -660,18 +660,21 @@ DB 测试使用 `tmp_path` 临时 SQLite，monkeypatch `_get_engine()`，不污�
 
 Python 3.11/3.12 matrix，job timeout 10 分钟，pip 缓存。
 
-### 错误恢复策略（Layer 2 待实现项）
+### 错误恢复策略
 
-`_fallback_task_type()` 当前仅 `develop → develop_simple` 有真实策略变更；以下 task 类型的 Layer 2 fallback 暂为 identity 映射（待补全）：
+#### Layer 2 Fallback 映射
 
-- `qa` → `qa`（计划：实现 `qa_minimal`，跳过严格检查）
-- `build` → `build`（计划：实现 `build_skip_optimize`，禁用 Vite minify）
-- `design_game` → `design_game`（计划：实现 `design_game_minimal`）
-- `art_gen` → `art_gen`（计划：实现 `art_gen_emoji` 回退到 emoji 占位符）
-- `generate_music` → `generate_music`（计划：实现纯 Web Audio 流程化）
-- `market_scan` → `market_scan`（计划：实现缓存扫描）
+只有 `develop → develop_simple` 有真实的 Layer 2 策略变更。其他所有 task type 在 Layer 1 重试耗尽后直接跳到 Layer 3（人类决策），避免无效的 identity re-queue。
 
-每个待实现项已在 `scheduler.py` 中以 `# TODO:` 标记。
+| Task Type | Layer 2 Fallback | 行为 |
+|---|---|---|
+| `develop` | `develop_simple` | 使用简化策略重新生成代码 |
+| `qa` | 无 | 直接 escalate 到 Layer 3 |
+| `build` | 无 | 直接 escalate 到 Layer 3 |
+| `design_game` | 无 | 直接 escalate 到 Layer 3 |
+| `art_gen` | 无 | 直接 escalate 到 Layer 3 |
+| `generate_music` | 无 | 直接 escalate 到 Layer 3 |
+| `market_scan` | 无 | 直接 escalate 到 Layer 3 |
 
 ---
 
@@ -699,7 +702,7 @@ Python 3.11/3.12 matrix，job timeout 10 分钟，pip 缓存。
 DEEPSEEK_API_KEY=sk-...        # deepseek-coder 代码生成
 ZHIPU_API_KEY=...              # glm-4-flash 分析/设计
 BUTLER_API_KEY=...             # itch.io Butler 部署
-BUTLER_USERNAME=kingsman666    # itch.io 用户名
+BUTLER_USERNAME=...    # itch.io 用户名
 ```
 
 ### 系统依赖

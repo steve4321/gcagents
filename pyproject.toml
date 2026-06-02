@@ -37,6 +37,7 @@ dependencies = [
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
+    "pytest-cov>=5.0",
     "ruff>=0.5",
     "mypy>=1.10",
 ]
@@ -54,3 +55,45 @@ select = ["E", "F", "I", "N", "W", "UP"]
 [tool.mypy]
 python_version = "3.11"
 strict = true
+
+# ── Pytest ────────────────────────────────────────────────────────────────────
+
+[tool.pytest.ini_options]
+asyncio_mode = "strict"
+testpaths = ["tests"]
+markers = [
+    "unit: Pure unit tests (no I/O, fast)",
+    "integration: Tests with DB or external dependencies",
+    "slow: Tests that take >1s",
+]
+addopts = [
+    "--strict-markers",
+    "-ra",                          # show summary of all except passed
+    "--tb=short",                   # shorter traceback format
+]
+
+# ── Coverage ──────────────────────────────────────────────────────────────────
+
+[tool.coverage.run]
+source = ["orchestrator", "shared"]
+omit = [
+    "*/tests/*",
+    "*/__pycache__/*",
+    "*/game-templates/*",
+    "*/node_modules/*",
+    "orchestrator/graph/pipeline.py",
+    "orchestrator/prototype_mode.py",
+    "orchestrator/main.py",
+]
+
+[tool.coverage.report]
+fail_under = 60                    # minimum coverage % — raise over time
+show_missing = true
+skip_covered = true
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.",
+    "raise NotImplementedError",
+    "@overload",
+]

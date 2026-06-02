@@ -44,6 +44,7 @@ async def coo_health_check(state: CompanyState) -> dict:
             detail=f"Retry count: {state.retry_count}",
             source_agent="coo",
         )
+        return {"phase": PipelinePhase.IDLE}
 
     return {}
 

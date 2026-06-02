@@ -73,11 +73,8 @@ Return ONLY the JSON object, no other text."""
 async def generate_gdd(proposal: GameProposal, config: AppConfig) -> dict:
     logger.info(f"Generating GDD for: {proposal.name} ({proposal.genre})")
 
-    if config.zhipu_api_key:
-        model = "glm-4-flash"
-    elif config.deepseek_api_key:
-        model = "deepseek-chat"
-    else:
+    model = "deepseek-v4-flash"
+    if not config.deepseek_api_key:
         logger.error("No AI API key configured")
         return {"title": proposal.name, "genre": proposal.genre, "scenes": []}
 

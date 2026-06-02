@@ -86,10 +86,10 @@ async def cfo_financial_report(state: CompanyState) -> dict:
         f"Active Budgets: {len(budgets)}"
     )
 
-    # glm-4-flash = free model for cost analysis
+    # deepseek-chat model for cost analysis
     try:
         llm_response, _usage = await llm.chat_completion(
-            model="glm-4-flash",
+            model="deepseek-v4-flash",
             messages=[
                 {
                     "role": "system",

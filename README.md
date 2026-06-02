@@ -91,8 +91,8 @@ cp .env.example .env  # then edit .env and fill in:
 #   DEEPSEEK_API_KEY=sk-...
 #   ZHIPU_API_KEY=...
 
-# Start backing services
-docker compose up -d  # postgres, redis, chromadb (comfyui optional with --profile gpu)
+# Start backing services (optional — SQLite works without Docker)
+docker compose up -d  # redis, chromadb; postgres available for future migration; comfyui optional with --profile gpu
 
 # Run the scheduler (multi-project mode)
 python -m orchestrator.main run-scheduler
@@ -207,7 +207,7 @@ mypy .
 
 ## License
 
-No license file is currently present in the repository. Add an appropriate license (e.g., MIT) before using this code.
+[MIT](LICENSE)
 
 ---
 

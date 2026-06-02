@@ -1,22 +1,46 @@
+"""CEO multi-project tick scheduler.
+
+Each tick processes human instructions, checks decision gates,
+advances active projects through their lifecycle phases, executes
+one task from the queue, and generates periodic reports.
+"""
 from __future__ import annotations
 
+import os
+import tempfile
 from datetime import datetime, timezone
+from pathlib import Path
 
 from loguru import logger
 
-from orchestrator.decision_gate import create_decision, get_pending, resolve
+from orchestrator.decision_gate import create_decision, resolve
 from orchestrator.event_bus import emit
 from orchestrator.persistence import (
+    count_completed_tasks,
     get_all_projects,
+    get_api_usage_summary,
+    get_latest_market_report,
     get_pending_decisions,
     get_pending_instructions,
     get_project,
+    get_recent_completed_tasks,
     save_project,
     save_chat_message,
+    set_project_live,
+    update_project_art_status,
+    update_project_awaiting_decision,
+    update_project_build_path,
+    update_project_code_path,
+    update_project_gdd,
+    update_project_music_status,
     update_project_phase,
+    update_project_proposal_and_phase,
+    update_project_qa_result,
 )
 from orchestrator.state import CompanyState, PipelinePhase
 from orchestrator.task_queue import enqueue, dequeue, complete_task, fail_task, update_progress, enqueue_retry
+from shared.constants import LAYER1_MAX_RETRIES, MAX_INSTRUCTIONS_PER_TICK, QA_CANCEL_THRESHOLD
+from shared.exceptions import SchedulerError, TaskExecutionError
 from shared.memory import get_memory_store
 from shared.models import ProjectPhase, ProjectState
 
@@ -29,7 +53,8 @@ def _load_scheduler_config() -> dict:
         from shared.config import load_agents_config
         cfg = load_agents_config()
         return cfg.get("scheduler", {})
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Failed to load scheduler config: {e}")
         return {}
 
 
@@ -37,12 +62,35 @@ _SCHED_CFG = _load_scheduler_config()
 _default_phase_ticks = {"scanning": 3, "designing": 2, "developing": 10, "testing": 6, "building": 3, "publishing": 5}
 PHASE_MAX_TICKS: dict[str, int] = _SCHED_CFG.get("phase_max_ticks", _default_phase_ticks)
 MARKET_SCAN_INTERVAL = _SCHED_CFG.get("market_scan_interval", 10)
+CEO_EVALUATE_INTERVAL = _SCHED_CFG.get("ceo_evaluate_interval", 1)
 MAX_ACTIVE_PROJECTS = _SCHED_CFG.get("max_active_projects", 3)
+REPORT_INTERVAL = _SCHED_CFG.get("report_interval", 5)
+
+_PAUSE_FLAG_PATH = os.path.join(tempfile.gettempdir(), "gcagents_paused")
+
+
+def is_paused() -> bool:
+    return os.path.exists(_PAUSE_FLAG_PATH)
+
+
+def set_paused(paused: bool) -> None:
+    if paused:
+        Path(_PAUSE_FLAG_PATH).touch()
+    else:
+        try:
+            os.remove(_PAUSE_FLAG_PATH)
+        except FileNotFoundError:
+            pass
 
 
 async def scheduler_tick() -> dict | None:
+    """Execute one scheduler tick. Returns tick info dict or None if paused."""
     global _TICK_COUNT
     _TICK_COUNT += 1
+
+    if is_paused():
+        logger.debug(f"Scheduler tick #{_TICK_COUNT} skipped (paused)")
+        return None
 
     logger.info(f"Scheduler tick #{_TICK_COUNT}")
     memory = get_memory_store()
@@ -52,6 +100,9 @@ async def scheduler_tick() -> dict | None:
 
     if _TICK_COUNT % MARKET_SCAN_INTERVAL == 0:
         await _periodic_market_scan()
+
+    if _TICK_COUNT % CEO_EVALUATE_INTERVAL == 0:
+        await _ceo_evaluate_new_projects()
 
     await _advance_projects()
 
@@ -75,11 +126,12 @@ async def scheduler_tick() -> dict | None:
 
 
 async def _process_instructions() -> None:
-    instructions = await get_pending_instructions("scheduler")
+    """Read and handle up to MAX_INSTRUCTIONS_PER_TICK pending instructions from the chat."""
+    instructions = await get_pending_instructions("ceo")
     if not instructions:
         return
 
-    for instruction in instructions[:5]:
+    for instruction in instructions[:MAX_INSTRUCTIONS_PER_TICK]:
         content = instruction.get("content", "")
         if not content:
             continue
@@ -91,31 +143,31 @@ async def _process_instructions() -> None:
 
 
 async def _handle_instruction(content: str) -> None:
-    import json
-    from sqlalchemy import text
-    from sqlalchemy.ext.asyncio import AsyncSession
-    from orchestrator.persistence import _get_engine
-
     content_lower = content.lower()
 
-    if any(kw in content_lower for kw in ("new project", "create project", "start project")):
+    if any(kw in content_lower for kw in ("new project", "create project", "start project", "新项目")):
         await create_decision(
             "new_project",
             f"Create new project from instruction: {content[:200]}",
             context={"source": "chat", "instruction": content},
         )
-        await save_chat_message("assistant", "I'll create a decision to start a new project. Please approve or reject.", agent_name="scheduler")
-    elif any(kw in content_lower for kw in ("status", "report", "how are")):
+        await save_chat_message("assistant", "I'll create a decision to start a new project. Please approve or reject.", agent_name="ceo")
+    elif any(kw in content_lower for kw in ("status", "report", "how are", "情况", "状态", "报告")):
         projects = await get_all_projects()
         lines = [f"- {p.name} ({p.phase.value}): {p.progress:.0%}" for p in projects]
         msg = "Current project status:\n" + "\n".join(lines) if lines else "No active projects."
-        await save_chat_message("assistant", msg, agent_name="scheduler")
-    elif any(kw in content_lower for kw in ("cancel", "stop")):
+        await save_chat_message("assistant", msg, agent_name="ceo")
+    elif any(kw in content_lower for kw in ("cancel", "stop", "取消", "停止")):
         projects = await get_all_projects()
         active = [p for p in projects if p.phase not in (ProjectPhase.BACKLOG, ProjectPhase.CANCELLED, ProjectPhase.LIVE)]
         for p in active[:1]:
             await create_decision("cancel", f"Cancel project '{p.name}'?", project_id=p.id)
-            await save_chat_message("assistant", f"Created cancellation decision for '{p.name}'.", agent_name="scheduler")
+            await save_chat_message("assistant", f"Created cancellation decision for '{p.name}'.", agent_name="ceo")
+    else:
+        projects = await get_all_projects()
+        active = [p for p in projects if p.phase not in (ProjectPhase.BACKLOG, ProjectPhase.CANCELLED)]
+        summary = f"{len(projects)} projects total, {len(active)} active."
+        await save_chat_message("assistant", f"收到。当前 {summary} 如需操作请说：状态、新项目、取消。", agent_name="ceo")
 
 
 async def _resolve_answered_decisions() -> None:
@@ -194,7 +246,97 @@ async def _periodic_market_scan() -> None:
     await enqueue("__system__", "market_scan")
 
 
+async def _ceo_evaluate_new_projects() -> None:
+    """CEO evaluates latest market report and creates new projects for approved opportunities.
+    
+    This bridges the LangGraph CEO node into the scheduler tick flow. The CEO is the
+    LLM-driven decision maker that picks which market opportunities to greenlight;
+    the scheduler is the mechanical executor that advances projects through phases.
+    """
+    import json
+    from orchestrator.nodes.ceo import ceo_evaluate
+    from orchestrator.state import CompanyState, PipelinePhase
+
+    latest_report = await get_latest_market_report()
+
+    if not latest_report or not latest_report.get("opportunities_json"):
+        logger.debug("CEO evaluate: no market report available yet")
+        return
+
+    try:
+        opportunities = json.loads(latest_report["opportunities_json"])
+    except Exception:
+        logger.warning("CEO evaluate: failed to parse opportunities JSON")
+        return
+
+    if not opportunities:
+        return
+
+    state = CompanyState(
+        phase=PipelinePhase.EVALUATING,
+        market_insights=opportunities,
+    )
+    result = await ceo_evaluate(state)
+
+    proposal = result.get("current_proposal")
+    if not proposal:
+        logger.info(f"CEO evaluate: no proposal approved (phase={result.get('phase')})")
+        return
+
+    proposal_name = proposal.name if hasattr(proposal, "name") else proposal.get("name", "unnamed")
+    proposal_genre = proposal.genre if hasattr(proposal, "genre") else proposal.get("genre", "general")
+    if hasattr(proposal, "model_dump"):
+        proposal_dict = proposal.model_dump(mode="json")
+    else:
+        proposal_dict = proposal
+
+    existing = await get_all_projects()
+    if any(p.name.lower() == proposal_name.lower() for p in existing):
+        logger.info(f"CEO evaluate: project '{proposal_name}' already exists, skipping")
+        return
+
+    project_id = f"ceo-{int(datetime.now(timezone.utc).timestamp())}"
+    project = ProjectState(
+        id=project_id,
+        name=proposal_name,
+        genre=proposal_genre,
+        phase=ProjectPhase.BACKLOG,
+        progress=0.0,
+        proposal=proposal_dict,
+        awaiting_decision="new_project",
+    )
+    await save_project(project)
+    logger.info(f"CEO evaluate: greenlit new project '{proposal_name}' (id={project_id}, genre={proposal_genre})")
+
+    decision = await create_decision(
+        "new_project",
+        f"CEO greenlit: '{proposal_name}' ({proposal_genre}). Approve to start development?",
+        project_id=project_id,
+        context={"proposal": proposal_dict, "source": "ceo_evaluate"},
+    )
+    await update_project_awaiting_decision(project_id, decision.id)
+    await save_chat_message(
+        "assistant",
+        f"🎯 CEO greenlit new project: **{proposal_name}** ({proposal_genre}). Approve to start development?",
+        agent_name="ceo",
+        metadata={
+            "type": "decision",
+            "decision_id": decision.id,
+            "decision_type": "new_project",
+            "project_id": project_id,
+            "proposal": proposal_dict,
+        },
+    )
+    await emit(
+        "ceo",
+        f"New project greenlit: {proposal_name}",
+        source_agent="ceo",
+        project_name=proposal_name,
+    )
+
+
 async def _advance_projects() -> None:
+    """Advance all active (non-blocked) projects by enqueueing their next task."""
     projects = await get_all_projects()
     active = [p for p in projects
               if p.phase not in (ProjectPhase.BACKLOG, ProjectPhase.CANCELLED, ProjectPhase.LIVE, ProjectPhase.PAUSED)
@@ -224,16 +366,7 @@ async def _advance_project(project: ProjectState) -> None:
             f"Project '{project.name}' stuck in {phase_key} for {phase_ticks} ticks (max {max_ticks}). Change direction?",
             project_id=pid,
         )
-        from sqlalchemy import text
-        from sqlalchemy.ext.asyncio import AsyncSession
-        from orchestrator.persistence import _get_engine
-        engine = _get_engine()
-        async with AsyncSession(engine) as db:
-            await db.execute(
-                text("UPDATE projects SET awaiting_decision='phase_timeout', updated_at=:now WHERE id=:id"),
-                {"now": datetime.now(timezone.utc).isoformat(), "id": pid},
-            )
-            await db.commit()
+        await update_project_awaiting_decision(pid, "phase_timeout")
         await emit("scheduler", f"Phase timeout: {project.name} in {phase_key}", severity="warning", source_agent="scheduler", project_name=project.name)
         return
 
@@ -264,22 +397,12 @@ async def _advance_project(project: ProjectState) -> None:
             project_id=pid,
             context={"project_name": project.name, "version": project.version},
         )
-        from orchestrator.persistence import _get_engine
-        from sqlalchemy import text
-        from sqlalchemy.ext.asyncio import AsyncSession
-        engine = _get_engine()
-        async with AsyncSession(engine) as db:
-            await db.execute(
-                text("UPDATE projects SET awaiting_decision=:d WHERE id=:id"),
-                {"d": decision.id, "id": pid},
-            )
-            await db.commit()
+        await update_project_awaiting_decision(pid, decision.id)
 
-
-LAYER1_MAX_RETRIES = 2
 
 
 async def _execute_one_task() -> dict | None:
+    """Dequeue and execute one task with 3-layer error recovery."""
     task = await dequeue()
     if not task:
         return None
@@ -298,6 +421,8 @@ async def _execute_one_task() -> dict | None:
         result = await _run_agent(task_type, pid, params)
         await complete_task(task.id, result)
         return {"task": task, "result": result, "status": "completed"}
+    except TaskExecutionError:
+        raise
     except Exception as e:
         error_msg = str(e)
         logger.error(f"Scheduler: task '{task_type}' failed (layer={layer}, retry={retry_count}): {e}")
@@ -309,8 +434,6 @@ async def _execute_one_task() -> dict | None:
 
 
 async def _handle_retry_recovery(task, error_msg: str) -> dict | None:
-    pid = task.project_id
-    task_type = task.task_type
     params = task.params
     retry_count = params.get("retry_count", 0)
     layer = params.get("layer", 1)
@@ -345,6 +468,14 @@ async def _escalate_layer2(task, error_msg: str) -> dict:
     pid = task.project_id
     task_type = task.task_type
     alt_type = _fallback_task_type(task_type)
+
+    if alt_type is None:
+        logger.info(
+            f"Scheduler: no Layer 2 fallback for '{task_type}', "
+            f"escalating directly to Layer 3 (project {pid})"
+        )
+        return await _escalate_layer3(task, error_msg)
+
     alt_params = dict(task.params)
     alt_params["simplified"] = True
     alt_params["original_task_type"] = task_type
@@ -379,51 +510,26 @@ async def _escalate_layer3(task, error_msg: str) -> dict:
         project_id=pid,
         context=context,
     )
-    from orchestrator.persistence import _get_engine
-    from sqlalchemy import text
-    from sqlalchemy.ext.asyncio import AsyncSession
-    engine = _get_engine()
-    async with AsyncSession(engine) as db:
-        await db.execute(
-            text("UPDATE projects SET phase='paused', updated_at=:now WHERE id=:id"),
-            {"now": datetime.now(timezone.utc).isoformat(), "id": pid},
-        )
-        await db.commit()
+    await update_project_phase(pid, "paused")
     await emit("scheduler", f"Project {pid} paused — awaiting human decision after task failure", severity="warning", source_agent="scheduler")
     return {"task": task, "error": error_msg, "status": "failed", "recovery": "layer3_escalation"}
 
 
-def _fallback_task_type(task_type: str) -> str:
-    """Map a task type to a Layer 2 strategy-change alternative.
+def _fallback_task_type(task_type: str) -> str | None:
+    """Return a Layer 2 strategy-change alternative for the given task type.
 
-    Returns the input unchanged when no real fallback is implemented for that
-    task type. Callers should detect identity fallbacks and log a warning so
-    operators know Layer 2 provided no actual strategy change.
+    Returns ``None`` when no real fallback exists, signaling that the
+    scheduler should escalate directly to Layer 3 (human decision) instead
+    of re-queuing the same task type.
     """
-    mapping = {
+    _FALLBACKS: dict[str, str] = {
         "develop": "develop_simple",
-        "qa": "qa",                          # TODO: implement qa_minimal (skip strict checks)
-        "build": "build",                    # TODO: implement build_skip_optimize (no Vite minify)
-        "design_game": "design_game",        # TODO: implement design_game_minimal (shorter GDD)
-        "art_gen": "art_gen",                # TODO: implement art_gen_emoji (fall back to emoji)
-        "generate_music": "generate_music",  # TODO: implement generate_music_procedural (Web Audio only)
-        "market_scan": "market_scan",        # TODO: implement market_scan_cache (use cached signals)
     }
-    return mapping.get(task_type, task_type)
+    return _FALLBACKS.get(task_type)
 
 
 async def _get_phase_ticks(project_id: str) -> int:
-    from orchestrator.persistence import _get_engine
-    from sqlalchemy import text
-    from sqlalchemy.ext.asyncio import AsyncSession
-    engine = _get_engine()
-    async with AsyncSession(engine) as db:
-        result = await db.execute(
-            text("SELECT COUNT(*) FROM tasks WHERE project_id=:pid AND status='completed'"),
-            {"pid": project_id},
-        )
-        row = result.fetchone()
-        return row[0] if row else 0
+    return await count_completed_tasks(project_id)
 
 
 async def _run_agent(task_type: str, project_id: str, params: dict) -> dict:
@@ -515,11 +621,7 @@ def _proposal_from_project(project: ProjectState | None):
 
 
 async def _apply_task_result(task_result: dict) -> None:
-    import json
-    from orchestrator.persistence import _get_engine
-    from sqlalchemy import text
-    from sqlalchemy.ext.asyncio import AsyncSession
-
+    """Update project state based on completed task result."""
     task = task_result["task"]
     status = task_result["status"]
     pid = task.project_id
@@ -542,64 +644,36 @@ async def _apply_task_result(task_result: dict) -> None:
     if not project:
         return
 
-    engine = _get_engine()
-
     if effective_type == "market_scan":
         insights = result.get("market_insights", [])
         if insights:
             top = max(insights, key=lambda x: x.get("market_opportunity_score", x.get("score", 0)))
-            async with AsyncSession(engine) as db:
-                proposal = {
-                    "name": top.get("name", project.name),
-                    "genre": top.get("genre", project.genre),
-                    "description": top.get("description", ""),
-                    "market_opportunity_score": top.get("market_opportunity_score", top.get("score", 0)),
-                }
-                await db.execute(
-                    text("UPDATE projects SET phase='designing', proposal=:proposal, updated_at=:now WHERE id=:id"),
-                    {"proposal": json.dumps(proposal), "now": datetime.now(timezone.utc).isoformat(), "id": pid},
-                )
-                await db.commit()
+            proposal = {
+                "name": top.get("name", project.name),
+                "genre": top.get("genre", project.genre),
+                "description": top.get("description", ""),
+                "market_opportunity_score": top.get("market_opportunity_score", top.get("score", 0)),
+            }
+            await update_project_proposal_and_phase(pid, proposal)
         else:
             await update_project_phase(pid, "backlog")
 
     elif effective_type == "design_game":
         gdd = result.get("gdd")
         if gdd:
-            async with AsyncSession(engine) as db:
-                await db.execute(
-                    text("UPDATE projects SET gdd=:gdd, updated_at=:now WHERE id=:id"),
-                    {"gdd": json.dumps(gdd), "now": datetime.now(timezone.utc).isoformat(), "id": pid},
-                )
-                await db.commit()
+            await update_project_gdd(pid, gdd)
             await update_project_phase(pid, "developing")
 
     elif effective_type == "art_gen":
-        art_path = result.get("art_assets_path")
-        async with AsyncSession(engine) as db:
-            await db.execute(
-                text("UPDATE projects SET art_status='done', updated_at=:now WHERE id=:id"),
-                {"now": datetime.now(timezone.utc).isoformat(), "id": pid},
-            )
-            await db.commit()
+        await update_project_art_status(pid)
 
     elif effective_type == "generate_music":
-        async with AsyncSession(engine) as db:
-            await db.execute(
-                text("UPDATE projects SET music_status='done', updated_at=:now WHERE id=:id"),
-                {"now": datetime.now(timezone.utc).isoformat(), "id": pid},
-            )
-            await db.commit()
+        await update_project_music_status(pid)
 
     elif effective_type == "develop":
         code_path = result.get("game_code_path")
         if code_path:
-            async with AsyncSession(engine) as db:
-                await db.execute(
-                    text("UPDATE projects SET code_path=:cp, updated_at=:now WHERE id=:id"),
-                    {"cp": code_path, "now": datetime.now(timezone.utc).isoformat(), "id": pid},
-                )
-                await db.commit()
+            await update_project_code_path(pid, code_path)
         await update_project_phase(pid, "testing")
 
     elif effective_type == "qa":
@@ -612,41 +686,26 @@ async def _apply_task_result(task_result: dict) -> None:
         new_fail_count = prev_fail_count + (0 if passed else 1)
         qa_results["fail_count"] = new_fail_count
 
-        async with AsyncSession(engine) as db:
-            await db.execute(
-                text("UPDATE projects SET qa_result=:qr, updated_at=:now WHERE id=:id"),
-                {"qr": json.dumps(qa_results), "now": datetime.now(timezone.utc).isoformat(), "id": pid},
-            )
-            await db.commit()
+        await update_project_qa_result(pid, qa_results)
 
         if passed:
             await update_project_phase(pid, "building")
         else:
             fail_count = new_fail_count
-            if fail_count >= 3:
+            if fail_count >= QA_CANCEL_THRESHOLD:
                 await create_decision(
                     "cancel",
                     f"Project '{project.name}' failed QA {fail_count} times. Cancel?",
                     project_id=pid,
                 )
-                async with AsyncSession(engine) as db:
-                    await db.execute(
-                        text("UPDATE projects SET awaiting_decision='qa_fail', updated_at=:now WHERE id=:id"),
-                        {"now": datetime.now(timezone.utc).isoformat(), "id": pid},
-                    )
-                    await db.commit()
+                await update_project_awaiting_decision(pid, "qa_fail")
             else:
                 await update_project_phase(pid, "developing")
 
     elif effective_type == "build":
         build_path = result.get("build_path")
         if build_path:
-            async with AsyncSession(engine) as db:
-                await db.execute(
-                    text("UPDATE projects SET code_path=:bp, updated_at=:now WHERE id=:id"),
-                    {"bp": build_path, "now": datetime.now(timezone.utc).isoformat(), "id": pid},
-                )
-                await db.commit()
+            await update_project_build_path(pid, build_path)
         await enqueue(pid, "localize", {"project_name": project.name})
         await update_project_phase(pid, "publishing")
 
@@ -658,29 +717,62 @@ async def _apply_task_result(task_result: dict) -> None:
     elif effective_type == "deploy":
         itch_url = result.get("itch_url")
         if itch_url:
-            async with AsyncSession(engine) as db:
-                await db.execute(
-                    text("UPDATE projects SET itch_url=:url, phase='live', awaiting_decision=NULL, updated_at=:now WHERE id=:id"),
-                    {"url": itch_url, "now": datetime.now(timezone.utc).isoformat(), "id": pid},
-                )
-                await db.commit()
+            await set_project_live(pid, itch_url)
             await emit("scheduler", f"Project '{project.name}' published to {itch_url}", source_agent="scheduler", project_name=project.name)
             await save_chat_message("assistant", f"🚀 Project '{project.name}' is now live at {itch_url}", agent_name="scheduler")
             get_memory_store().consolidate(pid)
 
 
 async def _generate_reports() -> None:
-    if _TICK_COUNT % MARKET_SCAN_INTERVAL != 0:
+    """Generate periodic CEO report with project status and API usage."""
+    if _TICK_COUNT % REPORT_INTERVAL != 0:
         return
 
     projects = await get_all_projects()
-    active = [p for p in projects if p.phase not in (ProjectPhase.BACKLOG, ProjectPhase.CANCELLED)]
-    if not active:
-        return
+    active = [p for p in projects if p.phase not in (ProjectPhase.BACKLOG, ProjectPhase.CANCELLED, ProjectPhase.LIVE)]
+    pending = await get_pending_decisions()
+    total = len(projects)
+    active_count = len(active)
 
-    lines = [f"• {p.name}: {p.phase.value} ({p.progress:.0%})" for p in active]
-    report = f"Scheduler report (tick #{_TICK_COUNT}):\n" + "\n".join(lines)
-    await save_chat_message("assistant", report, agent_name="scheduler")
+    usage = await get_api_usage_summary()
+    total_calls = usage["calls"]
+    total_cost = usage["total_cost"]
+
+    recent_rows = await get_recent_completed_tasks()
+
+    now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    lines = [
+        "📋 公司经营报告",
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        f"🕐 {now_str}  |  Tick #{_TICK_COUNT}",
+        "",
+        f"📊 **概览**: {active_count} 个活跃项目 / {total} 个总计",
+    ]
+
+    if active:
+        lines.append("")
+        lines.append("🏗 **活跃项目**:")
+        for p in active:
+            phase_val = p.phase.value if hasattr(p.phase, "value") else str(p.phase)
+            progress_str = f"{p.progress:.0%}" if p.progress is not None else "0%"
+            lines.append(f"  • {p.name} — {phase_val} ({progress_str})")
+
+    if recent_rows:
+        lines.append("")
+        lines.append("✅ **近期完成任务**:")
+        for r in recent_rows:
+            ts = r["completed_at"][:16] if r["completed_at"] else "?"
+            lines.append(f"  • [{ts}] {r['task_type']} ({r['project_id'][:20]})")
+
+    pending_count = len(pending) if pending else 0
+    lines.append("")
+    lines.append(f"⏳ **待决策**: {pending_count} 项")
+
+    lines.append("")
+    lines.append(f"💰 **API 使用**: {total_calls:,} 次调用  |  ${total_cost:.4f}")
+
+    report = "\n".join(lines)
+    await save_chat_message("assistant", report, agent_name="ceo", metadata={"type": "report"})
 
 
 def _new_id() -> str:

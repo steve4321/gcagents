@@ -47,7 +47,7 @@ async def translate_strings(
         locales = ["ja", "ko", "es", "pt", "de"]
 
     config = load_config()
-    model = "glm-4-flash" if config.zhipu_api_key else "deepseek-chat"
+    model = "deepseek-v4-flash"
 
     results: dict[str, dict[str, str]] = {}
 

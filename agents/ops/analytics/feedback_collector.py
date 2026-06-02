@@ -69,12 +69,12 @@ def _parse_itch_comments(html: str, base_url: str) -> list[dict]:
 
 
 async def _categorize_feedback(text: str, config, project_name: str = "") -> tuple[str, str, str]:
-    if not config.zhipu_api_key:
+    if not config.deepseek_api_key:
         return "other", "no AI key", text[:200]
 
     try:
         raw, usage = await llm.chat_completion(
-            model="glm-4-flash",
+            model="deepseek-v4-flash",
             messages=[{"role": "user", "content": _CATEGORIZE_PROMPT.format(text=text[:1000])}],
             temperature=0.1,
             max_tokens=300,

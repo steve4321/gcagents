@@ -39,9 +39,14 @@ jobs:
         run: ruff format --check .
 
       - name: Type check with mypy
-        # TODO: Switch to strict=False and remove continue-on-error once pre-existing type issues are resolved
-        continue-on-error: true
-        run: mypy orchestrator shared agents dashboard
+        run: mypy --strict=false orchestrator shared agents dashboard
 
-      - name: Run tests
-        run: pytest tests/ -v
+      - name: Run tests with coverage
+        run: pytest tests/ -v --cov --cov-report=term-missing --cov-fail-under=60
+
+      - name: Upload coverage report
+        if: matrix.python-version == '3.12'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: htmlcov/

@@ -11,13 +11,10 @@ from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSock
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from loguru import logger
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from shared.config import load_config, ROOT_DIR
 
 config = load_config()
-engine = create_async_engine(config.db_url, echo=False)
 
 # ── API-Key Authentication ────────────────────────────────────────────────────
 
@@ -60,6 +57,7 @@ async def get_api_key(request: Request) -> None:
 # Track running pipeline process
 _pipeline_process: subprocess.Popen | None = None
 _forever_process: subprocess.Popen | None = None
+_scheduler_process: subprocess.Popen | None = None
 
 # Track connected WebSocket clients for event broadcasting
 _event_clients: set[WebSocket] = set()
@@ -78,6 +76,9 @@ async def broadcast_event(event_data: dict):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global engine
+    from orchestrator.persistence import _get_engine
+    engine = _get_engine()
     yield
     await engine.dispose()
 
@@ -117,167 +118,88 @@ def games_dir() -> list[dict]:
 
 @app.get("/api/status")
 async def get_status():
-    async with AsyncSession(engine) as db:
-        state_row = (await db.execute(
-            text("SELECT phase, errors FROM orchestrator_state ORDER BY id DESC LIMIT 1")
-        )).fetchone()
+    from orchestrator.persistence import (
+        get_orchestrator_state, get_last_scan_time, get_latest_project,
+    )
+    state = await get_orchestrator_state()
+    scan_time = await get_last_scan_time()
+    project = await get_latest_project()
 
-        scan_row = (await db.execute(
-            text("SELECT MAX(captured_at) as last_scan FROM market_signals")
-        )).fetchone()
-
-        proj_row = (await db.execute(
-            text("SELECT name, status FROM game_projects ORDER BY updated_at DESC LIMIT 1")
-        )).fetchone()
-
-        return {
-            "phase": state_row.phase if state_row else "idle",
-            "active_project": {"name": proj_row.name, "status": proj_row.status} if proj_row else None,
-            "last_scan_time": scan_row.last_scan if scan_row and scan_row.last_scan else None,
-            "errors": json.loads(state_row.errors) if state_row and state_row.errors else [],
-            "games": games_dir(),
-        }
+    return {
+        "phase": state["phase"] if state else "idle",
+        "active_project": project,
+        "last_scan_time": scan_time,
+        "errors": json.loads(state["errors"]) if state and state["errors"] else [],
+        "games": games_dir(),
+    }
 
 
 @app.get("/api/agents")
 async def get_agents():
-    async with AsyncSession(engine) as db:
-        rows = (await db.execute(text("""
-            SELECT node_name, status, phase, started_at, completed_at, duration_ms, error, project_name
-            FROM agent_logs
-            ORDER BY id DESC
-            LIMIT 50
-        """))).fetchall()
-
-        agents = [dict(r._mapping) for r in rows]
-
-        stats = (await db.execute(text("""
-            SELECT
-                node_name,
-                COUNT(*) as runs,
-                SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END) as successes,
-                SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END) as failures,
-                ROUND(AVG(CASE WHEN duration_ms IS NOT NULL THEN duration_ms ELSE 0 END)) as avg_duration_ms
-            FROM agent_logs
-            GROUP BY node_name
-            ORDER BY node_name
-        """))).fetchall()
-
-        return {"logs": agents, "stats": [dict(r._mapping) for r in stats]}
+    from orchestrator.persistence import get_agent_logs, get_agent_stats
+    agents = await get_agent_logs()
+    stats = await get_agent_stats()
+    return {"logs": agents, "stats": stats}
 
 
 @app.get("/api/market/report")
 async def get_market_report():
-    async with AsyncSession(engine) as db:
-        report = (await db.execute(
-            text("SELECT * FROM market_reports ORDER BY id DESC LIMIT 1")
-        )).fetchone()
-
-        if not report:
-            return None
-
-        d = dict(report._mapping)
-        if isinstance(d.get("opportunities_json"), str):
-            d["opportunities"] = json.loads(d["opportunities_json"])
-        return d
+    from orchestrator.persistence import get_market_report_detail
+    d = await get_market_report_detail()
+    if not d:
+        return None
+    if isinstance(d.get("opportunities_json"), str):
+        d["opportunities"] = json.loads(d["opportunities_json"])
+    return d
 
 
 @app.get("/api/market/latest")
 async def get_market_latest():
-    async with AsyncSession(engine) as db:
-        rows = (await db.execute(
-            text("""
-                SELECT id, source, signal_type, genre, title, data, score, captured_at
-                FROM market_signals
-                ORDER BY captured_at DESC
-                LIMIT 50
-            """)
-        )).fetchall()
-        signals = []
-        for row in rows:
-            d = dict(row._mapping)
-            if isinstance(d.get("data"), str):
-                d["data"] = json.loads(d["data"])
-            signals.append(d)
-        return signals
+    from orchestrator.persistence import get_latest_market_signals
+    return await get_latest_market_signals()
 
 
 @app.get("/api/projects")
 async def list_projects():
-    async with AsyncSession(engine) as db:
-        rows = (await db.execute(
-            text("""
-                SELECT id, name, genre, status, gdd, itch_url,
-                       created_at, updated_at, published_at
-                FROM game_projects
-                ORDER BY updated_at DESC
-            """)
-        )).fetchall()
-        projects = []
-        for row in rows:
-            d = dict(row._mapping)
-            if isinstance(d.get("gdd"), str):
-                try:
-                    d["gdd"] = json.loads(d["gdd"])
-                except (json.JSONDecodeError, TypeError):
-                    pass
-            projects.append(d)
-        return projects
+    from orchestrator.persistence import get_all_projects
+    projects = await get_all_projects()
+    out = []
+    for p in projects:
+        d = p.model_dump()
+        d["status"] = d.get("phase", "unknown")
+        out.append(d)
+    return out
 
 
 @app.get("/api/pipeline/history")
 async def get_pipeline_history():
-    async with AsyncSession(engine) as db:
-        rows = (await db.execute(
-            text("SELECT phase, updated_at, errors FROM orchestrator_state ORDER BY id DESC LIMIT 20")
-        )).fetchall()
-        return [dict(r._mapping) for r in rows]
+    from orchestrator.persistence import get_orchestrator_history
+    return await get_orchestrator_history()
 
 
 @app.get("/api/memory")
 async def get_memory():
-    async with AsyncSession(engine) as db:
-        rows = (await db.execute(
-            text("""
-                SELECT id, category, title, content, importance, created_at
-                FROM company_memory
-                ORDER BY importance DESC, created_at DESC
-                LIMIT 50
-            """)
-        )).fetchall()
-        memories = []
-        for row in rows:
-            d = dict(row._mapping)
-            if isinstance(d.get("content"), str):
-                try:
-                    d["content"] = json.loads(d["content"])
-                except (json.JSONDecodeError, TypeError):
-                    pass
-            memories.append(d)
-        return memories
+    from orchestrator.persistence import get_company_memory
+    return await get_company_memory()
 
 
 @app.get("/api/gdd/{project_id}")
 async def get_gdd(project_id: int):
-    async with AsyncSession(engine) as db:
-        row = (await db.execute(
-            text("SELECT name, gdd, proposal FROM game_projects WHERE id = :pid"),
-            {"pid": project_id},
-        )).fetchone()
-        if not row:
-            raise HTTPException(404, "Project not found")
-        d = dict(row._mapping)
-        if isinstance(d.get("gdd"), str):
-            try:
-                d["gdd"] = json.loads(d["gdd"])
-            except (json.JSONDecodeError, TypeError):
-                pass
-        if isinstance(d.get("proposal"), str):
-            try:
-                d["proposal"] = json.loads(d["proposal"])
-            except (json.JSONDecodeError, TypeError):
-                pass
-        return d
+    from orchestrator.persistence import get_project_gdd
+    d = await get_project_gdd(str(project_id))
+    if not d:
+        raise HTTPException(404, "Project not found")
+    if isinstance(d.get("gdd"), str):
+        try:
+            d["gdd"] = json.loads(d["gdd"])
+        except (json.JSONDecodeError, TypeError):
+            pass
+    if isinstance(d.get("proposal"), str):
+        try:
+            d["proposal"] = json.loads(d["proposal"])
+        except (json.JSONDecodeError, TypeError):
+            pass
+    return d
 
 
 # ── Pipeline Control ──────────────────────────────────────────────────────────
@@ -288,12 +210,16 @@ async def trigger_pipeline():
     if _pipeline_process is not None and _pipeline_process.poll() is None:
         return {"status": "already_running", "message": "Pipeline is already running"}
 
-    _pipeline_process = subprocess.Popen(
-        [sys.executable, "-m", "orchestrator.main", "run"],
-        cwd=ROOT_DIR,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
+    try:
+        _pipeline_process = subprocess.Popen(
+            [sys.executable, "-m", "orchestrator.main", "run"],
+            cwd=ROOT_DIR,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    except (FileNotFoundError, PermissionError, OSError) as e:
+        logger.error(f"Failed to start pipeline: {e}")
+        return {"status": "error", "message": f"Failed to start pipeline: {e}"}
     logger.info(f"Pipeline started (pid={_pipeline_process.pid})")
     return {"status": "started", "message": "Pipeline started"}
 
@@ -304,20 +230,65 @@ async def trigger_forever(interval: int = 3600):
     if _forever_process is not None and _forever_process.poll() is None:
         return {"status": "already_running", "message": "24/7 mode is already running"}
 
-    _forever_process = subprocess.Popen(
-        [sys.executable, "-m", "orchestrator.main", "run-forever",
-         "--interval", str(interval)],
-        cwd=ROOT_DIR,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
+    try:
+        _forever_process = subprocess.Popen(
+            [sys.executable, "-m", "orchestrator.main", "run-forever",
+             "--interval", str(interval)],
+            cwd=ROOT_DIR,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    except (FileNotFoundError, PermissionError, OSError) as e:
+        logger.error(f"Failed to start 24/7 mode: {e}")
+        return {"status": "error", "message": f"Failed to start 24/7 mode: {e}"}
     logger.info(f"24/7 mode started (pid={_forever_process.pid}, interval={interval}s)")
     return {"status": "started", "mode": "forever", "message": "24/7 mode started"}
 
 
+@app.post("/api/pipeline/run-scheduler", dependencies=[Depends(get_api_key)])
+async def trigger_scheduler(interval: int = 60):
+    global _scheduler_process
+    if _scheduler_process is not None and _scheduler_process.poll() is None:
+        return {"status": "already_running", "message": "Scheduler is already running"}
+
+    try:
+        _scheduler_process = subprocess.Popen(
+            [sys.executable, "-m", "orchestrator.main", "run-scheduler",
+             "--interval", str(interval)],
+            cwd=ROOT_DIR,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    except (FileNotFoundError, PermissionError, OSError) as e:
+        logger.error(f"Failed to start scheduler: {e}")
+        return {"status": "error", "message": f"Failed to start scheduler: {e}"}
+    logger.info(f"Scheduler started (pid={_scheduler_process.pid}, interval={interval}s)")
+    return {"status": "started", "mode": "scheduler", "message": f"Scheduler started (interval={interval}s)"}
+
+
+@app.post("/api/scheduler/pause", dependencies=[Depends(get_api_key)])
+async def pause_scheduler():
+    from orchestrator.scheduler import set_paused
+    set_paused(True)
+    return {"paused": True}
+
+
+@app.post("/api/scheduler/resume", dependencies=[Depends(get_api_key)])
+async def resume_scheduler():
+    from orchestrator.scheduler import set_paused
+    set_paused(False)
+    return {"paused": False}
+
+
+@app.get("/api/scheduler/paused")
+async def get_scheduler_paused():
+    from orchestrator.scheduler import is_paused
+    return {"paused": is_paused()}
+
+
 @app.post("/api/pipeline/stop", dependencies=[Depends(get_api_key)])
 async def stop_pipeline():
-    global _pipeline_process, _forever_process
+    global _pipeline_process, _forever_process, _scheduler_process
     stopped = []
 
     if _pipeline_process is not None and _pipeline_process.poll() is None:
@@ -338,6 +309,15 @@ async def stop_pipeline():
         stopped.append("24/7 mode")
         _forever_process = None
 
+    if _scheduler_process is not None and _scheduler_process.poll() is None:
+        _scheduler_process.terminate()
+        try:
+            _scheduler_process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            _scheduler_process.kill()
+        stopped.append("scheduler")
+        _scheduler_process = None
+
     if stopped:
         logger.info(f"Stopped: {', '.join(stopped)}")
         return {"status": "stopped", "stopped": stopped}
@@ -346,8 +326,11 @@ async def stop_pipeline():
 
 @app.get("/api/pipeline/status")
 async def check_pipeline_status():
-    global _pipeline_process, _forever_process
+    global _pipeline_process, _forever_process, _scheduler_process
 
+    scheduler_running = (
+        _scheduler_process is not None and _scheduler_process.poll() is None
+    )
     forever_running = (
         _forever_process is not None and _forever_process.poll() is None
     )
@@ -355,12 +338,15 @@ async def check_pipeline_status():
         _pipeline_process is not None and _pipeline_process.poll() is None
     )
 
+    if scheduler_running:
+        return {"running": True, "mode": "scheduler", "scheduler_running": True,
+                "forever_running": forever_running, "status": "running"}
     if forever_running:
         return {"running": True, "mode": "forever", "forever_running": True,
-                "status": "running"}
+                "scheduler_running": False, "status": "running"}
     if single_running:
         return {"running": True, "mode": "single", "forever_running": False,
-                "status": "running"}
+                "scheduler_running": False, "status": "running"}
 
     # Single pipeline may have just finished — check exit code
     if _pipeline_process is not None:
@@ -378,25 +364,17 @@ async def check_pipeline_status():
 
 @app.post("/api/analytics/event")
 async def receive_analytics(game: str = "", event: str = "", score: float = 0, play_time: int = 0):
-    from orchestrator.persistence import save_game_metric, _get_engine
-    from sqlalchemy import text
+    from orchestrator.persistence import save_game_metric, find_project_by_name
     try:
-        engine = _get_engine()
-        async with AsyncSession(engine) as db:
-            row = await db.execute(
-                text("SELECT id FROM game_projects WHERE name = :name"),
-                {"name": game},
-            )
-            row = row.fetchone()
-            if row:
-                pid = row[0]
-                await save_game_metric(pid, f"event_{event}", 1)
-                if score > 0:
-                    await save_game_metric(pid, "last_score", score)
-                if play_time > 0:
-                    await save_game_metric(pid, "avg_session_s", play_time)
-    except Exception:
-        pass
+        pid = await find_project_by_name(game)
+        if pid:
+            await save_game_metric(pid, f"event_{event}", 1)
+            if score > 0:
+                await save_game_metric(pid, "last_score", score)
+            if play_time > 0:
+                await save_game_metric(pid, "avg_session_s", play_time)
+    except Exception as e:
+        logger.warning(f"Analytics event error: {e}")
     return {"ok": True}
 
 
@@ -404,21 +382,97 @@ async def receive_analytics(game: str = "", event: str = "", score: float = 0, p
 
 @app.get("/api/feedback/{project_id}")
 async def list_feedback(project_id: int, unprocessed_only: bool = False):
-    from orchestrator.persistence import _get_engine
-    from sqlalchemy import text
-    engine = _get_engine()
-    async with AsyncSession(engine) as db:
-        if unprocessed_only:
-            rows = await db.execute(
-                text("SELECT * FROM game_feedback WHERE project_id = :pid AND processed = 0 ORDER BY posted_at DESC"),
-                {"pid": project_id},
-            )
-        else:
-            rows = await db.execute(
-                text("SELECT * FROM game_feedback WHERE project_id = :pid ORDER BY posted_at DESC LIMIT 50"),
-                {"pid": project_id},
-            )
-        return [dict(r._mapping) for r in rows.fetchall()]
+    from orchestrator.persistence import get_pending_feedback, get_all_feedback
+    if unprocessed_only:
+        return await get_pending_feedback(str(project_id))
+    return await get_all_feedback(str(project_id))
+
+
+@app.get("/api/projects/{project_id}/documents")
+async def get_project_documents(project_id: str):
+    from orchestrator.persistence import get_project, get_project_tasks
+    project = await get_project(project_id)
+    if not project:
+        raise HTTPException(404, "Project not found")
+
+    tasks = await get_project_tasks(project_id)
+
+    # Parse task results by type — pick latest completed for each
+    task_by_type: dict[str, dict] = {}
+    for t in tasks:
+        if t.status.value == "completed" and t.task_type not in task_by_type:
+            task_by_type[t.task_type] = {
+                "result": t.result,
+                "completed_at": t.completed_at,
+            }
+
+    def _parse(raw):
+        if raw is None:
+            return None
+        if isinstance(raw, str):
+            try:
+                return json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                return raw
+        return raw
+
+    proposal_raw = getattr(project, "proposal", None)
+    gdd_raw = getattr(project, "gdd", None)
+    qa_raw = getattr(project, "qa_result", None)
+
+    documents = [
+        {
+            "type": "proposal",
+            "title": "项目提案",
+            "content": _parse(proposal_raw) if proposal_raw else None,
+            "available": proposal_raw is not None,
+            "created_at": project.created_at,
+        },
+        {
+            "type": "gdd",
+            "title": "游戏设计文档",
+            "content": _parse(gdd_raw) if gdd_raw else None,
+            "available": gdd_raw is not None,
+            "created_at": project.created_at,
+        },
+        {
+            "type": "market_scan",
+            "title": "市场调研报告",
+            "content": (task_by_type.get("market_scan", {}).get("result")),
+            "available": "market_scan" in task_by_type,
+            "created_at": task_by_type.get("market_scan", {}).get("completed_at"),
+        },
+        {
+            "type": "art_report",
+            "title": "美术资源报告",
+            "content": (task_by_type.get("art_gen", {}).get("result")),
+            "available": "art_gen" in task_by_type,
+            "created_at": task_by_type.get("art_gen", {}).get("completed_at"),
+        },
+        {
+            "type": "music_report",
+            "title": "音乐报告",
+            "content": (task_by_type.get("generate_music", {}).get("result")),
+            "available": "generate_music" in task_by_type,
+            "created_at": task_by_type.get("generate_music", {}).get("completed_at"),
+        },
+        {
+            "type": "qa_report",
+            "title": "QA测试报告",
+            "content": _parse(qa_raw) if qa_raw else None,
+            "available": qa_raw is not None,
+            "created_at": project.updated_at,
+        },
+        {
+            "type": "build_report",
+            "title": "构建报告",
+            "content": (task_by_type.get("build", {}).get("result")),
+            "available": "build" in task_by_type,
+            "created_at": task_by_type.get("build", {}).get("completed_at"),
+        },
+    ]
+
+    return documents
 
 
 @app.get("/api/projects/live")
@@ -461,16 +515,17 @@ async def send_chat_message(message: dict):
     if not content:
         raise HTTPException(400, "Message content is required")
 
-    if target_agent not in ("ceo", "cfo", "coo"):
-        raise HTTPException(400, "Target must be ceo, cfo, or coo")
+    if target_agent != "ceo":
+        raise HTTPException(400, "Only CEO is available")
 
-    from orchestrator.persistence import save_chat_message, log_event
+    from orchestrator.persistence import save_chat_message, log_event, get_all_projects
+    from shared.models import ProjectPhase
 
     await save_chat_message(
         role="user",
         content=content,
         agent_name=target_agent,
-        metadata={"target_agent": target_agent, "processed": False},
+        metadata={"target_agent": target_agent, "processed": True},
     )
 
     await log_event(
@@ -481,7 +536,86 @@ async def send_chat_message(message: dict):
         source_agent="dashboard",
     )
 
+    reply = await _generate_ceo_reply(content)
+
+    await save_chat_message(
+        role="assistant",
+        content=reply,
+        agent_name="ceo",
+    )
+
     return {"status": "sent", "target": target_agent}
+
+
+async def _generate_ceo_reply(content: str) -> str:
+    from orchestrator.persistence import get_all_projects, update_project_phase
+    from shared.llm_client import llm
+    from shared.models import ProjectPhase
+
+    content_lower = content.lower().strip()
+
+    # 指令式命令处理
+    if any(kw in content_lower for kw in ("推进", "advance", "下一个", "next")):
+        projects = await get_all_projects()
+        active = [p for p in projects if p.phase not in (ProjectPhase.BACKLOG, ProjectPhase.CANCELLED, ProjectPhase.LIVE)]
+        if not active:
+            backlog = [p for p in projects if p.phase == ProjectPhase.BACKLOG]
+            if backlog:
+                await update_project_phase(backlog[0].id, "scanning")
+                return f"已将 {backlog[0].name} 从 backlog 推进到 scanning 阶段。"
+            return "没有可推进的项目。"
+        p = active[0]
+        phase_order = ["scanning", "designing", "developing", "testing", "building", "publishing", "live"]
+        current_idx = phase_order.index(p.phase.value) if p.phase.value in phase_order else -1
+        if current_idx < len(phase_order) - 1:
+            next_phase = phase_order[current_idx + 1]
+            await update_project_phase(p.id, next_phase)
+            return f"已将 {p.name} 从 {p.phase.value} 推进到 {next_phase}。"
+        return f"{p.name} 已经是最终阶段了。"
+
+    if any(kw in content_lower for kw in ("取消", "cancel")):
+        projects = await get_all_projects()
+        for p in projects:
+            if p.name.lower() in content_lower and p.phase != ProjectPhase.CANCELLED:
+                await update_project_phase(p.id, "cancelled")
+                return f"已取消项目 {p.name}。"
+        active = [p for p in projects if p.phase not in (ProjectPhase.BACKLOG, ProjectPhase.CANCELLED)]
+        if active:
+            await update_project_phase(active[0].id, "cancelled")
+            return f"已取消项目 {active[0].name}。"
+        return "没有可取消的项目。"
+
+    projects = await get_all_projects()
+    if projects:
+        lines = [f"- {p.name} ({p.phase.value}): {p.progress:.0%}" for p in projects]
+        project_summary = "\n".join(lines)
+    else:
+        project_summary = "暂无项目"
+
+    system_prompt = (
+        "你是 GCAgents 的 CEO，一家 AI 驱动的游戏公司。你负责管理游戏项目的全生命周期。"
+        "根据公司当前状态回答用户问题。简洁专业，用中文回复。\n"
+        "可用指令：「推进」推进项目到下一阶段，「取消 项目名」取消项目，「状态」查看所有项目。\n\n"
+        f"当前项目列表:\n{project_summary}"
+    )
+
+    try:
+        reply, _ = await llm.chat_completion(
+            model="deepseek-v4-flash",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": content},
+            ],
+            max_tokens=500,
+            temperature=0.7,
+            agent_name="ceo-chat",
+        )
+        return reply.strip()
+    except Exception:
+        if not projects:
+            return "目前还没有项目。系统会自动扫描市场并创建新项目。"
+        active = [p for p in projects if p.phase not in (ProjectPhase.BACKLOG, ProjectPhase.CANCELLED)]
+        return f"当前 {len(projects)} 个项目，{len(active)} 个活跃中。"
 
 
 @app.get("/api/chat/history")
@@ -531,10 +665,94 @@ async def list_decisions():
 @app.post("/api/decisions/{decision_id}/respond", dependencies=[Depends(get_api_key)])
 async def respond_decision(decision_id: str, response: str = ""):
     from orchestrator.decision_gate import resolve
+    from orchestrator.persistence import update_project_awaiting_decision
     result = await resolve(decision_id, response)
     if not result:
         raise HTTPException(404, "Decision not found")
+
+    resp = response.lower()
+    pid = result.project_id
+    if resp in ("approve", "approved") and pid:
+        await _apply_approved_decision(result)
+    elif resp in ("reject", "rejected") and pid:
+        await _apply_rejected_decision(result)
+
+    if pid:
+        await update_project_awaiting_decision(pid, None)
+
     return result.model_dump()
+
+
+@app.post("/api/projects/{project_id}/advance")
+async def advance_project(project_id: str):
+    from orchestrator.persistence import get_project, update_project_phase
+    from shared.models import ProjectPhase
+
+    project = await get_project(project_id)
+    if not project:
+        raise HTTPException(404, "Project not found")
+
+    phase_order = ["backlog", "scanning", "designing", "developing", "testing", "building", "publishing", "live"]
+    current_idx = phase_order.index(project.phase.value) if project.phase.value in phase_order else -1
+
+    if current_idx < 0 or current_idx >= len(phase_order) - 1:
+        return {"status": "error", "message": "Project is already at final phase"}
+
+    next_phase = phase_order[current_idx + 1]
+    await update_project_phase(project_id, next_phase)
+    return {"status": "ok", "from": project.phase.value, "to": next_phase}
+
+
+@app.post("/api/projects/{project_id}/cancel")
+async def cancel_project(project_id: str):
+    from orchestrator.persistence import get_project, update_project_phase
+
+    project = await get_project(project_id)
+    if not project:
+        raise HTTPException(404, "Project not found")
+
+    await update_project_phase(project_id, "cancelled")
+    return {"status": "cancelled", "project": project.name}
+
+
+async def _apply_approved_decision(decision) -> None:
+    from orchestrator.persistence import get_project, update_project_phase
+    from orchestrator.task_queue import enqueue
+    from shared.models import ProjectPhase
+
+    dtype = decision.decision_type.value
+    pid = decision.project_id
+
+    if dtype == "new_project" and pid:
+        await update_project_phase(pid, "scanning")
+
+    elif dtype == "publish" and pid:
+        await update_project_phase(pid, "publishing")
+        project = await get_project(pid)
+        if project:
+            await enqueue(pid, "deploy", {"project_name": project.name})
+
+    elif dtype == "budget_overrun" and pid:
+        await update_project_phase(pid, "developing")
+
+    elif dtype == "direction_change" and pid:
+        await update_project_phase(pid, "designing")
+
+
+async def _apply_rejected_decision(decision) -> None:
+    from orchestrator.persistence import get_project, update_project_phase
+
+    dtype = decision.decision_type.value
+    pid = decision.project_id
+
+    if dtype == "new_project" and pid:
+        await update_project_phase(pid, "cancelled")
+
+    elif dtype == "cancel" and pid:
+        pass
+
+    elif dtype == "publish" and pid:
+        await update_project_phase(pid, "testing")
 
 
 @app.get("/api/orchestrator/projects")
@@ -555,12 +773,22 @@ async def get_orchestrator_project(project_id: str):
 
 @app.get("/api/orchestrator/tasks")
 async def list_tasks(project_id: str = ""):
-    from orchestrator.persistence import get_pending_tasks, get_project_tasks
+    from orchestrator.persistence import get_pending_tasks, get_project_tasks, get_project
     if project_id:
         tasks = await get_project_tasks(project_id)
     else:
         tasks = await get_pending_tasks()
-    return [t.model_dump() for t in tasks]
+
+    project_names: dict[str, str] = {}
+    result = []
+    for t in tasks:
+        d = t.model_dump()
+        if t.project_id not in project_names:
+            proj = await get_project(t.project_id)
+            project_names[t.project_id] = proj.name if proj else "Unknown"
+        d["project_name"] = project_names[t.project_id]
+        result.append(d)
+    return result
 
 
 @app.post("/api/projects/{project_id}/pause", dependencies=[Depends(get_api_key)])
@@ -636,10 +864,9 @@ app.mount("/", StaticFiles(directory=str(ROOT_DIR / "dashboard" / "web"), html=T
 
 if __name__ == "__main__":
     import uvicorn
+    _host = "127.0.0.1" if not _DASHBOARD_API_KEY else "0.0.0.0"
     if _DASHBOARD_API_KEY:
-        _host = "0.0.0.0"
         logger.info("DASHBOARD_API_KEY configured — requiring X-API-Key on control-plane endpoints")
     else:
-        _host = "127.0.0.1"
         logger.warning("DASHBOARD_API_KEY not set — running in permissive localhost-only mode")
     uvicorn.run("dashboard.web.api_server:app", host=_host, port=config.dashboard_port, reload=True)

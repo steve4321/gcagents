@@ -4,7 +4,6 @@ import json
 import re
 import time
 import uuid
-from pathlib import Path
 
 from loguru import logger
 
@@ -235,11 +234,9 @@ _GAME_TEMPLATE = '''<!DOCTYPE html>
 
 def _pick_model() -> str:
     config = load_config()
-    if config.zhipu_api_key:
-        return "glm-4-flash"
-    if config.deepseek_api_key:
-        return "deepseek-chat"
-    raise RuntimeError("No LLM API key configured (need zhipu_api_key or deepseek_api_key)")
+    if not config.deepseek_api_key:
+        raise RuntimeError("No LLM API key configured (need DEEPSEEK_API_KEY)")
+    return "deepseek-v4-flash"
 
 
 async def _generate_concept(concept_prompt: str) -> dict:
@@ -287,7 +284,6 @@ def _fallback_concept(prompt: str) -> dict:
 def _build_html(concept: dict) -> str:
     controls = concept.get("controls", {})
     move = controls.get("move", "arrow keys")
-    action = controls.get("action", "dodge and collect")
     controls_text = f"Move: {move}"
 
     return _GAME_TEMPLATE.format(

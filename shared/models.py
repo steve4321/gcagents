@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
+from typing import TypedDict
 
 from pydantic import BaseModel
 
@@ -217,3 +218,23 @@ class TaskRecord(BaseModel):
     started_at: datetime | None = None
     completed_at: datetime | None = None
     created_at: datetime = datetime.now()
+
+
+class RetryMetadata(TypedDict, total=False):
+    retry_count: int
+    retry_strategy: str
+    layer: int
+    last_error: str
+
+
+class TaskParams(TypedDict, total=False):
+    project_name: str
+    genre: str
+    gdd: dict
+    code_path: str
+    retry_count: int
+    retry_strategy: str
+    layer: int
+    last_error: str
+    simplified: bool
+    original_task_type: str

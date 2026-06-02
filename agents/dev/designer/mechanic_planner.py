@@ -21,7 +21,7 @@ async def plan_mechanics(gdd: dict) -> list[dict]:
     """
     config = load_config()
 
-    model = "glm-4-flash" if config.zhipu_api_key else "deepseek-chat"
+    model = "deepseek-v4-flash"
 
     prompt = (
         "Analyze this Game Design Document and decompose it "

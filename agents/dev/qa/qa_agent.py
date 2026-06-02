@@ -1,3 +1,8 @@
+"""QA agent — validates game builds and runs automated Playwright playtests.
+
+Checks: project structure, build artifacts, and 8-point automated verification.
+Failing QA feeds back to the developer for retry.
+"""
 from __future__ import annotations
 
 import subprocess
@@ -6,6 +11,7 @@ from pathlib import Path
 from loguru import logger
 
 from orchestrator.state import CompanyState, PipelinePhase
+from shared.exceptions import GameBuildError
 
 from .auto_playtest import run_auto_playtest
 

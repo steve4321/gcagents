@@ -6,19 +6,10 @@ and autouse cleanup to prevent state leakage between tests.
 
 from __future__ import annotations
 
-import asyncio
 from unittest.mock import patch
 
 import pytest
 from sqlalchemy.ext.asyncio import create_async_engine
-
-
-@pytest.fixture(scope="session")
-def event_loop():
-    """Session-scoped event loop for async tests (pytest-asyncio)."""
-    loop = asyncio.new_event_loop()
-    yield loop
-    loop.close()
 
 
 @pytest.fixture()

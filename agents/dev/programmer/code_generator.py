@@ -3,10 +3,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from jinja2 import Environment, FileSystemLoader
 from loguru import logger
 
 from shared.config import AppConfig
+from shared.constants import TRUNC_LLM_PROMPT_ERROR
 from shared.llm_client import llm
 
 
@@ -51,13 +51,9 @@ async def generate_game_code(gdd: dict, project_dir: Path, config: AppConfig, bu
 
     _scaffold_project(project_dir)
 
-    if config.deepseek_api_key:
-        model = "deepseek-coder"
-        max_tokens = 16384
-    elif config.zhipu_api_key:
-        model = "glm-4-flash"
-        max_tokens = 8192
-    else:
+    model = "deepseek-v4-flash"
+    max_tokens = 16384
+    if not config.deepseek_api_key:
         logger.error("No AI API key configured")
         return project_dir
 
@@ -157,7 +153,7 @@ Include basic gameplay analytics: call `navigator.sendBeacon('/api/analytics/eve
     if build_error:
         messages.append({
             "role": "user",
-            "content": f"The previous build FAILED with this error. Fix the code:\n\n{build_error[:2000]}\n\nReturn ALL source files again with the fixes applied.",
+            "content": f"The previous build FAILED with this error. Fix the code:\n\n{build_error[:TRUNC_LLM_PROMPT_ERROR]}\n\nReturn ALL source files again with the fixes applied.",
         })
 
     response = await llm.chat_completion(
@@ -186,6 +182,7 @@ Include basic gameplay analytics: call `navigator.sendBeacon('/api/analytics/eve
 
 
 def _scaffold_project(project_dir: Path) -> None:
+    """Create package.json, tsconfig.json, vite.config.ts, and index.html."""
     package_json = {
         "name": project_dir.name,
         "version": "1.0.0",
@@ -261,6 +258,7 @@ export default defineConfig({
 
 
 def _install_and_build(project_dir: Path) -> None:
+    """Run npm install && vite build; cleans node_modules after."""
     import shutil
     import subprocess
 
@@ -275,6 +273,7 @@ def _install_and_build(project_dir: Path) -> None:
 
 
 def _parse_code_files(text: str) -> dict[str, str]:
+    """Parse LLM response into a dict mapping file paths to contents."""
     text = text.strip()
     if text.startswith("```"):
         text = text.split("\n", 1)[1].rsplit("```", 1)[0]
