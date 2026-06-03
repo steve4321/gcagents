@@ -694,88 +694,12 @@ async function renderMarket() {
   const grid = container.querySelector('.market-grid');
 
   try {
-    const [reportData, signalsData] = await Promise.all([
-      fetchJSON(`${API_BASE}/market/report`),
-      fetchJSON(`${API_BASE}/market/latest`)
-    ]);
-
-    const opportunities = (reportData?.opportunities || []).slice(0, 3);
-    const signals = (signalsData || []).slice(0, 20);
-    const analysis = reportData?.raw_analysis || '暂无分析数据。市场扫描器运行后会自动填充。';
-    let analysisHtml = '';
-    try {
-      const analysisData = typeof analysis === 'string' ? JSON.parse(analysis) : analysis;
-      if (Array.isArray(analysisData)) {
-        analysisHtml = analysisData.map(item => `
-          <div class="analysis-item">
-            <h4>${escapeHtml(item.name || '未命名')}</h4>
-            <p><strong>类型:</strong> ${escapeHtml(item.genre || '未知')}</p>
-            <p>${escapeHtml(item.description || '')}</p>
-            ${item.estimated_dev_hours ? `<p><strong>预估开发时间:</strong> ${item.estimated_dev_hours} 小时</p>` : ''}
-            ${item.market_opportunity_score ? `<p><strong>市场机会评分:</strong> ${item.market_opportunity_score}</p>` : ''}
-          </div>
-        `).join('');
-      } else if (typeof analysisData === 'object') {
-        analysisHtml = `<pre>${escapeHtml(JSON.stringify(analysisData, null, 2))}</pre>`;
-      } else {
-        analysisHtml = `<p>${escapeHtml(String(analysisData))}</p>`;
-      }
-    } catch (e) {
-      analysisHtml = `<p>${escapeHtml(analysis)}</p>`;
-    }
-
-    const sourceMap = {};
-    signals.forEach(s => {
-      const src = s.source || 'unknown';
-      if (!sourceMap[src]) sourceMap[src] = 0;
-      sourceMap[src]++;
-    });
-    const sourceBadges = Object.entries(sourceMap).map(([src, count]) => {
-      const active = count > 0;
-      return `<div class="source-badge ${active ? 'active' : 'inactive'}">${escapeHtml(src)} <span class="count">(${count})</span></div>`;
-    }).join('');
-
-    const genreTrendMap = {};
-    signals.forEach(s => {
-      const genre = s.genre || 'unknown';
-      if (!genreTrendMap[genre]) {
-        genreTrendMap[genre] = { rising: 0, stable: 0, declining: 0, total: 0, sources: new Set() };
-      }
-      genreTrendMap[genre].total++;
-      genreTrendMap[genre].sources.add(s.source);
-      if (s.score >= 0.7) genreTrendMap[genre].rising++;
-      else if (s.score >= 0.4) genreTrendMap[genre].stable++;
-      else genreTrendMap[genre].declining++;
-    });
-
-    const getTrendBadge = (genre) => {
-      const data = genreTrendMap[genre];
-      if (!data || data.total === 0) return '';
-      if (data.rising > data.declining) return '<div class="trend-badge rising">↑ Rising</div>';
-      if (data.declining > data.rising) return '<div class="trend-badge declining">↓ Declining</div>';
-      return '<div class="trend-badge stable">→ Stable</div>';
-    };
-
-    const getSourceAgreement = (genre) => {
-      const data = genreTrendMap[genre];
-      if (!data || data.sources.size < 2) return '';
-      return `<div class="source-agreement">${data.sources.size} sources confirm</div>`;
-    };
+    const signalsData = await fetchJSON(`${API_BASE}/market/latest`);
+    const signals = (signalsData || []).slice(0, 50);
 
     grid.innerHTML = `
-      <div class="market-analysis">
-        <div class="market-analysis-header">
-          <span class="market-analysis-title">市场分析</span>
-          <span class="market-analysis-badge">${reportData?.signals_count || 0} 个信号</span>
-        </div>
-        <div class="market-analysis-content">${analysisHtml}</div>
-      </div>
-      <div class="market-sources-section">
-        <div class="sources-title">数据源状态</div>
-        <div class="market-sources">${sourceBadges || '<div class="source-badge inactive">暂无活跃数据源</div>'}</div>
-      </div>
       <div class="signals-section">
-        <div class="signals-title">最新信号</div>
+        <div class="signals-title">市场信号</div>
         <div class="signals-table-container">
           ${signals.length > 0 ? `
             <table class="signals-table">
@@ -784,7 +708,7 @@ async function renderMarket() {
                   <th>来源</th>
                   <th>类型</th>
                   <th>标题</th>
-                  <th>类型</th>
+                  <th>游戏类型</th>
                   <th>评分</th>
                   <th>时间</th>
                 </tr>
