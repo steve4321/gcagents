@@ -4,7 +4,7 @@ import json
 
 from loguru import logger
 
-from shared.config import load_config
+from shared.constants import DEFAULT_ANALYSIS_MODEL
 from shared.llm_client import llm
 
 MECHANIC_PLANNER_SYSTEM = (
@@ -19,9 +19,8 @@ async def plan_mechanics(gdd: dict) -> list[dict]:
 
     Returns list of mechanic dicts sorted by implementation_order.
     """
-    config = load_config()
 
-    model = "deepseek-v4-flash"
+    model = DEFAULT_ANALYSIS_MODEL
 
     prompt = (
         "Analyze this Game Design Document and decompose it "
@@ -40,7 +39,9 @@ async def plan_mechanics(gdd: dict) -> list[dict]:
         "- dependencies: list of other mechanic names that must be "
         "implemented first\n"
         "- implementation_order: integer (0=first, must be sequential)\n"
-        '- complexity: "low" | "medium" | "high"\n\n'
+        '- complexity: "low" | "medium" | "high"\n'
+        '- category: "core_gameplay" | "monetization" | "retention" | '
+        '"engagement" | "polish"\n\n'
         "Order mechanics by dependency: core systems first "
         "(movement, rendering), gameplay next (scoring, enemies), "
         "polish last (effects, sound).\n\n"
@@ -48,7 +49,10 @@ async def plan_mechanics(gdd: dict) -> list[dict]:
         "- Generate AT LEAST 5 mechanics for any game (minimum: player_movement, score_system, enemy_system, level_progression, and one unique gameplay mechanic)\n"
         "- Each mechanic's complexity should be \"medium\" or higher for at least 3 mechanics\n"
         "- The \"inputs\" and \"outputs\" lists must each have at least 2 items\n"
-        "- The \"constraints\" list must have at least 1 item per mechanic\n\n"
+        "- The \"constraints\" list must have at least 1 item per mechanic\n"
+        "- Each mechanic MUST have a 'category' tag indicating its purpose\n"
+        "- At least 1 mechanic should be categorized as 'retention' (e.g., daily challenges, streak systems)\n"
+        "- At least 1 mechanic should be categorized as 'engagement' (e.g., power-ups, collections, social features)\n\n"
         "Return ONLY a JSON array of mechanic objects, no other text."
     )
 

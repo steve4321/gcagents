@@ -234,9 +234,9 @@ _GAME_TEMPLATE = '''<!DOCTYPE html>
 
 def _pick_model() -> str:
     config = load_config()
-    if not config.deepseek_api_key:
-        raise RuntimeError("No LLM API key configured (need DEEPSEEK_API_KEY)")
-    return "deepseek-v4-flash"
+    if not config.minimax_api_key:
+        raise RuntimeError("No LLM API key configured (need MINIMAX_API_KEY)")
+    return "MiniMax-M3"
 
 
 async def _generate_concept(concept_prompt: str) -> dict:

@@ -195,6 +195,11 @@ class MemoryStore:
     # ── Consolidation ────────────────────────────────────────────────────────
 
     def _consolidate_sync(self, project_id: str) -> list[str]:
+        """Consolidate short-term project memories into long-term lessons.
+
+        Groups recent events by category, creates a summary lesson for each,
+        and stores them as long-term memories with project_id=''.
+        """
         recent = self._get_recent_sync(project_id, limit=50)
         if not recent:
             return []

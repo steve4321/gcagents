@@ -77,7 +77,7 @@ async def run_auto_playtest(game_dist_path: str | Path, game_dir: str | Path | N
 
             if game_dir:
                 from agents.dev.qa.playtest_checks import check_complexity_score
-                complexity_result = check_complexity_score(game_dir, page)
+                complexity_result = check_complexity_score(game_dir)
                 results.append(complexity_result)
 
             await browser.close()

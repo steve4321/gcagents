@@ -47,37 +47,3 @@ async def coo_health_check(state: CompanyState) -> dict:
         return {"phase": PipelinePhase.IDLE}
 
     return {}
-
-
-async def coo_process_instructions(state: CompanyState) -> dict:
-    """Check for user instructions directed at COO and process them."""
-    from orchestrator.persistence import get_pending_instructions, log_event
-
-    instructions = await get_pending_instructions("coo")
-    if not instructions:
-        return {}
-
-    updates: dict = {}
-    for instruction in instructions[:3]:
-        content = instruction.get("content", "").lower()
-
-        if "pause" in content or "stop" in content:
-            await log_event(
-                event_type="pipeline",
-                severity="warning",
-                title="Pipeline paused by COO",
-                detail=f"User instruction: {instruction['content'][:200]}",
-                source_agent="coo",
-            )
-            updates["phase"] = PipelinePhase.IDLE
-
-        elif "status" in content or "report" in content:
-            await log_event(
-                event_type="pipeline",
-                severity="info",
-                title="COO status report requested",
-                detail=f"Current phase: {state.phase.value}",
-                source_agent="coo",
-            )
-
-    return updates

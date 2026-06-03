@@ -35,3 +35,7 @@ LOW_CONFIDENCE_SCORE = 0.2       # score when minimal data available
 # ── Build ─────────────────────────────────────────────────────────────────
 NPM_INSTALL_TIMEOUT = 120        # seconds for npm install
 NPM_BUILD_TIMEOUT = 120          # seconds for npm build
+
+# ── Default AI Models ────────────────────────────────────────────────────
+DEFAULT_ANALYSIS_MODEL = "MiniMax-M3"           # analysis, design, translation
+DEFAULT_CODE_MODEL = "MiniMax-M3"               # code generation

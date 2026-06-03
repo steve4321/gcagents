@@ -12,6 +12,7 @@ from datetime import datetime
 from loguru import logger
 
 from shared.config import AppConfig
+from shared.constants import DEFAULT_ANALYSIS_MODEL
 from shared.llm_client import llm
 from shared.models import MarketSignal
 
@@ -26,9 +27,9 @@ async def analyze_signals(
 
     prompt = _build_analysis_prompt(signals, genre_counts)
 
-    model = "deepseek-v4-flash"
-    if not config.deepseek_api_key:
-        logger.error("No AI API key configured (need DEEPSEEK_API_KEY)")
+    model = DEFAULT_ANALYSIS_MODEL
+    if not config.minimax_api_key:
+        logger.error("No AI API key configured (need MINIMAX_API_KEY)")
         return [], ""
 
     analysis_text, usage = await llm.chat_completion(

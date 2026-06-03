@@ -20,7 +20,6 @@ async def cfo_budget_check(state: CompanyState) -> dict:
 
     project_name = state.current_proposal.name if state.current_proposal else "general"
 
-    # develop step: ~50K tokens deepseek-coder ≈ $0.10
     estimated_cost = 0.10
 
     monthly_ok = await check_budget_available("monthly", estimated_cost)
@@ -86,10 +85,9 @@ async def cfo_financial_report(state: CompanyState) -> dict:
         f"Active Budgets: {len(budgets)}"
     )
 
-    # deepseek-chat model for cost analysis
     try:
         llm_response, _usage = await llm.chat_completion(
-            model="deepseek-v4-flash",
+            model="MiniMax-M3",
             messages=[
                 {
                     "role": "system",

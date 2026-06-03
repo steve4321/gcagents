@@ -127,7 +127,7 @@ async def check_score_system(page: Page) -> dict:
     return {"name": "score_system", "passed": changed, "method": "pixel_diff", "pixels_changed": changed}
 
 
-def check_complexity_score(game_dir: str | Path, page) -> dict:
+def check_complexity_score(game_dir: str | Path) -> dict:
     """Verify game meets minimum complexity threshold."""
     from shared.complexity import score_code, MIN_PASSING_SCORE
 

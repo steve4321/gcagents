@@ -11,7 +11,6 @@ from pathlib import Path
 from loguru import logger
 
 from orchestrator.state import CompanyState, PipelinePhase
-from shared.exceptions import GameBuildError
 
 from .auto_playtest import run_auto_playtest
 
@@ -57,7 +56,7 @@ async def run_qa(state: CompanyState) -> dict:
     if playtest_results is not None:
         checks["playtest"] = playtest_results
 
-    playtest_passed = playtest_results["passed"] if playtest_results else True
+    playtest_passed = playtest_results["passed"] if playtest_results else False
     all_passed = structure_ok and build_ok and playtest_passed
 
     qa_results = {

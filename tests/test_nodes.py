@@ -57,18 +57,6 @@ async def test_coo_health_check_max_retries(tmp_db):
 
 
 @pytest.mark.asyncio
-async def test_coo_process_instructions_noop(tmp_db):
-    from orchestrator.nodes.coo import coo_process_instructions
-    from orchestrator.persistence import ensure_tables
-
-    await ensure_tables()
-
-    state = _make_state()
-    result = await coo_process_instructions(state)
-    assert result == {}
-
-
-@pytest.mark.asyncio
 async def test_cfo_budget_check_passes(tmp_db):
     from orchestrator.nodes.cfo import cfo_budget_check
     from orchestrator.persistence import ensure_tables

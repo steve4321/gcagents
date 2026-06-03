@@ -39,7 +39,7 @@ async def _process_ceo_instructions(state: CompanyState) -> dict:
 
         try:
             response, usage = await llm.chat_completion(
-                model="deepseek-v4-flash",
+                model="MiniMax-M3",
                 messages=[
                     {"role": "system", "content": (
                         "You are processing user instructions for an autonomous game company CEO. "
@@ -111,6 +111,11 @@ async def _process_ceo_instructions(state: CompanyState) -> dict:
 
 
 async def ceo_evaluate(state: CompanyState) -> dict:
+    """Evaluate market opportunities and suggest a top project.
+
+    Returns a proposal for the scheduler to present as a suggestion to humans.
+    Does NOT auto-create projects — that requires human discussion in chat.
+    """
     instruction_updates = await _process_ceo_instructions(state)
 
     if instruction_updates.get("phase") == PipelinePhase.IDLE:

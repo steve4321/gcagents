@@ -69,12 +69,12 @@ def _parse_itch_comments(html: str, base_url: str) -> list[dict]:
 
 
 async def _categorize_feedback(text: str, config, project_name: str = "") -> tuple[str, str, str]:
-    if not config.deepseek_api_key:
+    if not config.minimax_api_key:
         return "other", "no AI key", text[:200]
 
     try:
         raw, usage = await llm.chat_completion(
-            model="deepseek-v4-flash",
+            model="MiniMax-M3",
             messages=[{"role": "user", "content": _CATEGORIZE_PROMPT.format(text=text[:1000])}],
             temperature=0.1,
             max_tokens=300,
@@ -123,7 +123,7 @@ async def collect_feedback() -> dict:
                 saved = await save_feedback(
                     project_id=project_id,
                     post_id=comment["post_id"],
-                    text=comment["text"],
+                    body=comment["text"],
                     author=comment["author"],
                     posted_at=comment["posted_at"],
                     vote_count=comment["vote_count"],

@@ -751,16 +751,11 @@ async def test_get_live_projects(tmp_db):
 async def test_save_game_version(tmp_db):
     await persist.ensure_tables()
 
-    async with AsyncSession(tmp_db) as db:
-        await db.execute(
-            text("INSERT INTO game_projects (name, genre, status) VALUES ('Test', 'puzzle', 'live')")
-        )
-        await db.commit()
-        result = await db.execute(text("SELECT id FROM game_projects LIMIT 1"))
-        project_id = result.fetchone()[0]
+    project = ProjectState(id="vproj-1", name="VersionTest", genre="puzzle")
+    await persist.save_project(project)
 
-    await persist.save_game_version(project_id, "1.0.0")
-    version = await persist.get_latest_version(project_id)
+    await persist.save_game_version("vproj-1", "1.0.0", gdd_snapshot={"title": "test"})
+    version = await persist.get_latest_version("vproj-1")
     assert version == "1.0.0"
 
 
@@ -820,7 +815,6 @@ async def test_get_projects_by_phase(tmp_db):
 
 
 @pytest.mark.asyncio
-@pytest.mark.skip(reason="save_feedback has parameter named 'text' that shadows sqlalchemy.text() — pre-existing bug")
 async def test_save_feedback(tmp_db):
     await persist.ensure_tables()
 

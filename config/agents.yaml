@@ -4,13 +4,20 @@ models:
     base_url: "https://api.deepseek.com"
     model: "deepseek-v4-flash"
     api_key_env: "DEEPSEEK_API_KEY"
+    roles: []
+
+  minimax:
+    provider: openai_compatible
+    base_url: "https://api.minimaxi.com/v1"
+    model: "MiniMax-M3"
+    api_key_env: "MINIMAX_API_KEY"
     roles: [ceo, researcher, programmer, qa, analytics]
 
-  deepseek_pro:
+  minimax_code:
     provider: openai_compatible
-    base_url: "https://api.deepseek.com"
-    model: "deepseek-v4-pro"
-    api_key_env: "DEEPSEEK_API_KEY"
+    base_url: "https://api.minimaxi.com/v1"
+    model: "MiniMax-M2.1"
+    api_key_env: "MINIMAX_API_KEY"
     roles: [lead_programmer]
 
   glm:

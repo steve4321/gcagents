@@ -38,7 +38,6 @@ async def get_api_key(request: Request) -> None:
         ``/api/decisions/{id}/respond``,
         ``/api/chat/send``,
         ``/api/finance/budget``,
-        ``/api/orchestrator/prototype``,
         ``/ws/events``.
 
     Always-open (no key required):
@@ -55,8 +54,6 @@ async def get_api_key(request: Request) -> None:
         raise HTTPException(status_code=401, detail="Invalid or missing X-API-Key")
 
 # Track running pipeline process
-_pipeline_process: subprocess.Popen | None = None
-_forever_process: subprocess.Popen | None = None
 _scheduler_process: subprocess.Popen | None = None
 
 # Track connected WebSocket clients for event broadcasting
@@ -210,52 +207,18 @@ async def get_gdd(project_id: int):
 
 # ── Pipeline Control ──────────────────────────────────────────────────────────
 
-@app.post("/api/pipeline/run", dependencies=[Depends(get_api_key)])
-async def trigger_pipeline():
-    global _pipeline_process
-    if _pipeline_process is not None and _pipeline_process.poll() is None:
-        return {"status": "already_running", "message": "Pipeline is already running"}
-
-    try:
-        _pipeline_process = subprocess.Popen(
-            [sys.executable, "-m", "orchestrator.main", "run"],
-            cwd=ROOT_DIR,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-    except (FileNotFoundError, PermissionError, OSError) as e:
-        logger.error(f"Failed to start pipeline: {e}")
-        return {"status": "error", "message": f"Failed to start pipeline: {e}"}
-    logger.info(f"Pipeline started (pid={_pipeline_process.pid})")
-    return {"status": "started", "message": "Pipeline started"}
-
-
-@app.post("/api/pipeline/run-forever", dependencies=[Depends(get_api_key)])
-async def trigger_forever(interval: int = 3600):
-    global _forever_process
-    if _forever_process is not None and _forever_process.poll() is None:
-        return {"status": "already_running", "message": "24/7 mode is already running"}
-
-    try:
-        _forever_process = subprocess.Popen(
-            [sys.executable, "-m", "orchestrator.main", "run-forever",
-             "--interval", str(interval)],
-            cwd=ROOT_DIR,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-    except (FileNotFoundError, PermissionError, OSError) as e:
-        logger.error(f"Failed to start 24/7 mode: {e}")
-        return {"status": "error", "message": f"Failed to start 24/7 mode: {e}"}
-    logger.info(f"24/7 mode started (pid={_forever_process.pid}, interval={interval}s)")
-    return {"status": "started", "mode": "forever", "message": "24/7 mode started"}
-
-
 @app.post("/api/pipeline/run-scheduler", dependencies=[Depends(get_api_key)])
 async def trigger_scheduler(interval: int = 60):
     global _scheduler_process
     if _scheduler_process is not None and _scheduler_process.poll() is None:
         return {"status": "already_running", "message": "Scheduler is already running"}
+
+    result = subprocess.run(
+        ["pgrep", "-f", "orchestrator.main run-scheduler"],
+        capture_output=True, text=True,
+    )
+    if result.stdout.strip():
+        return {"status": "already_running", "message": "Scheduler is already running (external)"}
 
     try:
         _scheduler_process = subprocess.Popen(
@@ -272,48 +235,10 @@ async def trigger_scheduler(interval: int = 60):
     return {"status": "started", "mode": "scheduler", "message": f"Scheduler started (interval={interval}s)"}
 
 
-@app.post("/api/scheduler/pause", dependencies=[Depends(get_api_key)])
-async def pause_scheduler():
-    from orchestrator.scheduler import set_paused
-    set_paused(True)
-    return {"paused": True}
-
-
-@app.post("/api/scheduler/resume", dependencies=[Depends(get_api_key)])
-async def resume_scheduler():
-    from orchestrator.scheduler import set_paused
-    set_paused(False)
-    return {"paused": False}
-
-
-@app.get("/api/scheduler/paused")
-async def get_scheduler_paused():
-    from orchestrator.scheduler import is_paused
-    return {"paused": is_paused()}
-
-
 @app.post("/api/pipeline/stop", dependencies=[Depends(get_api_key)])
-async def stop_pipeline():
-    global _pipeline_process, _forever_process, _scheduler_process
+async def stop_scheduler():
+    global _scheduler_process
     stopped = []
-
-    if _pipeline_process is not None and _pipeline_process.poll() is None:
-        _pipeline_process.terminate()
-        try:
-            _pipeline_process.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            _pipeline_process.kill()
-        stopped.append("pipeline")
-        _pipeline_process = None
-
-    if _forever_process is not None and _forever_process.poll() is None:
-        _forever_process.terminate()
-        try:
-            _forever_process.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            _forever_process.kill()
-        stopped.append("24/7 mode")
-        _forever_process = None
 
     if _scheduler_process is not None and _scheduler_process.poll() is None:
         _scheduler_process.terminate()
@@ -324,6 +249,17 @@ async def stop_pipeline():
         stopped.append("scheduler")
         _scheduler_process = None
 
+    result = subprocess.run(
+        ["pgrep", "-f", "orchestrator.main run-scheduler"],
+        capture_output=True, text=True,
+    )
+    for pid_str in result.stdout.strip().splitlines():
+        try:
+            os.kill(int(pid_str), 15)
+            stopped.append(f"scheduler-{pid_str}")
+        except (ValueError, ProcessLookupError):
+            pass
+
     if stopped:
         logger.info(f"Stopped: {', '.join(stopped)}")
         return {"status": "stopped", "stopped": stopped}
@@ -332,45 +268,23 @@ async def stop_pipeline():
 
 @app.get("/api/pipeline/status")
 async def check_pipeline_status():
-    global _pipeline_process, _forever_process, _scheduler_process
+    global _scheduler_process
 
     scheduler_running = (
         _scheduler_process is not None and _scheduler_process.poll() is None
     )
     if not scheduler_running:
-        import subprocess
         result = subprocess.run(
             ["pgrep", "-f", "orchestrator.main run-scheduler"],
             capture_output=True, text=True,
         )
         scheduler_running = bool(result.stdout.strip())
 
-    forever_running = (
-        _forever_process is not None and _forever_process.poll() is None
-    )
-    single_running = (
-        _pipeline_process is not None and _pipeline_process.poll() is None
-    )
-
     if scheduler_running:
         return {"running": True, "mode": "scheduler", "scheduler_running": True,
-                "forever_running": forever_running, "status": "running"}
-    if forever_running:
-        return {"running": True, "mode": "forever", "forever_running": True,
-                "scheduler_running": False, "status": "running"}
-    if single_running:
-        return {"running": True, "mode": "single", "forever_running": False,
-                "scheduler_running": False, "status": "running"}
+                "status": "running"}
 
-    # Single pipeline may have just finished — check exit code
-    if _pipeline_process is not None:
-        ret = _pipeline_process.poll()
-        status = "completed" if ret == 0 else "failed"
-        _pipeline_process = None
-        return {"running": False, "mode": "idle", "forever_running": False,
-                "status": status, "exit_code": ret}
-
-    return {"running": False, "mode": "idle", "forever_running": False,
+    return {"running": False, "mode": "idle", "scheduler_running": False,
             "status": "idle"}
 
 
@@ -396,6 +310,20 @@ async def receive_analytics(game: str = "", event: str = "", score: float = 0, p
 async def get_analytics_summary():
     from orchestrator.persistence import get_analytics_summary
     return await get_analytics_summary()
+
+
+@app.get("/api/itch/stats")
+async def get_itch_stats():
+    from orchestrator.persistence import get_latest_itch_stats
+    stats = await get_latest_itch_stats()
+    return {"stats": stats, "total_downloads": sum(s["downloads_count"] for s in stats)}
+
+
+@app.post("/api/itch/refresh")
+async def refresh_itch_stats():
+    from agents.ops.deployer.itch_stats import fetch_itch_stats
+    results = await fetch_itch_stats()
+    return {"refreshed": len(results), "games": results}
 
 
 # ── Feedback API ──────────────────────────────────────────────────────────────
@@ -538,8 +466,7 @@ async def send_chat_message(message: dict):
     if target_agent != "ceo":
         raise HTTPException(400, "Only CEO is available")
 
-    from orchestrator.persistence import save_chat_message, log_event, get_all_projects
-    from shared.models import ProjectPhase
+    from orchestrator.persistence import save_chat_message, log_event
 
     await save_chat_message(
         role="user",
@@ -567,75 +494,263 @@ async def send_chat_message(message: dict):
     return {"status": "sent", "target": target_agent}
 
 
-async def _generate_ceo_reply(content: str) -> str:
-    from orchestrator.persistence import get_all_projects, update_project_phase
-    from shared.llm_client import llm
-    from shared.models import ProjectPhase
+async def _build_ceo_context() -> tuple[str, list[dict]]:
+    """Gather comprehensive company data for the CEO system prompt."""
 
-    content_lower = content.lower().strip()
+    from orchestrator.persistence import (
+        get_all_projects,
+        get_api_usage_summary,
+        get_chat_history,
+        get_company_memory,
+        get_company_policy,
+        get_latest_market_report,
+        get_pending_decisions,
+        get_recent_events,
+    )
 
-    # 指令式命令处理
-    if any(kw in content_lower for kw in ("推进", "advance", "下一个", "next")):
-        projects = await get_all_projects()
-        active = [p for p in projects if p.phase not in (ProjectPhase.BACKLOG, ProjectPhase.CANCELLED, ProjectPhase.LIVE)]
-        if not active:
-            backlog = [p for p in projects if p.phase == ProjectPhase.BACKLOG]
-            if backlog:
-                await update_project_phase(backlog[0].id, "scanning")
-                return f"已将 {backlog[0].name} 从 backlog 推进到 scanning 阶段。"
-            return "没有可推进的项目。"
-        p = active[0]
-        phase_order = ["scanning", "designing", "developing", "testing", "building", "publishing", "live"]
-        current_idx = phase_order.index(p.phase.value) if p.phase.value in phase_order else -1
-        if current_idx < len(phase_order) - 1:
-            next_phase = phase_order[current_idx + 1]
-            await update_project_phase(p.id, next_phase)
-            return f"已将 {p.name} 从 {p.phase.value} 推进到 {next_phase}。"
-        return f"{p.name} 已经是最终阶段了。"
-
-    if any(kw in content_lower for kw in ("取消", "cancel")):
-        projects = await get_all_projects()
-        for p in projects:
-            if p.name.lower() in content_lower and p.phase != ProjectPhase.CANCELLED:
-                await update_project_phase(p.id, "cancelled")
-                return f"已取消项目 {p.name}。"
-        active = [p for p in projects if p.phase not in (ProjectPhase.BACKLOG, ProjectPhase.CANCELLED)]
-        if active:
-            await update_project_phase(active[0].id, "cancelled")
-            return f"已取消项目 {active[0].name}。"
-        return "没有可取消的项目。"
-
+    # Projects
     projects = await get_all_projects()
     if projects:
-        lines = [f"- {p.name} ({p.phase.value}): {p.progress:.0%}" for p in projects]
-        project_summary = "\n".join(lines)
+        proj_lines = []
+        for p in projects:
+            proj_lines.append(
+                f"  - {p.name} | 类型: {p.genre or '未定'} "
+                f"| 阶段: {p.phase.value} | 进度: {p.progress:.0%}"
+            )
+        project_summary = "\n".join(proj_lines)
     else:
-        project_summary = "暂无项目"
+        project_summary = "  （暂无项目）"
+
+    # Market report
+    market = await get_latest_market_report()
+    market_summary = "  （暂无市场报告）"
+    if market and market.get("opportunities_json"):
+        try:
+            opps = json.loads(market["opportunities_json"]) if isinstance(
+                market["opportunities_json"], str
+            ) else market["opportunities_json"]
+            if isinstance(opps, list):
+                top = opps[:3]
+                opp_lines = []
+                for o in top:
+                    if isinstance(o, dict):
+                        opp_lines.append(
+                            f"  - {o.get('genre', '?')}: "
+                            f"{o.get('reason', o.get('description', '无详情'))}"
+                        )
+                    else:
+                        opp_lines.append(f"  - {o}")
+                if opp_lines:
+                    market_summary = "\n".join(opp_lines)
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    # Financials
+    usage = await get_api_usage_summary()
+    total_cost = usage.get("total_cost", 0.0)
+    calls = usage.get("calls", 0)
+
+    # Pending decisions
+    decisions = await get_pending_decisions()
+
+    # Recent events
+    events = await get_recent_events(limit=8)
+    event_lines = []
+    for ev in events[:8]:
+        title = ev.get("title", "")
+        if title:
+            event_lines.append(f"  - {title}")
+    events_summary = "\n".join(event_lines) if event_lines else "  （无近期事件）"
+
+    # Company memory / lessons
+    memories = await get_company_memory(limit=5)
+    mem_lines = []
+    for m in memories[:5]:
+        mem_lines.append(f"  - {m.get('title', m.get('content', ''))}")
+    mem_summary = "\n".join(mem_lines) if mem_lines else "  （暂无）"
+
+    # Policy
+    policy = await get_company_policy()
+
+    # Chat history (last 6 messages)
+    chat_history = await get_chat_history(limit=6)
+
+    context = (
+        f"### 项目列表\n{project_summary}\n\n"
+        f"### 市场机会（最新报告前3）\n{market_summary}\n\n"
+        f"### 财务状况\n"
+        f"  - 总API花费: ${total_cost:.2f}\n"
+        f"  - API调用次数: {calls}\n"
+        f"  - 预算上限: ${policy.get('budget_limit_usd', '?')}/月\n\n"
+        f"### 待处理决策: {len(decisions)} 个\n\n"
+        f"### 近期事件\n{events_summary}\n\n"
+        f"### 公司记忆/经验教训\n{mem_summary}\n\n"
+        f"### 公司策略\n"
+        f"  - 最大活跃项目数: {policy.get('max_active_projects', '?')}\n"
+        f"  - 自动发布: {'是' if policy.get('auto_publish') else '否'}\n"
+        f"  - 偏好类型: {', '.join(policy.get('preferred_genres', [])) or '不限'}"
+    )
+    return context, chat_history
+
+
+async def _generate_ceo_reply(content: str) -> str:
+    from shared.llm_client import llm
+
+    context, chat_history = await _build_ceo_context()
 
     system_prompt = (
-        "你是 GCAgents 的 CEO，一家 AI 驱动的游戏公司。你负责管理游戏项目的全生命周期。"
-        "根据公司当前状态回答用户问题。简洁专业，用中文回复。\n"
-        "可用指令：「推进」推进项目到下一阶段，「取消 项目名」取消项目，「状态」查看所有项目。\n\n"
-        f"当前项目列表:\n{project_summary}"
+        "你是 GCAgents 的 CEO，一家 AI 驱动的游戏公司的首席执行官。你全权负责公司运营。\n\n"
+        "## 你的职责\n"
+        "- 管理所有游戏项目的全生命周期\n"
+        "- 与人类讨论项目创意和方向\n"
+        "- 根据市场数据和公司状况做出决策\n"
+        "- 提出改善方案和新的创意\n"
+        "- 回答关于公司运营的任何问题\n\n"
+        "## 行动能力\n"
+        "你可以通过在回复中嵌入隐藏的 JSON 动作块来执行操作。格式：\n"
+        '[ACTION]{"action":"create_project","data":{...}}[/ACTION]\n'
+        '[ACTION]{"action":"cancel_project","data":{"project_id":"..."}}[/ACTION]\n'
+        '[ACTION]{"action":"publish_project","data":{"project_id":"..."}}[/ACTION]\n\n'
+        "### create_project: 当人类明确同意创建新项目时使用\n"
+        "data 需要: name (str), genre (str), description (str)\n\n"
+        "### cancel_project: 当人类明确同意取消项目时使用\n"
+        "data 需要: project_id (str) 或 project_name (str)\n\n"
+        "### publish_project: 当项目完成测试且人类同意发布时使用\n"
+        "data 需要: project_id (str) 或 project_name (str)\n\n"
+        "注意：这些动作块不会显示给用户。你必须在回复中用自然语言说明你做了什么。\n\n"
+        "## 沟通风格\n"
+        "- 简洁专业，用中文回复\n"
+        "- 主动提供建议和分析\n"
+        "- 基于数据做判断，不要泛泛而谈\n"
+        "- 对于人类提出的项目创意，先讨论可行性和市场情况，再决定是否创建\n"
+        "- 市场分析数据仅供参考，项目立项基于与人类的讨论结果\n\n"
+        f"## 当前公司状况\n{context}"
     )
+
+    import re
+
+    messages = [{"role": "system", "content": system_prompt}]
+    for msg in chat_history[-6:]:
+        role = msg.get("role", "user")
+        msg_content = msg.get("content", "")
+        if msg_content and role in ("user", "assistant"):
+            clean = re.sub(r"\[ACTION\].*?\[/ACTION\]", "", msg_content).strip()
+            if clean:
+                messages.append({"role": role, "content": clean})
+    messages.append({"role": "user", "content": content})
 
     try:
         reply, _ = await llm.chat_completion(
-            model="deepseek-v4-flash",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": content},
-            ],
-            max_tokens=500,
+            model="MiniMax-M3",
+            messages=messages,
+            max_tokens=800,
             temperature=0.7,
             agent_name="ceo-chat",
         )
-        return reply.strip()
-    except Exception:
-        if not projects:
-            return "目前还没有项目。系统会自动扫描市场并创建新项目。"
-        active = [p for p in projects if p.phase not in (ProjectPhase.BACKLOG, ProjectPhase.CANCELLED)]
-        return f"当前 {len(projects)} 个项目，{len(active)} 个活跃中。"
+        cleaned_reply = await _execute_ceo_actions(reply.strip())
+        return cleaned_reply
+    except Exception as e:
+        logger.error(f"CEO chat error: {e}")
+        return "抱歉，我暂时无法回复。请稍后再试。"
+
+
+async def _execute_ceo_actions(reply: str) -> str:
+    """Parse and execute hidden [ACTION] blocks from the CEO reply."""
+    import re
+
+    actions = re.findall(r"\[ACTION\](.*?)\[/ACTION\]", reply)
+    cleaned = re.sub(r"\[ACTION\].*?\[/ACTION\]", "", reply).strip()
+
+    for action_str in actions:
+        try:
+            action = json.loads(action_str)
+        except json.JSONDecodeError:
+            logger.warning(f"Failed to parse CEO action: {action_str[:100]}")
+            continue
+
+        action_type = action.get("action")
+        data = action.get("data", {})
+
+        if action_type == "create_project":
+            await _action_create_project(data)
+        elif action_type == "cancel_project":
+            await _action_cancel_project(data)
+        elif action_type == "publish_project":
+            await _action_publish_project(data)
+        else:
+            logger.warning(f"Unknown CEO action: {action_type}")
+
+    return cleaned
+
+
+async def _action_create_project(data: dict) -> None:
+    """Create a new project from CEO action data."""
+    import uuid
+
+    from orchestrator.persistence import save_project
+    from shared.models import ProjectPhase, ProjectState
+
+    name = data.get("name", "").strip()
+    genre = data.get("genre", "").strip()
+    description = data.get("description", "").strip()
+
+    if not name:
+        logger.warning("create_project action missing name")
+        return
+
+    project = ProjectState(
+        id=str(uuid.uuid4()),
+        name=name,
+        genre=genre,
+        phase=ProjectPhase.BACKLOG,
+        proposal={"description": description} if description else None,
+    )
+    await save_project(project)
+    logger.info(f"CEO created project: {name} (genre={genre})")
+
+
+async def _action_cancel_project(data: dict) -> None:
+    """Cancel a project by name or id."""
+    from orchestrator.persistence import get_all_projects, update_project_phase
+
+    project_id = data.get("project_id", "").strip()
+    project_name = data.get("project_name", "").strip()
+
+    if project_id:
+        await update_project_phase(project_id, "cancelled")
+        logger.info(f"CEO cancelled project: {project_id}")
+        return
+
+    if project_name:
+        projects = await get_all_projects()
+        for p in projects:
+            if p.name.lower() == project_name.lower():
+                await update_project_phase(p.id, "cancelled")
+                logger.info(f"CEO cancelled project: {p.name} ({p.id})")
+                return
+        logger.warning(f"cancel_project: project not found: {project_name}")
+
+
+async def _action_publish_project(data: dict) -> None:
+    """Publish a project by name or id."""
+    from orchestrator.persistence import get_all_projects, update_project_phase
+
+    project_id = data.get("project_id", "").strip()
+    project_name = data.get("project_name", "").strip()
+
+    if project_id:
+        await update_project_phase(project_id, "publishing")
+        logger.info(f"CEO publishing project: {project_id}")
+        return
+
+    if project_name:
+        projects = await get_all_projects()
+        for p in projects:
+            if p.name.lower() == project_name.lower():
+                await update_project_phase(p.id, "publishing")
+                logger.info(f"CEO publishing project: {p.name} ({p.id})")
+                return
+        logger.warning(f"publish_project: project not found: {project_name}")
 
 
 @app.get("/api/chat/history")
@@ -882,16 +997,6 @@ async def get_all_lessons():
     from shared.memory import get_memory_store
     store = get_memory_store()
     return store.get_all_lessons()
-
-
-@app.post("/api/orchestrator/prototype", dependencies=[Depends(get_api_key)])
-async def run_prototype(request: dict):
-    concept = request.get("concept", "").strip()
-    if not concept:
-        raise HTTPException(400, "concept is required")
-    from orchestrator.prototype_mode import run_prototype
-    result = await run_prototype(concept)
-    return result
 
 
 # ── Game Preview Static Files ─────────────────────────────────────────────────

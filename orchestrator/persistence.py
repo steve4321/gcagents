@@ -15,7 +15,7 @@ from shared.constants import (
     TRUNC_FEEDBACK_TEXT,
     TRUNC_RAW_ANALYSIS,
 )
-from shared.models import DecisionPoint, ProjectState, TaskRecord
+from shared.models import DecisionPoint, DecisionStatus, DecisionType, ProjectPhase, ProjectState, TaskRecord, TaskStatus
 
 _engine_cache = None
 
@@ -258,6 +258,19 @@ async def ensure_tables():
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
             )
         """))
+        await db.execute(text("""
+            CREATE TABLE IF NOT EXISTS itch_stats (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_id TEXT NOT NULL,
+                itch_game_id INTEGER NOT NULL,
+                title TEXT NOT NULL,
+                itch_url TEXT,
+                downloads_count INTEGER DEFAULT 0,
+                views_count INTEGER DEFAULT 0,
+                purchases_count INTEGER DEFAULT 0,
+                fetched_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        """))
 
         # Schema migrations for existing tables
         existing_cols = {row[1] for row in (await db.execute(text("PRAGMA table_info(projects)"))).fetchall()}
@@ -291,6 +304,8 @@ async def ensure_tables():
         await db.execute(text("CREATE INDEX IF NOT EXISTS idx_market_signals_captured_at ON market_signals(captured_at)"))
         await db.execute(text("CREATE INDEX IF NOT EXISTS idx_event_logs_event_type ON event_logs(event_type)"))
         await db.execute(text("CREATE INDEX IF NOT EXISTS idx_event_logs_created_at ON event_logs(created_at)"))
+        await db.execute(text("CREATE INDEX IF NOT EXISTS idx_itch_stats_project_id ON itch_stats(project_id)"))
+        await db.execute(text("CREATE INDEX IF NOT EXISTS idx_itch_stats_fetched_at ON itch_stats(fetched_at)"))
 
         await db.commit()
 
@@ -410,7 +425,7 @@ async def save_pipeline_state(
 async def save_feedback(
     project_id: int,
     post_id: str,
-    text: str,
+    body: str,
     author: str = "",
     posted_at: str | None = None,
     vote_count: int = 0,
@@ -435,7 +450,7 @@ async def save_feedback(
                 "project_id": project_id,
                 "post_id": post_id,
                 "author": author[:100],
-                "text": text[:TRUNC_FEEDBACK_TEXT],
+                "text": body[:TRUNC_FEEDBACK_TEXT],
                 "posted_at": posted_at or datetime.now(timezone.utc).isoformat(),
                 "vote_count": vote_count,
                 "category": category,
@@ -533,6 +548,76 @@ async def save_game_metric(project_id: int, metric_name: str, metric_value: floa
             {"project_id": project_id, "metric_name": metric_name[:50], "metric_value": metric_value},
         )
         await db.commit()
+
+
+# ── itch.io Stats ────────────────────────────────────────────────────────────
+
+async def save_itch_stat(
+    project_id: str,
+    itch_game_id: int,
+    title: str,
+    itch_url: str,
+    downloads_count: int,
+    views_count: int,
+    purchases_count: int,
+) -> None:
+    engine = _get_engine()
+    async with AsyncSession(engine) as db:
+        await db.execute(
+            text("""
+                INSERT INTO itch_stats (
+                    project_id, itch_game_id, title, itch_url,
+                    downloads_count, views_count, purchases_count
+                )
+                VALUES (
+                    :project_id, :itch_game_id, :title, :itch_url,
+                    :downloads_count, :views_count, :purchases_count
+                )
+            """),
+            {
+                "project_id": project_id,
+                "itch_game_id": itch_game_id,
+                "title": title,
+                "itch_url": itch_url,
+                "downloads_count": downloads_count,
+                "views_count": views_count,
+                "purchases_count": purchases_count,
+            },
+        )
+        await db.commit()
+
+
+async def get_latest_itch_stats() -> list[dict]:
+    engine = _get_engine()
+    async with AsyncSession(engine) as db:
+        rows = (await db.execute(
+            text("""
+                SELECT s.project_id, s.itch_game_id, s.title, s.itch_url,
+                       s.downloads_count, s.views_count, s.purchases_count, s.fetched_at
+                FROM itch_stats s
+                INNER JOIN (
+                    SELECT project_id, MAX(fetched_at) AS max_fetched
+                    FROM itch_stats
+                    GROUP BY project_id
+                ) latest
+                  ON s.project_id = latest.project_id
+                 AND s.fetched_at = latest.max_fetched
+                ORDER BY s.downloads_count DESC, s.title ASC
+            """)
+        )).fetchall()
+        return [
+            {
+                "project_id": r[0],
+                "itch_game_id": r[1],
+                "title": r[2],
+                "itch_url": r[3],
+                "downloads_count": r[4],
+                "views_count": r[5],
+                "purchases_count": r[6],
+                "fetched_at": r[7],
+            }
+            for r in rows
+        ]
 
 
 async def get_project_metrics(project_id: int, limit: int = 100) -> list[dict]:
@@ -1019,7 +1104,7 @@ async def set_company_policy(policy: dict) -> None:
 
 # ── Projects (multi-project) ──────────────────────────────────────────────────
 
-async def save_project(project) -> str:
+async def save_project(project: ProjectState) -> str:
     engine = _get_engine()
     async with AsyncSession(engine) as db:
         now = datetime.now(timezone.utc).isoformat()
@@ -1093,7 +1178,7 @@ async def save_project(project) -> str:
         return project.id
 
 
-async def get_project(project_id: str):
+async def get_project(project_id: str) -> ProjectState | None:
     engine = _get_engine()
     async with AsyncSession(engine) as db:
         row = await db.execute(
@@ -1154,7 +1239,6 @@ def _parse_datetime(val: str | None) -> datetime:
 
 
 def _row_to_project(d: dict) -> ProjectState:
-    from shared.models import ProjectState, ProjectPhase
     return ProjectState(
         id=d["id"],
         name=d["name"],
@@ -1178,7 +1262,7 @@ def _row_to_project(d: dict) -> ProjectState:
 
 # ── Decisions ────────────────────────────────────────────────────────────────
 
-async def save_decision(decision) -> str:
+async def save_decision(decision: DecisionPoint) -> str:
     engine = _get_engine()
     async with AsyncSession(engine) as db:
         now = datetime.now(timezone.utc).isoformat()
@@ -1271,7 +1355,6 @@ async def get_decision_history(limit: int = 50) -> list[dict]:
 
 
 def _row_to_decision(d: dict) -> DecisionPoint:
-    from shared.models import DecisionPoint, DecisionType, DecisionStatus
     return DecisionPoint(
         id=d["id"],
         project_id=d.get("project_id"),
@@ -1317,7 +1400,7 @@ async def save_task(task) -> str:
         return task.id
 
 
-async def get_task(task_id: str):
+async def get_task(task_id: str) -> TaskRecord | None:
     engine = _get_engine()
     async with AsyncSession(engine) as db:
         row = await db.execute(
@@ -1415,7 +1498,6 @@ async def update_task_status(
 
 
 def _row_to_task(d: dict) -> TaskRecord:
-    from shared.models import TaskRecord, TaskStatus
     return TaskRecord(
         id=d["id"],
         project_id=d["project_id"],

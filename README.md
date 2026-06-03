@@ -164,7 +164,7 @@ gcagents/
 │       ├── localize/         #   15-language auto-translation
 │       └── builder/          #   Vite build → dist/
 ├── dashboard/web/
-│   ├── api_server.py        #   FastAPI backend (41 endpoints)
+│   ├── api_server.py        #   FastAPI backend (43 endpoints)
 │   ├── index.html           #   Project board, task monitor, decision cards, document viewer
 │   ├── app.js               #   Frontend logic
 │   └── style.css            #   Styles
@@ -172,10 +172,16 @@ gcagents/
 │   ├── config.py            #   pydantic-settings env loading
 │   ├── models.py            #   ProjectState, DecisionPoint, TaskRecord
 │   ├── memory.py            #   Layered memory (short-term/long-term/project)
-│   └── llm_client.py       #   Unified LLM client with token tracking
+│   ├── llm_client.py        #   Unified LLM client with token tracking
+│   ├── exceptions.py        #   Domain exception hierarchy
+│   ├── constants.py         #   Centralized constants (timeouts/thresholds)
+│   └── complexity.py        #   Game complexity scoring (GDD + code)
 ├── config/
 │   ├── agents.yaml          #   Agent → model mappings
-│   └── sources.yaml         #   12 market sources config
+│   └── sources.yaml        #   12 market sources config
+├── scripts/
+│   ├── e2e_test.py          #   End-to-end test script
+│   └── setup_local.py       #   Local environment setup
 ├── data/
 │   ├── gcagents.db          #   SQLite database
 │   └── games/              #   Generated game projects

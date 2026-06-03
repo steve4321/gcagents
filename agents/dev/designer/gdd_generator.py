@@ -5,9 +5,9 @@ import json
 from loguru import logger
 
 from shared.config import AppConfig
+from shared.constants import DEFAULT_ANALYSIS_MODEL
 from shared.llm_client import llm
 from shared.models import GameProposal
-
 
 DESIGNER_SYSTEM_PROMPT = """You are an expert game designer specializing in web mini-games.
 Given a game proposal, create a detailed Game Design Document (GDD).
@@ -32,7 +32,25 @@ The GDD must be a JSON object with these sections:
   ],
   "progression": "How the player progresses",
   "win_condition": "What constitutes winning or completion",
-  "monetization": "How the game could monetize (ads, iap, etc)",
+  "monetization": {
+    "model": "free_to_play" | "ad_supported" | "premium",
+    "ad_placement": [
+      "interstitial_between_levels",
+      "rewarded_video_for_powerup",
+      "banner_game_over"
+    ],
+    "iap_tiers": [
+      {"name": "starter_pack", "price_usd": 0.99, "contents": "description"},
+      {"name": "premium_pack", "price_usd": 2.99, "contents": "description"}
+    ],
+    "retention_hooks": [
+      "daily_challenge", "achievement_system",
+      "leaderboard", "streak_bonus"
+    ],
+    "engagement_mechanics": [
+      "power_up_system", "unlock_system", "social_sharing"
+    ]
+  },
   "art_style": {
     "theme": "e.g., pixel-art, cartoon, minimalist",
     "color_palette": ["#hex1", "#hex2", "#hex3", "#hex4"],
@@ -76,6 +94,13 @@ COMPLEXITY REQUIREMENTS (MANDATORY — games that are too simple will be rejecte
 - Include a tutorial or gradual mechanic introduction in the first level
 - "balance" must specify: starting_lives, difficulty_curve, and at least 3 difficulty parameters
 
+COMMERCIAL REQUIREMENTS (MANDATORY):
+- The "monetization" field MUST be a structured object (not a plain string) with: model, ad_placement (2+), iap_tiers (1+), retention_hooks (2+), engagement_mechanics (2+)
+- Include at least 2 retention mechanics in the game design (e.g., daily challenges, streak bonuses, unlock systems)
+- Include at least 1 engagement mechanic per game (e.g., power-ups, social sharing, collection systems)
+- Design ad placements that don't disrupt core gameplay (between levels, game over, rewarded voluntary)
+- Include a scoring/combo system that encourages replay and sharing
+
 Do NOT design a trivial game. The target play session is 5-10 minutes with replay value.
 
 Return ONLY the JSON object, no other text."""
@@ -84,8 +109,8 @@ Return ONLY the JSON object, no other text."""
 async def generate_gdd(proposal: GameProposal, config: AppConfig) -> dict:
     logger.info(f"Generating GDD for: {proposal.name} ({proposal.genre})")
 
-    model = "deepseek-v4-flash"
-    if not config.deepseek_api_key:
+    model = DEFAULT_ANALYSIS_MODEL
+    if not config.minimax_api_key:
         logger.error("No AI API key configured")
         return {"title": proposal.name, "genre": proposal.genre, "scenes": []}
 

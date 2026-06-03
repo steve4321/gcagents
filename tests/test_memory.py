@@ -48,8 +48,9 @@ async def test_search_long_term_empty(memory_store):
 async def test_consolidate(memory_store):
     await memory_store.store_short_term("event1", "Content 1", "proj-001")
     await memory_store.store_short_term("event2", "Content 2", "proj-001")
-    await memory_store.consolidate("proj-001")
-    assert True
+    lessons = await memory_store.consolidate("proj-001")
+    assert len(lessons) > 0
+    assert any("event1" in lesson or "event2" in lesson for lesson in lessons)
 
 
 @pytest.mark.asyncio
@@ -108,8 +109,8 @@ async def test_memory_store_persistence(tmp_path):
 
 @pytest.mark.asyncio
 async def test_consolidate_empty(memory_store):
-    await memory_store.consolidate("proj-empty")
-    assert True
+    lessons = await memory_store.consolidate("proj-empty")
+    assert lessons == []
 
 
 @pytest.mark.asyncio

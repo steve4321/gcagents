@@ -15,7 +15,7 @@ from orchestrator.scheduler import (
     is_paused,
     set_paused,
 )
-from shared.models import DecisionPoint, DecisionStatus, DecisionType, ProjectPhase, ProjectState, TaskRecord
+from shared.models import ProjectPhase, ProjectState, TaskRecord
 
 
 def test_fallback_task_type_develop_has_real_fallback():
@@ -98,21 +98,18 @@ async def test_layer3_creates_decision(tmp_db):
     )
 
     with patch(
-        "orchestrator.scheduler.create_decision", new_callable=AsyncMock
-    ) as mock_decision, patch(
+        "orchestrator.scheduler.enqueue", new_callable=AsyncMock
+    ) as mock_enqueue, patch(
         "orchestrator.scheduler.emit", new_callable=AsyncMock
+    ), patch(
+        "orchestrator.scheduler.save_chat_message", new_callable=AsyncMock
     ):
-        mock_decision.return_value = DecisionPoint(
-            id="d1",
-            project_id="p1",
-            decision_type=DecisionType.DIRECTION_CHANGE,
-            question="test",
-            status=DecisionStatus.PENDING,
-        )
-        await _escalate_layer3(task, "fatal error")
+        result = await _escalate_layer3(task, "fatal error")
 
-        mock_decision.assert_awaited_once()
-        assert mock_decision.call_args.args[0] == "direction_change"
+        # Layer 3 now auto-retries via enqueue before creating a decision
+        mock_enqueue.assert_awaited_once()
+        assert result["status"] == "failed"
+        assert result["recovery"] == "layer3_auto_retry"
 
 
 @pytest.mark.asyncio

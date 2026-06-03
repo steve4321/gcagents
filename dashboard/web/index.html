@@ -15,22 +15,8 @@
       </div>
       <div class="header-actions">
         <span class="last-update">Last update: <time id="lastUpdateTime">--:--:--</time></span>
-        <button id="startSchedulerBtn" class="start-scheduler-btn" title="Start Scheduler (multi-project)">
+        <button id="schedulerToggleBtn" class="scheduler-toggle-btn" title="Toggle scheduler on/off">
           💼 开始上班
-        </button>
-        <button id="stopSchedulerBtn" class="stop-scheduler-btn" title="Stop running scheduler" style="display:none">
-          ⏸ 下班
-        </button>
-        <div class="legacy-actions">
-          <button id="runPipelineBtn" class="run-pipeline-btn" title="Run Pipeline (Legacy)">
-            ▶ Run
-          </button>
-          <button id="foreverToggleBtn" class="forever-toggle-btn" title="24/7 Mode (Legacy)">
-            ⟳ 24/7
-          </button>
-        </div>
-        <button id="quickPrototypeBtn" class="quick-prototype-btn" title="Quick Prototype">
-          ⚡ Prototype
         </button>
         <button id="refreshBtn" class="refresh-btn" title="Refresh data">
           <svg class="refresh-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -42,7 +28,7 @@
       </div>
     </header>
 
-    <section id="policySection" class="section">
+    <section id="policySection" class="section collapsed">
       <div class="section-header">
         <div class="section-title">
           <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -112,23 +98,29 @@
       </div>
     </section>
 
-    <section id="analyticsSection" class="section">
+    <section id="performanceSection" class="section">
       <div class="section-header">
         <div class="section-title">
           <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
           </svg>
-          Game Analytics
+          Game Performance
         </div>
         <svg class="section-toggle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <polyline points="6 9 12 15 18 9"/>
         </svg>
       </div>
-      <div class="section-content" id="analyticsContent">
-        <div class="analytics-grid" id="analyticsGrid">
-          <div class="analytics-card skeleton" style="height:120px"></div>
-          <div class="analytics-card skeleton" style="height:120px"></div>
-          <div class="analytics-card skeleton" style="height:120px"></div>
+      <div class="section-content" id="performanceContent">
+        <div class="performance-summary" id="performanceSummary">
+          <div class="analytics-card skeleton" style="height:100px"></div>
+          <div class="analytics-card skeleton" style="height:100px"></div>
+          <div class="analytics-card skeleton" style="height:100px"></div>
+        </div>
+        <div class="performance-table" id="performanceTable">
+          <div class="performance-loading">Loading...</div>
+        </div>
+        <div class="feedback-list" id="feedbackList">
+          <div class="feedback-empty">No feedback yet.</div>
         </div>
       </div>
     </section>
@@ -158,31 +150,6 @@
       </div>
     </section>
 
-    <section id="feedbackSection" class="section">
-      <div class="section-header">
-        <div class="section-title">
-          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M21 11.5a8.38 8.38 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.38 8.38 0 01-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.38 8.38 0 013.8-.9h.5a8.48 8.48 0 018 8v.5z"/>
-          </svg>
-          Feedback Center
-        </div>
-        <svg class="section-toggle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <polyline points="6 9 12 15 18 9"/>
-        </svg>
-      </div>
-      <div class="section-content" id="feedbackContent">
-        <div class="feedback-project-select">
-          <label class="feedback-label">Project:</label>
-          <select id="feedbackProjectSelect" class="feedback-select">
-            <option value="">All Projects</option>
-          </select>
-        </div>
-        <div class="feedback-list" id="feedbackList">
-          <div class="feedback-empty">Select a project to view feedback.</div>
-        </div>
-      </div>
-    </section>
-
     <section id="decisionHistorySection" class="section">
       <div class="section-header">
         <div class="section-title">
@@ -196,6 +163,11 @@
         </svg>
       </div>
       <div class="section-content" id="decisionHistoryContent">
+        <div id="pendingBanner" class="pending-banner" style="display:none" onclick="scrollToChat()">
+          <span class="pending-banner-icon">🔔</span>
+          <span class="pending-banner-text"></span>
+          <span class="pending-banner-arrow">→</span>
+        </div>
         <div class="decision-history-filters">
           <select id="decisionTypeFilter" class="decision-select">
             <option value="">All Types</option>
@@ -303,12 +275,6 @@
             </div>
             <div class="market-analysis-content">Loading market analysis...</div>
           </div>
-          <div class="opportunities-section">
-            <div class="opportunities-title">Top Opportunities</div>
-            <div class="opportunity-card skeleton" style="height:120px"></div>
-            <div class="opportunity-card skeleton" style="height:120px"></div>
-            <div class="opportunity-card skeleton" style="height:120px"></div>
-          </div>
         </div>
       </div>
     </section>
@@ -408,19 +374,6 @@
     <div class="preview-modal-content">
       <button id="previewCloseBtn" class="preview-close-btn">&times;</button>
       <iframe id="previewIframe" src=""></iframe>
-    </div>
-  </div>
-
-  <div id="prototypeModal" class="prototype-modal">
-    <div class="prototype-modal-content">
-      <button class="prototype-modal-close" onclick="closePrototypeModal()">&times;</button>
-      <h2>Quick Prototype</h2>
-      <p class="prototype-modal-desc">Describe a game concept. A playable prototype will be generated in ~30 seconds.</p>
-      <input type="text" id="prototypeInput" class="prototype-input" placeholder='e.g. "space shooter with powerups"'>
-      <div class="prototype-modal-actions">
-        <button class="prototype-submit-btn" id="prototypeSubmitBtn" onclick="submitPrototype()">Generate</button>
-      </div>
-      <div id="prototypeStatus" class="prototype-status"></div>
     </div>
   </div>
 

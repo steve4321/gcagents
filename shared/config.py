@@ -15,6 +15,7 @@ DB_PATH = DATA_DIR / "gcagents.db"
 
 class AppConfig(BaseSettings):
     deepseek_api_key: str = ""
+    minimax_api_key: str = ""
     zhipu_api_key: str = ""
     suno_api_key: str = ""
     itch_api_key: str = ""
@@ -77,6 +78,4 @@ def load_agents_config() -> dict:
         with open(path) as f:
             return yaml.safe_load(f)
     except (FileNotFoundError, yaml.YAMLError) as e:
-        import logging
-        logging.getLogger(__name__).warning(f"Failed to load agents config from {path}: {e}")
-        return {}
+        raise RuntimeError(f"Failed to load agents config from {path}: {e}") from e

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-MIN_PASSING_SCORE = 0.35  # Below this, QA fails regardless of functional checks
+MIN_PASSING_SCORE = 0.45  # Below this, QA fails regardless of functional checks
 
 
 def score_gdd(gdd: dict) -> tuple[float, list[str]]:
@@ -28,6 +28,35 @@ def score_gdd(gdd: dict) -> tuple[float, list[str]]:
     has_progression = bool(gdd.get("progression"))
     has_balance = isinstance(gdd.get("balance"), dict) and len(gdd.get("balance", {})) >= 2
     has_win_condition = bool(gdd.get("win_condition"))
+
+    # --- Commercial viability metrics ---
+    monetization = gdd.get("monetization", {})
+    if isinstance(monetization, dict):
+        has_model = bool(monetization.get("model"))
+        ad_count = len(monetization.get("ad_placement", []))
+        iap_count = len(monetization.get("iap_tiers", []))
+        retention_count = len(monetization.get("retention_hooks", []))
+        engagement_count = len(monetization.get("engagement_mechanics", []))
+
+        commercial_signals = sum([
+            has_model,
+            ad_count >= 2,
+            iap_count >= 1,
+            retention_count >= 2,
+            engagement_count >= 2,
+        ])
+        commercial_score = commercial_signals / 5
+        if commercial_signals < 2:
+            issues.append(
+                f"Only {commercial_signals}/5 commercial signals "
+                "(model, ads, iap, retention, engagement)"
+            )
+    else:
+        commercial_score = 0.0
+        issues.append(
+            "No structured monetization in GDD — must include model, ad_placement, "
+            "iap_tiers, retention_hooks, engagement_mechanics"
+        )
 
     ui_layout = gdd.get("ui_layout", {})
     hud_count = len(ui_layout.get("hud", [])) if isinstance(ui_layout, dict) else 0
@@ -61,8 +90,8 @@ def score_gdd(gdd: dict) -> tuple[float, list[str]]:
     if len(core_loop) < 3:
         issues.append(f"Core loop has only {len(core_loop)} steps, minimum 3")
 
-    total = (mech_score * 0.30 + scene_score * 0.10 + entity_score * 0.20 +
-             depth_score * 0.25 + loop_score * 0.15)
+    total = (mech_score * 0.25 + scene_score * 0.05 + entity_score * 0.15 +
+             depth_score * 0.20 + loop_score * 0.15 + commercial_score * 0.20)
 
     if total < MIN_PASSING_SCORE:
         issues.append(f"Complexity score {total:.2f} below minimum {MIN_PASSING_SCORE}")

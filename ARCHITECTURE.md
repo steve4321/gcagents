@@ -497,6 +497,12 @@ Dashboard 运行在独立进程（FastAPI + 静态 HTML/CSS/JS），与管道解
 | `/api/chat/history` | GET | 聊天历史记录 |
 | `/api/finance/budget` | POST | 设置预算 |
 | `/api/finance/summary` | GET | 财务摘要 |
+| `/api/policy` | GET | 获取企业策略 |
+| `/api/policy` | POST | 设置企业策略（需鉴权） |
+| `/api/pipeline/run-scheduler` | POST | 启动调度器（需鉴权） |
+| `/api/decisions/history` | GET | 决策历史 |
+| `/api/analytics/summary` | GET | 分析摘要 |
+| `/api/projects/{id}/advance` | POST | 推进项目到下一阶段 |
 
 ### 前端功能
 
@@ -587,7 +593,7 @@ gcagents/
 │       ├── deployer/       #     itch.io 发布
 │       └── analytics/      #     数据分析 + 反馈收集
 ├── dashboard/web/          # 监控面板
-│   ├── api_server.py       #   FastAPI 后端（41 个 API 端点）
+│   ├── api_server.py       #   FastAPI 后端（43 个 API 端点）
 │   ├── index.html          #   前端（项目看板/任务监控/决策卡片/文档查看器/市场趋势）
 │   ├── app.js              #   前端逻辑
 │   └── style.css           #   样式
@@ -595,10 +601,16 @@ gcagents/
 │   ├── config.py           #   配置加载 (pydantic-settings)
 │   ├── models.py           #   数据模型（ProjectState/DecisionPoint/TaskRecord + 原有模型）
 │   ├── memory.py           #   分层记忆系统（短期事件 + 长期教训 + 项目上下文）
-│   └── llm_client.py       #   统一 LLM 客户端（token 追踪 + 成本记录 + 重试退避）
+│   ├── llm_client.py       #   统一 LLM 客户端（token 追踪 + 成本记录 + 重试退避）
+│   ├── exceptions.py       #   领域异常层级（SchedulerError/TaskExecutionError/...）
+│   ├── constants.py        #   集中常量（超时/阈值/截断长度）
+│   └── complexity.py       #   游戏复杂度评分（GDD + 代码）
 ├── config/                 # 配置文件
 │   ├── agents.yaml         #   Agent 与模型映射
 │   └── sources.yaml        #   12 个市场数据源配置
+├── scripts/                # 工具脚本
+│   ├── e2e_test.py         #   端到端测试
+│   └── setup_local.py      #   本地环境配置
 ├── data/                   # 运行数据 (gitignored)
 │   ├── gcagents.db         #   SQLite 数据库
 │   └── games/              #   生成游戏项目

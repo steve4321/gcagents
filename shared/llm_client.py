@@ -13,12 +13,18 @@ MODEL_PRICING: dict[str, dict[str, float]] = {
     "deepseek-v4-flash": {"input_per_1k": 0.00014, "output_per_1k": 0.00028},
     "deepseek-v4-pro": {"input_per_1k": 0.00218, "output_per_1k": 0.00872},
     "deepseek-coder": {"input_per_1k": 0.0015, "output_per_1k": 0.002},
+    "MiniMax-M3": {"input_per_1k": 0.00030, "output_per_1k": 0.00120},
+    "MiniMax-M2.7": {"input_per_1k": 0.00030, "output_per_1k": 0.00120},
+    "MiniMax-M2.1": {"input_per_1k": 0.00030, "output_per_1k": 0.00120},
 }
 
 _MODEL_PROVIDER: dict[str, dict[str, str]] = {
     "deepseek-v4-flash": {"key_attr": "deepseek_api_key", "base_url": "https://api.deepseek.com"},
     "deepseek-v4-pro": {"key_attr": "deepseek_api_key", "base_url": "https://api.deepseek.com"},
     "deepseek-coder": {"key_attr": "deepseek_api_key", "base_url": "https://api.deepseek.com"},
+    "MiniMax-M3": {"key_attr": "minimax_api_key", "base_url": "https://api.minimaxi.com/v1"},
+    "MiniMax-M2.7": {"key_attr": "minimax_api_key", "base_url": "https://api.minimaxi.com/v1"},
+    "MiniMax-M2.1": {"key_attr": "minimax_api_key", "base_url": "https://api.minimaxi.com/v1"},
 }
 
 _RETRYABLE_CODES = {429, 500, 502, 503}
@@ -124,7 +130,7 @@ class LLMClient:
                 await record_spend("monthly", cost_usd)
                 if project_name:
                     await record_spend(project_name, cost_usd)
-        except Exception as e:
+        except (RuntimeError, ValueError, OSError) as e:
             logger.warning(f"Failed to log API usage: {e}")
 
         response_text = response.choices[0].message.content or ""

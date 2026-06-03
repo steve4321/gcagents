@@ -6,7 +6,7 @@ import re
 
 from loguru import logger
 
-from shared.config import load_config
+from shared.constants import DEFAULT_ANALYSIS_MODEL
 from shared.llm_client import llm
 
 TARGET_LOCALES = {
@@ -46,8 +46,7 @@ async def translate_strings(
     if locales is None:
         locales = ["ja", "ko", "es", "pt", "de"]
 
-    config = load_config()
-    model = "deepseek-v4-flash"
+    model = DEFAULT_ANALYSIS_MODEL
 
     results: dict[str, dict[str, str]] = {}
 

@@ -70,7 +70,7 @@ async def fetch_statkraken(config: SourceConfig) -> list[MarketSignal]:
                         score=float(item.get("rating", item.get("score", 0))),
                         captured_at=datetime.now(),
                     ))
-            except (httpx.HTTPError, httpx.TimeoutException, ValueError) as e:
+            except (httpx.HTTPError, httpx.TimeoutException, ValueError, KeyError, TypeError) as e:
                 logger.error(f"StatKraken fetch failed for {platform}: {e}")
 
     return signals
@@ -103,7 +103,7 @@ async def fetch_google_play(config: SourceConfig) -> list[MarketSignal]:
                     captured_at=datetime.now(),
                 ))
             await asyncio.sleep(1.0 / config.throttle_per_second)
-        except (ValueError, KeyError, TypeError) as e:
+        except (httpx.HTTPError, httpx.TimeoutException, ValueError, KeyError, TypeError) as e:
             logger.error(f"Google Play scrape failed for {category}: {e}")
 
     return signals
@@ -138,7 +138,7 @@ async def fetch_reddit(config: SourceConfig) -> list[MarketSignal]:
                         captured_at=datetime.now(),
                     ))
                 await asyncio.sleep(REDDIT_REQUEST_INTERVAL)
-            except (httpx.HTTPError, httpx.TimeoutException, ValueError, KeyError) as e:
+            except (httpx.HTTPError, httpx.TimeoutException, ValueError, KeyError, TypeError) as e:
                 logger.error(f"Reddit fetch failed for r/{subreddit}: {e}")
 
     return signals
@@ -173,7 +173,7 @@ async def fetch_app_store(config: SourceConfig) -> list[MarketSignal]:
                         captured_at=datetime.now(),
                     ))
                 await asyncio.sleep(APPSTORE_REQUEST_INTERVAL)
-            except (httpx.HTTPError, httpx.TimeoutException, ValueError, KeyError) as e:
+            except (httpx.HTTPError, httpx.TimeoutException, ValueError, KeyError, TypeError) as e:
                 logger.error(f"App Store fetch failed for {endpoint_key}: {e}")
 
     return signals
@@ -214,7 +214,7 @@ async def fetch_itch_api(config: SourceConfig) -> list[MarketSignal]:
                         score=score,
                         captured_at=datetime.now(),
                     ))
-            except (httpx.HTTPError, httpx.TimeoutException, ValueError, KeyError) as e:
+            except (httpx.HTTPError, httpx.TimeoutException, ValueError, KeyError, TypeError) as e:
                 logger.error(f"itch.io API fetch failed for tag '{tag}': {e}")
 
     return signals
@@ -251,7 +251,7 @@ async def fetch_plugplay(config: SourceConfig) -> list[MarketSignal]:
                     score=score,
                     captured_at=datetime.now(),
                 ))
-        except (httpx.HTTPError, httpx.TimeoutException, ValueError, KeyError) as e:
+        except (httpx.HTTPError, httpx.TimeoutException, ValueError, KeyError, TypeError) as e:
             logger.error(f"PlugPlay fetch failed: {e}")
 
     return signals
@@ -299,7 +299,7 @@ async def fetch_x_trends(config: SourceConfig) -> list[MarketSignal]:
                         score=score,
                         captured_at=datetime.now(),
                     ))
-            except (httpx.HTTPError, httpx.TimeoutException, ValueError, KeyError) as e:
+            except (httpx.HTTPError, httpx.TimeoutException, ValueError, KeyError, TypeError) as e:
                 logger.error(f"X trends fetch failed for woeid {woeid}: {e}")
 
     return signals
@@ -345,7 +345,7 @@ async def fetch_steam_spy(config: SourceConfig) -> list[MarketSignal]:
                         captured_at=datetime.now(),
                     ))
                 await asyncio.sleep(1)
-            except (httpx.HTTPError, httpx.TimeoutException, ValueError, KeyError) as e:
+            except (httpx.HTTPError, httpx.TimeoutException, ValueError, KeyError, TypeError) as e:
                 logger.error(f"SteamSpy fetch failed for tag '{tag}': {e}")
 
     return signals
@@ -412,7 +412,7 @@ async def fetch_youtube_trending(config: SourceConfig) -> list[MarketSignal]:
                         score=score,
                         captured_at=datetime.now(),
                     ))
-            except (httpx.HTTPError, httpx.TimeoutException, ValueError, TypeError) as e:
+            except (httpx.HTTPError, httpx.TimeoutException, ValueError, KeyError, TypeError) as e:
                 logger.error(f"YouTube search fetch failed for '{term}': {e}")
 
     return signals
@@ -492,7 +492,7 @@ async def fetch_tiktok_tags(config: SourceConfig) -> list[MarketSignal]:
                         score=0.3,
                         captured_at=datetime.now(),
                     ))
-            except (httpx.HTTPError, httpx.TimeoutException, ValueError, TypeError) as e:
+            except (httpx.HTTPError, httpx.TimeoutException, ValueError, KeyError, TypeError) as e:
                 logger.error(f"TikTok tag fetch failed for #{tag}: {e}")
 
     return signals

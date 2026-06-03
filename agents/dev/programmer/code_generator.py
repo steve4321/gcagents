@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import json
-import subprocess
 import shutil
+import subprocess
 from pathlib import Path
 
 from loguru import logger
 
 from shared.config import AppConfig
-from shared.constants import TRUNC_LLM_PROMPT_ERROR
+from shared.constants import DEFAULT_ANALYSIS_MODEL, TRUNC_LLM_PROMPT_ERROR
 from shared.llm_client import llm
 
 MAX_SELF_VERIFY_RETRIES = 2
@@ -47,7 +47,14 @@ Rules:
 - The HTML template has `<div id="game-container"></div>`. Set `parent: 'game-container'` in your Phaser game config so the canvas is rendered inside it.
 
 Return a JSON object mapping file paths to file contents:
-{"src/main.ts": "...", "src/game/scenes/GameScene.ts": "...", ...}"""
+{"src/main.ts": "...", "src/game/scenes/GameScene.ts": "...", ...}
+
+Additional requirements:
+- MONETIZATION: Implement the monetization model from the GDD. For ad_supported: add placeholder ad slots (interstitial between levels, rewarded video on game over for extra life). For free_to_play: implement IAP-tier unlock mechanics. For premium: ensure a complete experience.
+- RETENTION: Implement at least 2 retention features from the GDD (daily challenges, streak tracking, unlock progression, achievement notifications)
+- ENGAGEMENT: Implement at least 1 engagement mechanic (power-up collection, combo system with visual feedback, social share button on game over with score)
+- PROGRESSION DEPTH: Include a visible progression system (level unlock, score milestones, collectible unlocks) that gives players a reason to return
+"""
 
 
 def _read_existing_source(project_dir: Path, max_chars: int = MAX_SOURCE_CHARS_IN_PROMPT) -> dict[str, str]:
@@ -74,9 +81,9 @@ async def generate_game_code(gdd: dict, project_dir: Path, config: AppConfig, bu
     if art_assets_path:
         _copy_art_assets(art_assets_path, project_dir)
 
-    model = "deepseek-v4-flash"
+    model = DEFAULT_ANALYSIS_MODEL
     max_tokens = 16384
-    if not config.deepseek_api_key:
+    if not config.minimax_api_key:
         logger.error("No AI API key configured")
         return project_dir
 
@@ -452,6 +459,7 @@ def _install_and_build(project_dir: Path) -> str:
 def _runtime_verify(project_dir: Path) -> str:
     """Open built game in headless Playwright, check canvas renders. Returns '' on success."""
     import asyncio
+
     from playwright.async_api import async_playwright
 
     dist_html = project_dir / "dist" / "index.html"

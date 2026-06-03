@@ -6,26 +6,24 @@ one task from the queue, and generates periodic reports.
 """
 from __future__ import annotations
 
-import os
-import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
 from loguru import logger
 
-from orchestrator.decision_gate import create_decision, resolve
+from orchestrator.decision_gate import resolve
 from orchestrator.event_bus import emit
 from orchestrator.persistence import (
     count_completed_tasks,
     count_completed_tasks_by_type,
     get_all_projects,
     get_api_usage_summary,
+    get_chat_history,
     get_company_policy,
     get_latest_market_report,
     get_pending_decisions,
     get_pending_instructions,
     get_project,
-    get_recent_completed_tasks,
     has_active_task,
     resolve_decision,
     save_agent_log,
@@ -47,9 +45,8 @@ from orchestrator.persistence import (
 from orchestrator.state import CompanyState, PipelinePhase
 from orchestrator.task_queue import enqueue, dequeue, complete_task, fail_task, update_progress, enqueue_retry
 from shared.constants import LAYER1_MAX_RETRIES, MAX_INSTRUCTIONS_PER_TICK, QA_CANCEL_THRESHOLD
-from shared.exceptions import SchedulerError, TaskExecutionError
 from shared.memory import get_memory_store
-from shared.models import ProjectPhase, ProjectState
+from shared.models import DecisionPoint, ProjectPhase, ProjectState, TaskRecord
 
 _TICK_COUNT = 0
 
@@ -70,6 +67,7 @@ _default_phase_ticks = {"scanning": 3, "designing": 2, "developing": 10, "testin
 PHASE_MAX_TICKS: dict[str, int] = _SCHED_CFG.get("phase_max_ticks", _default_phase_ticks)
 MARKET_SCAN_INTERVAL = _SCHED_CFG.get("market_scan_interval", 10)
 CEO_EVALUATE_INTERVAL = _SCHED_CFG.get("ceo_evaluate_interval", 1)
+ITCH_STATS_INTERVAL = _SCHED_CFG.get("itch_stats_interval", 30)
 MAX_ACTIVE_PROJECTS = _SCHED_CFG.get("max_active_projects", 3)
 REPORT_INTERVAL = _SCHED_CFG.get("report_interval", 5)
 
@@ -79,31 +77,10 @@ TASK_NODE_MAP = {
     "qa": "qa", "build": "build", "localize": "build", "deploy": "deploy",
 }
 
-_PAUSE_FLAG_PATH = os.path.join(tempfile.gettempdir(), "gcagents_paused")
-
-
-def is_paused() -> bool:
-    return os.path.exists(_PAUSE_FLAG_PATH)
-
-
-def set_paused(paused: bool) -> None:
-    if paused:
-        Path(_PAUSE_FLAG_PATH).touch()
-    else:
-        try:
-            os.remove(_PAUSE_FLAG_PATH)
-        except FileNotFoundError:
-            pass
-
-
 async def scheduler_tick() -> dict | None:
-    """Execute one scheduler tick. Returns tick info dict or None if paused."""
+    """Execute one scheduler tick. Returns tick info dict or None."""
     global _TICK_COUNT
     _TICK_COUNT += 1
-
-    if is_paused():
-        logger.debug(f"Scheduler tick #{_TICK_COUNT} skipped (paused)")
-        return None
 
     logger.info(f"Scheduler tick #{_TICK_COUNT}")
     memory = get_memory_store()
@@ -116,6 +93,9 @@ async def scheduler_tick() -> dict | None:
 
     if _TICK_COUNT % CEO_EVALUATE_INTERVAL == 0:
         await _ceo_evaluate_new_projects()
+
+    if _TICK_COUNT % ITCH_STATS_INTERVAL == 0:
+        await _fetch_itch_stats()
 
     await _advance_projects()
 
@@ -161,31 +141,18 @@ async def _process_instructions() -> None:
 
 
 async def _handle_instruction(content: str) -> None:
-    content_lower = content.lower()
-
-    if any(kw in content_lower for kw in ("new project", "create project", "start project", "新项目")):
-        await create_decision(
-            "new_project",
-            f"Create new project from instruction: {content[:200]}",
-            context={"source": "chat", "instruction": content},
-        )
-        await save_chat_message("assistant", "I'll create a decision to start a new project. Please approve or reject.", agent_name="ceo")
-    elif any(kw in content_lower for kw in ("status", "report", "how are", "情况", "状态", "报告")):
-        projects = await get_all_projects()
-        lines = [f"- {p.name} ({p.phase.value}): {p.progress:.0%}" for p in projects]
-        msg = "Current project status:\n" + "\n".join(lines) if lines else "No active projects."
-        await save_chat_message("assistant", msg, agent_name="ceo")
-    elif any(kw in content_lower for kw in ("cancel", "stop", "取消", "停止")):
-        projects = await get_all_projects()
-        active = [p for p in projects if p.phase not in (ProjectPhase.BACKLOG, ProjectPhase.CANCELLED, ProjectPhase.LIVE)]
-        for p in active[:1]:
-            await create_decision("cancel", f"Cancel project '{p.name}'?", project_id=p.id)
-            await save_chat_message("assistant", f"Created cancellation decision for '{p.name}'.", agent_name="ceo")
-    else:
-        projects = await get_all_projects()
-        active = [p for p in projects if p.phase not in (ProjectPhase.BACKLOG, ProjectPhase.CANCELLED)]
-        summary = f"{len(projects)} projects total, {len(active)} active."
-        await save_chat_message("assistant", f"收到。当前 {summary} 如需操作请说：状态、新项目、取消。", agent_name="ceo")
+    """Forward user instruction to CEO chat as context."""
+    projects = await get_all_projects()
+    active = [p for p in projects if p.phase not in (ProjectPhase.BACKLOG, ProjectPhase.CANCELLED)]
+    summary = f"{len(projects)} 个项目，{len(active)} 个活跃中。"
+    await save_chat_message(
+        "assistant",
+        (
+            f"收到您的指令。当前公司有 {summary} 我会结合您的意见和当前状况来处理。"
+            "如需具体操作，请通过对话告诉我。"
+        ),
+        agent_name="ceo",
+    )
 
 
 async def _resolve_answered_decisions() -> None:
@@ -223,7 +190,7 @@ async def _resolve_answered_decisions() -> None:
                     await emit("scheduler", f"Decision timed out: {d.question[:50]}", severity="warning", source_agent="scheduler")
 
 
-async def _handle_approved_decision(decision) -> None:
+async def _handle_approved_decision(decision: DecisionPoint) -> None:
     dtype = decision.decision_type.value
     pid = decision.project_id
 
@@ -264,7 +231,7 @@ async def _handle_approved_decision(decision) -> None:
             await emit("scheduler", f"Direction change for {project.name}", source_agent="scheduler", project_name=project.name)
 
 
-async def _handle_rejected_decision(decision) -> None:
+async def _handle_rejected_decision(decision: DecisionPoint) -> None:
     dtype = decision.decision_type.value
     pid = decision.project_id
 
@@ -287,31 +254,47 @@ async def _periodic_market_scan() -> None:
     await enqueue("__system__", "market_scan")
 
 
+async def _fetch_itch_stats() -> None:
+    from agents.ops.deployer.itch_stats import fetch_itch_stats
+    try:
+        results = await fetch_itch_stats()
+        if results:
+            logger.info(f"Scheduler: refreshed itch.io stats for {len(results)} games")
+    except (RuntimeError, ValueError, OSError) as e:
+        logger.warning(f"Scheduler: itch stats fetch failed: {e}")
+
+
 async def _ceo_evaluate_new_projects() -> None:
-    """CEO evaluates latest market report and creates new projects for approved opportunities.
-    
-    This bridges the LangGraph CEO node into the scheduler tick flow. The CEO is the
-    LLM-driven decision maker that picks which market opportunities to greenlight;
-    the scheduler is the mechanical executor that advances projects through phases.
+    """CEO evaluates latest market report and suggests project ideas via chat.
+
+    Market data is stored as reference only. Project creation requires human
+    discussion and approval through the CEO chat interface.
     """
     import json
+
     from orchestrator.nodes.ceo import ceo_evaluate
     from orchestrator.state import CompanyState, PipelinePhase
 
     latest_report = await get_latest_market_report()
-
     if not latest_report or not latest_report.get("opportunities_json"):
         logger.debug("CEO evaluate: no market report available yet")
         return
 
     try:
         opportunities = json.loads(latest_report["opportunities_json"])
-    except Exception:
-        logger.warning("CEO evaluate: failed to parse opportunities JSON")
+    except (json.JSONDecodeError, KeyError, TypeError) as e:
+        logger.warning(f"CEO evaluate: failed to parse opportunities JSON: {e}")
         return
 
     if not opportunities:
         return
+
+    # Check if we already suggested recently (dedup by checking last 20 CEO suggestions)
+    recent_history = await get_chat_history(limit=20)
+    recent_suggestions = {
+        msg.get("content", "") for msg in recent_history
+        if msg.get("agent_name") == "ceo" and "市场分析建议" in msg.get("content", "")
+    }
 
     state = CompanyState(
         phase=PipelinePhase.EVALUATING,
@@ -324,58 +307,49 @@ async def _ceo_evaluate_new_projects() -> None:
         logger.info(f"CEO evaluate: no proposal approved (phase={result.get('phase')})")
         return
 
-    proposal_name = proposal.name if hasattr(proposal, "name") else proposal.get("name", "unnamed")
-    proposal_genre = proposal.genre if hasattr(proposal, "genre") else proposal.get("genre", "general")
-    if hasattr(proposal, "model_dump"):
-        proposal_dict = proposal.model_dump(mode="json")
-    else:
-        proposal_dict = proposal
-
-    existing = await get_all_projects()
-    if any(p.name.lower() == proposal_name.lower() for p in existing):
-        logger.info(f"CEO evaluate: project '{proposal_name}' already exists, skipping")
-        return
-
-    policy = await get_company_policy()
-    max_dev = policy.get("max_dev_projects", 3)
-    dev_phases = {"scanning", "designing", "developing", "testing", "building", "publishing"}
-    dev_count = sum(1 for p in existing if p.phase.value in dev_phases)
-    if dev_count >= max_dev:
-        logger.info(f"CEO evaluate: dev capacity reached ({dev_count}/{max_dev}), skipping '{proposal_name}'")
-        return
-    preferred_genres = policy.get("preferred_genres", [])
-    genre_match = not preferred_genres or proposal_genre.lower() in [g.lower() for g in preferred_genres]
-    auto_approve = True
-
-    project_id = f"ceo-{int(datetime.now(timezone.utc).timestamp())}"
-    project = ProjectState(
-        id=project_id,
-        name=proposal_name,
-        genre=proposal_genre,
-        phase=ProjectPhase.SCANNING,
-        progress=0.0,
-        proposal=proposal_dict,
-        awaiting_decision=None,
+    proposal_name = (
+        proposal.name if hasattr(proposal, "name") else proposal.get("name", "unnamed")
     )
-    await save_project(project)
-    logger.info(f"CEO evaluate: greenlit new project '{proposal_name}' (id={project_id}, genre={proposal_genre}, auto=True)")
+    proposal_genre = (
+        proposal.genre if hasattr(proposal, "genre") else proposal.get("genre", "general")
+    )
 
-    await emit(
-        "ceo",
-        f"New project auto-approved by policy: {proposal_name}",
-        source_agent="ceo",
-        project_name=proposal_name,
+    # Skip if already suggested this project
+    if any(proposal_name in s for s in recent_suggestions):
+        logger.info(f"CEO evaluate: already suggested '{proposal_name}', skipping")
+        return
+
+    score = 0.0
+    if hasattr(proposal, "market_opportunity_score"):
+        score = proposal.market_opportunity_score
+    else:
+        score = proposal.get("market_opportunity_score", proposal.get("score", 0))
+
+    description = (
+        proposal.description
+        if hasattr(proposal, "description")
+        else proposal.get("description", "")
+    )
+
+    suggestion_msg = (
+        f"💡 **市场分析建议**：发现了一个潜在的优质项目方向。\n\n"
+        f"**项目名称**: {proposal_name}\n"
+        f"**类型**: {proposal_genre}\n"
+        f"**描述**: {description[:200]}\n"
+        f"**市场评分**: {score:.2f}\n\n"
+        f"这是基于最新市场数据的参考建议。如果您感兴趣，我们可以深入讨论细节和可行性。"
     )
     await save_chat_message(
-        "assistant",
-        f"✅ 新项目 **{proposal_name}** ({proposal_genre}) 已自动批准。",
-        agent_name="ceo",
+        "assistant", suggestion_msg, agent_name="ceo",
+        metadata={"type": "suggestion", "project_name": proposal_name},
     )
     await emit(
-        "ceo",
-        f"New project greenlit: {proposal_name}",
-        source_agent="ceo",
-        project_name=proposal_name,
+        "ceo", f"Market suggestion: {proposal_name}",
+        source_agent="ceo", project_name=proposal_name,
+    )
+    logger.info(
+        f"CEO evaluate: suggested project '{proposal_name}' "
+        f"(genre={proposal_genre}, score={score:.2f})"
     )
 
 
@@ -515,7 +489,7 @@ async def _execute_one_task() -> dict | None:
         return {"task": task, "error": error_msg, "status": "failed"}
 
 
-async def _handle_retry_recovery(task, error_msg: str) -> dict | None:
+async def _handle_retry_recovery(task: TaskRecord, error_msg: str) -> dict | None:
     params = task.params
     retry_count = params.get("retry_count", 0)
     layer = params.get("layer", 1)
@@ -532,7 +506,7 @@ async def _handle_retry_recovery(task, error_msg: str) -> dict | None:
     return None
 
 
-async def _retry_layer1(task, error_msg: str, retry_count: int) -> dict:
+async def _retry_layer1(task: TaskRecord, error_msg: str, retry_count: int) -> dict:
     pid = task.project_id
     task_type = task.task_type
     logger.info(f"Scheduler: Layer 1 retry #{retry_count + 1} for '{task_type}' (project {pid})")
@@ -546,7 +520,7 @@ async def _retry_layer1(task, error_msg: str, retry_count: int) -> dict:
     return {"task": task, "error": error_msg, "status": "failed", "recovery": "layer1_retry"}
 
 
-async def _escalate_layer2(task, error_msg: str) -> dict:
+async def _escalate_layer2(task: TaskRecord, error_msg: str) -> dict:
     pid = task.project_id
     task_type = task.task_type
     alt_type = _fallback_task_type(task_type)
@@ -575,7 +549,7 @@ async def _escalate_layer2(task, error_msg: str) -> dict:
 MAX_LAYER3_RETRIES = 2
 
 
-async def _escalate_layer3(task, error_msg: str) -> dict:
+async def _escalate_layer3(task: TaskRecord, error_msg: str) -> dict:
     pid = task.project_id
     task_type = task.params.get("original_task_type", task.task_type)
     layer3_count = task.params.get("layer3_count", 0) + 1
@@ -738,7 +712,7 @@ async def _run_agent(task_type: str, project_id: str, params: dict) -> dict:
         return {"error": f"unknown task type: {task_type}"}
 
 
-def _proposal_from_project(project: ProjectState | None):
+def _proposal_from_project(project: ProjectState | None) -> dict | None:
     if not project or not project.proposal:
         return None
     from shared.models import GameProposal
@@ -897,14 +871,9 @@ async def _generate_reports() -> None:
     active = [p for p in projects if p.phase not in (ProjectPhase.BACKLOG, ProjectPhase.CANCELLED, ProjectPhase.LIVE)]
     live = [p for p in projects if p.phase == ProjectPhase.LIVE]
     pending = await get_pending_decisions()
-    total = len(projects)
-    active_count = len(active)
 
     usage = await get_api_usage_summary()
-    total_calls = usage["calls"]
     total_cost = usage["total_cost"]
-
-    recent_rows = await get_recent_completed_tasks()
 
     policy = await get_company_policy()
     budget_limit = policy.get("budget_limit_usd", 5.0)

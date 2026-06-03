@@ -61,7 +61,7 @@ async def generate_art(state: CompanyState) -> dict:
         logger.info(f"Art generation complete for: {project_name}")
         return {"phase": PipelinePhase.DEVELOPING, "art_assets_path": str(output_dir)}
 
-    except httpx.ConnectError:
+    except httpx.HTTPError:
         logger.warning(
             "ComfyUI unavailable - falling back to Phaser shape rendering (no art assets needed)"
         )
