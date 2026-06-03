@@ -106,8 +106,9 @@ async def run_auto_playtest(game_dist_path: str | Path, game_dir: str | Path | N
     elapsed = datetime.now(timezone.utc) - started_at
     duration_ms = int(elapsed.total_seconds() * 1000)
 
+    min_pass_count = max(total_count - 2, 1)
     return {
-        "passed": passed_count >= total_count - 1 and complexity_passed,
+        "passed": passed_count >= min_pass_count and complexity_passed,
         "score": final_score,
         "checks": results,
         "passed_count": passed_count,

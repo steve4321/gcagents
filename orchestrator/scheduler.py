@@ -571,18 +571,30 @@ async def _escalate_layer2(task, error_msg: str) -> dict:
     return {"task": task, "error": error_msg, "status": "failed", "recovery": "layer2_strategy_change"}
 
 
+MAX_LAYER3_RETRIES = 2
+
+
 async def _escalate_layer3(task, error_msg: str) -> dict:
     pid = task.project_id
     task_type = task.params.get("original_task_type", task.task_type)
-    logger.warning(f"Scheduler: Layer 3 auto-retry for project {pid}, task '{task_type}'")
+    layer3_count = task.params.get("layer3_count", 0) + 1
 
-    await save_chat_message("assistant", f"⚠️ 任务 **{task_type}** 失败，自动重新排队重试: {error_msg[:100]}", agent_name="ceo")
+    if layer3_count > MAX_LAYER3_RETRIES:
+        logger.error(f"Scheduler: project {pid} task '{task_type}' exceeded {MAX_LAYER3_RETRIES} layer3 retries, cancelling")
+        await save_chat_message("assistant", f"🔴 项目 **{pid}** 任务 {task_type} 超过最大重试次数，自动取消", agent_name="ceo")
+        await update_project_phase(pid, "cancelled")
+        await emit("scheduler", f"Project {pid} cancelled after {layer3_count} layer3 retries", severity="error", source_agent="scheduler")
+        return {"task": task, "error": error_msg, "status": "failed", "recovery": "cancelled"}
 
-    # Auto-retry: re-enqueue the original task with layer reset
+    logger.warning(f"Scheduler: Layer 3 auto-retry #{layer3_count} for project {pid}, task '{task_type}'")
+
+    await save_chat_message("assistant", f"⚠️ 任务 **{task_type}** 失败 (layer3 retry #{layer3_count}/{MAX_LAYER3_RETRIES}): {error_msg[:100]}", agent_name="ceo")
+
     await enqueue(pid, task_type, {
         "retry_count": 0,
         "layer": 1,
         "original_task_type": task_type,
+        "layer3_count": layer3_count,
     })
     await emit("scheduler", f"Project {pid} task '{task_type}' auto-retried after layer 3 failure", severity="warning", source_agent="scheduler")
     return {"task": task, "error": error_msg, "status": "failed", "recovery": "layer3_auto_retry"}
@@ -652,7 +664,8 @@ async def _run_agent(task_type: str, project_id: str, params: dict) -> dict:
         playtest = checks.get("playtest", {})
         for c in playtest.get("checks", []):
             if not c.get("passed"):
-                parts.append(f"Playtest fail: {c['name']}" + (f" - {c.get('detail','')}" if c.get("detail") else ""))
+                detail = c.get("detail") or c.get("reason") or c.get("error") or ""
+                parts.append(f"QA fail: {c['name']}" + (f" — {detail}" if detail else ""))
         if not checks.get("project_structure", True):
             parts.append("Project structure check failed")
         if not checks.get("build_artifacts", True):

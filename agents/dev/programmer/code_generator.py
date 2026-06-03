@@ -172,7 +172,7 @@ Include basic gameplay analytics: call `navigator.sendBeacon('/api/analytics/eve
     if build_error:
         messages.append({
             "role": "user",
-            "content": f"The previous build FAILED with this error. Fix the code:\n\n{build_error[:TRUNC_LLM_PROMPT_ERROR]}\n\nReturn ALL source files again with the fixes applied.",
+            "content": f"The previous build/QA FAILED with these specific issues:\n\n{build_error[:TRUNC_LLM_PROMPT_ERROR]}\n\nRead the existing source files in the project directory and ONLY fix the problems. Return a JSON object with ONLY the files that need to change. Do NOT regenerate working files.",
         })
 
     response = await llm.chat_completion(
