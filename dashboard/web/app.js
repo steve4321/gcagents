@@ -886,7 +886,7 @@ async function renderProjects() {
 
     const liveProjects = projects.filter(p => p.phase === 'live');
     const builtProjects = projects.filter(p =>
-      p.phase !== 'live' && p.code_path && p.phase !== 'developing' && p.phase !== 'designing'
+      p.phase !== 'live' && p.code_path && p.phase !== 'developing' && p.phase !== 'designing' && p.phase !== 'cancelled'
     );
 
     if (liveProjects.length === 0 && builtProjects.length === 0) {
