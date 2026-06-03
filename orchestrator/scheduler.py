@@ -646,6 +646,7 @@ async def _run_agent(task_type: str, project_id: str, params: dict) -> dict:
     state = CompanyState(
         phase=PipelinePhase.IDLE,
         current_project_id=project_id if project_id != "__system__" else None,
+        project_name=project.name if project else None,
         gdd=project.gdd if project else None,
         current_proposal=_proposal_from_project(project) if project else None,
         art_assets_path=params.get("art_assets_path") or (project.art_assets_path if project else None),

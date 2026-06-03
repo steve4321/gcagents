@@ -24,6 +24,7 @@ class CompanyState(BaseModel):
     phase: PipelinePhase = PipelinePhase.IDLE
     current_proposal: GameProposal | None = None
     current_project_id: str | None = None
+    project_name: str | None = None
     market_insights: list[dict] = []
     gdd: dict | None = None
     art_assets_path: str | None = None

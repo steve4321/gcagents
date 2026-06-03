@@ -3,10 +3,18 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import re
+
 from loguru import logger
 
 from orchestrator.state import CompanyState, PipelinePhase
 from shared.config import load_config
+
+
+def _title_to_slug(title: str) -> str:
+    title = title.lower()
+    title = re.sub(r"[^a-z0-9]+", "-", title)
+    return title.strip("-")
 
 
 async def deploy_to_itch(state: CompanyState) -> dict:
@@ -24,9 +32,10 @@ async def deploy_to_itch(state: CompanyState) -> dict:
         }
 
     project_name = Path(state.game_code_path or "game").name
+    slug = _title_to_slug(state.project_name) if state.project_name else project_name
     channel = "html"
 
-    logger.info(f"Deploying {project_name} to itch.io...")
+    logger.info(f"Deploying {slug} to itch.io...")
 
     try:
         env = {"BUTLER_API_KEY": config.butler_api_key}
@@ -35,7 +44,7 @@ async def deploy_to_itch(state: CompanyState) -> dict:
             [
                 "butler", "push",
                 str(build_path),
-                f"{config.butler_username}/{project_name}:{channel}",
+                f"{config.butler_username}/{slug}:{channel}",
             ],
             env={**subprocess.os.environ, **env},
             capture_output=True,
@@ -48,7 +57,7 @@ async def deploy_to_itch(state: CompanyState) -> dict:
             logger.error(f"Deploy failed: {detail}")
             return {"phase": PipelinePhase.BUILDING, "errors": [f"Deploy failed: {detail}"]}
 
-        itch_url = f"https://{config.butler_username}.itch.io/{project_name}"
+        itch_url = f"https://{config.butler_username}.itch.io/{slug}"
         logger.info(f"Deployed to: {itch_url}")
 
         return {"phase": PipelinePhase.OPERATING, "itch_url": itch_url}
