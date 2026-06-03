@@ -130,7 +130,7 @@ async def scheduler_tick() -> dict | None:
         task = task_result["task"]
         pid = task.project_id
         if pid != "__system__":
-            memory.store_short_term(
+            await memory.store_short_term(
                 "tick_result",
                 f"Phase: {task.task_type}, Status: {task_result['status']}",
                 pid,
@@ -460,16 +460,17 @@ async def _advance_project(project: ProjectState) -> None:
             await enqueue(pid, "build", {"project_name": project.name, "code_path": project.code_path})
 
     elif phase == ProjectPhase.PUBLISHING:
-        await update_project_phase(pid, "publishing")
-        project = await get_project(pid)
-        if project:
-            await enqueue(pid, "deploy", {"project_name": project.name})
-        await emit("scheduler", f"Publish auto-approved: {project.name}", source_agent="scheduler", project_name=project.name)
-        await save_chat_message(
-            "assistant",
-            f"✅ 项目 **{project.name}** 自动发布。",
-            agent_name="ceo",
-        )
+        if not await has_active_task(pid, "deploy"):
+            await update_project_phase(pid, "publishing")
+            project = await get_project(pid)
+            if project:
+                await enqueue(pid, "deploy", {"project_name": project.name})
+            await emit("scheduler", f"Publish auto-approved: {project.name}", source_agent="scheduler", project_name=project.name)
+            await save_chat_message(
+                "assistant",
+                f"✅ 项目 **{project.name}** 自动发布。",
+                agent_name="ceo",
+            )
 
 
 
@@ -831,15 +832,41 @@ async def _apply_task_result(task_result: dict) -> None:
             await update_project_phase(pid, "building")
         else:
             prev_fail_count = 0
+            prev_fingerprint = ""
             if project.qa_result and isinstance(project.qa_result, dict):
                 prev_fail_count = project.qa_result.get("fail_count", 0)
+                prev_fingerprint = project.qa_result.get("fail_fingerprint", "")
+
+            checks = qa_results.get("checks", {})
+            playtest = checks.get("playtest", {})
+            failed_names = sorted(c["name"] for c in playtest.get("checks", []) if not c.get("passed"))
+            current_fingerprint = ",".join(failed_names)
+            same_fingerprint = current_fingerprint == prev_fingerprint and current_fingerprint != ""
+
             new_fail_count = prev_fail_count + 1
             qa_results["fail_count"] = new_fail_count
+            qa_results["fail_fingerprint"] = current_fingerprint
+
+            if same_fingerprint:
+                qa_results["same_fail_streak"] = project.qa_result.get("same_fail_streak", 0) + 1
+            else:
+                qa_results["same_fail_streak"] = 0
+
             await update_project_qa_result(pid, qa_results)
 
-            if new_fail_count >= QA_CANCEL_THRESHOLD:
-                await save_chat_message("assistant", f"🔴 项目 **{project.name}** QA 失败 {new_fail_count} 次，自动重试", agent_name="ceo")
-            await update_project_phase(pid, "developing")
+            same_streak = qa_results.get("same_fail_streak", 0)
+
+            if new_fail_count >= QA_CANCEL_THRESHOLD or same_streak >= QA_CANCEL_THRESHOLD:
+                await save_chat_message(
+                    "assistant",
+                    f"🔴 项目 **{project.name}** QA 失败 {new_fail_count} 次"
+                    f"（连续相同问题 {same_streak} 次），自动取消",
+                    agent_name="ceo",
+                )
+                await update_project_phase(pid, "cancelled")
+                await emit("scheduler", f"Project {pid} cancelled: QA failed {new_fail_count}x (same issue {same_streak}x)", severity="error", source_agent="scheduler")
+            else:
+                await update_project_phase(pid, "developing")
 
     elif effective_type == "build":
         build_path = result.get("build_path")

@@ -495,9 +495,12 @@ def _runtime_verify(project_dir: Path) -> str:
 
 def _parse_code_files(text: str) -> dict[str, str]:
     text = text.strip()
-    if text.startswith("```"):
-        text = text.split("\n", 1)[1].rsplit("```", 1)[0]
 
+    # Case 1: wrapped in ```json ... ```
+    if text.startswith("```"):
+        text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+
+    # Case 2: raw JSON
     try:
         result = json.loads(text)
         if isinstance(result, dict):
@@ -505,6 +508,7 @@ def _parse_code_files(text: str) -> dict[str, str]:
     except json.JSONDecodeError:
         pass
 
+    # Case 3: find first { ... } in text
     try:
         start = text.index("{")
         end = text.rindex("}") + 1
@@ -514,4 +518,19 @@ def _parse_code_files(text: str) -> dict[str, str]:
     except (ValueError, json.JSONDecodeError):
         pass
 
-    raise ValueError("Failed to parse generated code files")
+    # Case 4: multiple ```json blocks — concatenate
+    import re
+    blocks = re.findall(r'```(?:json)?\s*\n(.*?)```', text, re.DOTALL)
+    if blocks:
+        combined = {}
+        for block in blocks:
+            try:
+                d = json.loads(block.strip())
+                if isinstance(d, dict):
+                    combined.update(d)
+            except json.JSONDecodeError:
+                continue
+        if combined:
+            return combined
+
+    raise ValueError(f"Failed to parse generated code files (text starts: {text[:200]})")
