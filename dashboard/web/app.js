@@ -695,38 +695,39 @@ async function renderMarket() {
 
   try {
     const signalsData = await fetchJSON(`${API_BASE}/market/latest`);
-    const signals = (signalsData || []).slice(0, 50);
+    const signals = (signalsData || []).slice(0, 30);
+
+    const genreCount = {};
+    signals.forEach(s => {
+      const genre = s.genre || '其他';
+      genreCount[genre] = (genreCount[genre] || 0) + 1;
+    });
+    const topGenres = Object.entries(genreCount)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5);
 
     grid.innerHTML = `
-      <div class="signals-section">
-        <div class="signals-title">市场信号</div>
-        <div class="signals-table-container">
-          ${signals.length > 0 ? `
-            <table class="signals-table">
-              <thead>
-                <tr>
-                  <th>来源</th>
-                  <th>类型</th>
-                  <th>标题</th>
-                  <th>游戏类型</th>
-                  <th>评分</th>
-                  <th>时间</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${signals.map(s => `
-                  <tr>
-                    <td><span class="signal-source">${s.source || '--'}</span></td>
-                    <td><span class="signal-type">${s.signal_type || '--'}</span></td>
-                    <td class="signal-title">${s.title || '--'}</td>
-                    <td>${s.genre || '--'}</td>
-                    <td class="signal-score">${(s.score || 0).toFixed(1)}</td>
-                    <td class="signal-time" data-tooltip="${s.captured_at ? new Date(s.captured_at).toLocaleString() : ''}">${fmtRelativeTime(s.captured_at)}</td>
-                  </tr>
-                `).join('')}
-              </tbody>
-            </table>
-          ` : '<div class="empty-state"><div class="empty-message">暂无信号数据</div></div>'}
+      <div class="market-trends">
+        <div class="trends-title">热门类型</div>
+        <div class="trends-list">
+          ${topGenres.length > 0 ? topGenres.map(([genre, count]) => `
+            <div class="trend-item">
+              <span class="trend-genre">${escapeHtml(genre)}</span>
+              <span class="trend-count">${count} 个信号</span>
+            </div>
+          `).join('') : '<div class="empty-state">暂无数据</div>'}
+        </div>
+      </div>
+      <div class="market-signals">
+        <div class="signals-title">最新动态</div>
+        <div class="signals-list">
+          ${signals.length > 0 ? signals.slice(0, 15).map(s => `
+            <div class="signal-item">
+              <span class="signal-source">${s.source || '--'}</span>
+              <span class="signal-title">${s.title || '--'}</span>
+              <span class="signal-genre">${s.genre || '--'}</span>
+            </div>
+          `).join('') : '<div class="empty-state">暂无动态</div>'}
         </div>
       </div>
     `;
