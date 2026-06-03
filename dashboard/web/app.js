@@ -774,30 +774,6 @@ async function renderMarket() {
         <div class="sources-title">数据源状态</div>
         <div class="market-sources">${sourceBadges || '<div class="source-badge inactive">暂无活跃数据源</div>'}</div>
       </div>
-      <div class="opportunities-section">
-        <div class="opportunities-title">最佳机会</div>
-        ${opportunities.length > 0 ? opportunities.map(opp => `
-          <div class="opportunity-card">
-            <div class="opportunity-header">
-              <span class="opportunity-name">${opp.name || '未命名'}</span>
-              <span class="opportunity-score">${(opp.market_opportunity_score || 0).toFixed(1)}</span>
-            </div>
-            <div class="opportunity-genre">${opp.genre || '综合'}${getTrendBadge(opp.genre || '')}</div>
-            <div class="opportunity-description">${opp.description || '暂无描述'}</div>
-            <div class="opportunity-meta">
-              <span>
-                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
-                ${opp.estimated_dev_hours ? `${opp.estimated_dev_hours}h` : '--'}
-              </span>
-              <span>
-                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 7h4a2 2 0 012 2v4M3 5a2 2 0 012-2h4m0 0v4m0-4L8 13m4-4L3 9"/></svg>
-                ${opp.differentiation || 'Standard'}
-              </span>
-              ${getSourceAgreement(opp.genre || '')}
-            </div>
-          </div>
-        `).join('') : '<div class="empty-state"><div class="empty-message">No opportunities detected yet.</div></div>'}
-      </div>
       <div class="signals-section">
         <div class="signals-title">最新信号</div>
         <div class="signals-table-container">
