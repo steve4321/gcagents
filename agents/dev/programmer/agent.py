@@ -47,7 +47,10 @@ async def develop_game(state: CompanyState) -> dict:
 
     build_error = ""
     if state.errors:
-        build_error = state.errors[0] if isinstance(state.errors, list) else str(state.errors)
+        if isinstance(state.errors, list):
+            build_error = "\n".join(state.errors[:10])
+        else:
+            build_error = str(state.errors)
 
     is_retry = bool(build_error) or bool(state.retry_feedback)
     commit_msg = f"fix: retry build after error" if is_retry else f"feat: initial code generation"

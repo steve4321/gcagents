@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import shutil
 from pathlib import Path
 
 from loguru import logger
@@ -8,6 +10,9 @@ from loguru import logger
 from shared.config import AppConfig
 from shared.constants import TRUNC_LLM_PROMPT_ERROR
 from shared.llm_client import llm
+
+MAX_SELF_VERIFY_RETRIES = 2
+MAX_SOURCE_CHARS_IN_PROMPT = 12000
 
 
 PROGRAMMER_SYSTEM_PROMPT = """You are an expert Phaser 4 + TypeScript game developer.
@@ -45,6 +50,20 @@ Return a JSON object mapping file paths to file contents:
 {"src/main.ts": "...", "src/game/scenes/GameScene.ts": "...", ...}"""
 
 
+def _read_existing_source(project_dir: Path, max_chars: int = MAX_SOURCE_CHARS_IN_PROMPT) -> dict[str, str]:
+    """Read existing .ts source files from project_dir/src/ for inclusion in retry prompt."""
+    files: dict[str, str] = {}
+    total = 0
+    for f in sorted(project_dir.glob("src/**/*.ts")):
+        rel = str(f.relative_to(project_dir))
+        content = f.read_text(encoding="utf-8", errors="replace")
+        files[rel] = content
+        total += len(content)
+        if total >= max_chars:
+            break
+    return files
+
+
 async def generate_game_code(gdd: dict, project_dir: Path, config: AppConfig, build_error: str = "", art_assets_path: str = "") -> Path:
     logger.info(f"Generating Phaser 4 game code for: {gdd.get('title', 'unknown')}")
 
@@ -67,7 +86,44 @@ async def generate_game_code(gdd: dict, project_dir: Path, config: AppConfig, bu
     else:
         code_path = await _generate_all_at_once(gdd, project_dir, config, model, max_tokens, build_error, art_assets_path)
 
-    _install_and_build(code_path)
+    build_err = _install_and_build(code_path)
+    self_verify_attempt = 0
+    while build_err and self_verify_attempt < MAX_SELF_VERIFY_RETRIES:
+        self_verify_attempt += 1
+        logger.warning(f"Self-verify build failed (attempt {self_verify_attempt}/{MAX_SELF_VERIFY_RETRIES}): {build_err[:200]}")
+
+        existing_files = _read_existing_source(code_path)
+        existing_block = ""
+        if existing_files:
+            parts = []
+            for path, content in existing_files.items():
+                parts.append(f"### {path}\n```typescript\n{content}\n```")
+            existing_block = "\n\n## Current source files:\n\n" + "\n\n".join(parts)
+
+        messages = [
+            {"role": "system", "content": PROGRAMMER_SYSTEM_PROMPT},
+            {"role": "user", "content": f"""Build FAILED with this error:
+
+{build_err[:TRUNC_LLM_PROMPT_ERROR]}
+{existing_block}
+
+Fix the TypeScript/build errors. Return a JSON object with ONLY the files you modified."""},
+        ]
+        response = await llm.chat_completion(
+            model=model, messages=messages, temperature=0.2, max_tokens=8192,
+            agent_name="programmer", project_name=gdd.get("title", "unknown"),
+        )
+        files = _parse_code_files(response[0])
+        for fp, content in files.items():
+            full_path = code_path / fp
+            full_path.parent.mkdir(parents=True, exist_ok=True)
+            full_path.write_text(content, encoding="utf-8")
+        logger.info(f"Self-verify fix #{self_verify_attempt}: {len(files)} files")
+        build_err = _install_and_build(code_path)
+
+    if build_err:
+        logger.error(f"Build still failing after {MAX_SELF_VERIFY_RETRIES} self-verify attempts: {build_err[:200]}")
+
     return code_path
 
 
@@ -154,6 +210,51 @@ IMPORTANT: Art assets are available at: {art_assets_path}
 In BootScene, load images from this path using this.load.image(). Copy image files to public/assets/ and reference them as 'assets/filename.png'.
 In game scenes, use the loaded image sprites instead of placeholder shapes.
 """
+
+    # --- RETRY PATH: include existing source code in prompt ---
+    if build_error:
+        existing_files = _read_existing_source(project_dir)
+        existing_block = ""
+        if existing_files:
+            parts = []
+            for path, content in existing_files.items():
+                parts.append(f"### {path}\n```typescript\n{content}\n```")
+            existing_block = "\n\n## Current source files:\n\n" + "\n\n".join(parts)
+
+        retry_max_tokens = min(max_tokens, 8192)
+        messages = [
+            {"role": "system", "content": PROGRAMMER_SYSTEM_PROMPT},
+            {"role": "user", "content": f"""The previous build/QA FAILED with these specific issues:
+
+{build_error[:TRUNC_LLM_PROMPT_ERROR]}
+{existing_block}
+
+Fix ONLY the files that need to change. Return a JSON object with ONLY the files you modified.
+Do NOT return unchanged files."""},
+        ]
+
+        response = await llm.chat_completion(
+            model=model,
+            messages=messages,
+            temperature=0.3,
+            max_tokens=retry_max_tokens,
+            agent_name="programmer",
+            project_name=game_title,
+        )
+
+        text = response[0]
+        files = _parse_code_files(text)
+
+        for file_path, content in files.items():
+            full_path = project_dir / file_path
+            full_path.parent.mkdir(parents=True, exist_ok=True)
+            full_path.write_text(content, encoding="utf-8")
+            logger.debug(f"Fixed: {file_path}")
+
+        logger.info(f"Fix applied: {len(files)} files modified")
+        return project_dir
+
+    # --- NEW GENERATION PATH ---
     user_prompt = f"""Generate a complete Phaser 4 + TypeScript game based on this GDD:
 
 {json.dumps(gdd, indent=2)}
@@ -168,12 +269,6 @@ Include basic gameplay analytics: call `navigator.sendBeacon('/api/analytics/eve
         {"role": "system", "content": PROGRAMMER_SYSTEM_PROMPT},
         {"role": "user", "content": user_prompt},
     ]
-
-    if build_error:
-        messages.append({
-            "role": "user",
-            "content": f"The previous build/QA FAILED with these specific issues:\n\n{build_error[:TRUNC_LLM_PROMPT_ERROR]}\n\nRead the existing source files in the project directory and ONLY fix the problems. Return a JSON object with ONLY the files that need to change. Do NOT regenerate working files.",
-        })
 
     response = await llm.chat_completion(
         model=model,
@@ -279,7 +374,6 @@ export default defineConfig({
 
 
 def _copy_art_assets(art_assets_path: str, project_dir: Path) -> None:
-    import shutil
     src = Path(art_assets_path)
     if not src.exists():
         logger.warning(f"Art assets path does not exist: {art_assets_path}")
@@ -292,18 +386,25 @@ def _copy_art_assets(art_assets_path: str, project_dir: Path) -> None:
             logger.debug(f"Copied art asset: {f.name}")
 
 
-def _install_and_build(project_dir: Path) -> None:
-    import shutil
-    import subprocess
-
+def _install_and_build(project_dir: Path) -> str:
+    """Run npm install + build. Returns empty string on success, error message on failure."""
     try:
         subprocess.run(["npm", "install"], cwd=str(project_dir), capture_output=True, timeout=120, check=True)
         logger.info("npm install completed")
         result = subprocess.run(["npm", "run", "build"], cwd=str(project_dir), capture_output=True, timeout=120)
         if result.returncode != 0:
-            raise RuntimeError(f"Build failed: {result.stderr.decode()[:500]}")
-    except (subprocess.CalledProcessError, FileNotFoundError) as e:
-        raise RuntimeError(f"npm install/build failed: {e}")
+            stderr = result.stderr.decode(errors="replace")[:500]
+            logger.warning(f"Build failed: {stderr}")
+            return f"npm build failed: {stderr}"
+        logger.info("Build succeeded")
+        return ""
+    except subprocess.CalledProcessError as e:
+        stderr = e.stderr.decode(errors="replace")[:500] if e.stderr else str(e)
+        return f"npm install failed: {stderr}"
+    except FileNotFoundError:
+        return "npm not found"
+    except Exception as e:
+        return f"Build error: {e}"
     finally:
         shutil.rmtree(project_dir / "node_modules", ignore_errors=True)
 

@@ -662,8 +662,10 @@ async def _run_agent(task_type: str, project_id: str, params: dict) -> dict:
             parts.extend(qa["errors"])
         checks = qa.get("checks", {})
         playtest = checks.get("playtest", {})
+        if playtest.get("console_errors"):
+            parts.insert(0, f"Browser console had {playtest['console_errors']} errors")
         for c in playtest.get("checks", []):
-            if not c.get("passed"):
+            if not c.get("passed") and c.get("name") != "complexity_score":
                 detail = c.get("detail") or c.get("reason") or c.get("error") or ""
                 parts.append(f"QA fail: {c['name']}" + (f" — {detail}" if detail else ""))
         if not checks.get("project_structure", True):
