@@ -15,5 +15,9 @@ data/reports/
 .DS_Store
 *.log
 data/*.db
+data/*.db-shm
+data/*.db-wal
+.coverage
+*.png
 comfyui/
 .playwright-mcp/
