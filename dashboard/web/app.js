@@ -4,7 +4,6 @@ const PIPELINE_POLL_INTERVAL = 3000;
 const PIPELINE_FAST_REFRESH = 5000;
 let pipelineRunning = false;
 let pipelineStatusInterval = null;
-let foreverActive = false;
 let schedulerActive = false;
 const PIPELINE_PHASES = [
   { id: 'scan', label: 'Scan', icon: 'scan' },
@@ -196,62 +195,128 @@ async function renderAgents() {
   }
 }
 
-async function renderAnalytics() {
-  const container = $('#analyticsGrid');
-  if (!container) return;
+async function renderPerformance() {
+  const summaryEl = $('#performanceSummary');
+  const tableEl = $('#performanceTable');
+  const feedbackEl = $('#feedbackList');
+  if (!summaryEl || !tableEl) return;
 
-  container.innerHTML = '<div class="analytics-card skeleton" style="height:120px"></div>'.repeat(3);
-
+  let itchData = { stats: [] };
+  let inAppData = { projects: [] };
   try {
-    const data = await fetchJSON(`${API_BASE}/analytics/summary`);
-    const projects = data.projects || [];
+    [itchData, inAppData] = await Promise.all([
+      fetchJSON(`${API_BASE}/itch/stats`),
+      fetchJSON(`${API_BASE}/analytics/summary`),
+    ]);
+  } catch {
+    summaryEl.innerHTML = '<div class="analytics-empty">Failed to load performance data.</div>';
+    return;
+  }
 
-    if (projects.length === 0) {
-      container.innerHTML = '<div class="analytics-empty">No published games yet.</div>';
-      return;
-    }
+  const itchStats = itchData.stats || [];
+  const inAppProjects = inAppData.projects || [];
 
-    let totalPlays = 0;
-    let totalSessions = 0;
-    let totalFeedback = 0;
-    const genreStats = {};
+  const totalDownloads = itchStats.reduce((s, g) => s + (g.downloads_count || 0), 0);
+  const totalViews = itchStats.reduce((s, g) => s + (g.views_count || 0), 0);
+  const totalPlays = inAppProjects.reduce((s, p) => s + ((p.metrics && p.metrics.play_count && p.metrics.play_count.value) || 0), 0);
 
-    projects.forEach(p => {
-      const metrics = p.metrics || {};
-      const plays = metrics.play_count?.value || 0;
-      const sessions = metrics.avg_session_s?.value || 0;
-      totalPlays += plays;
-      totalSessions += sessions;
-      totalFeedback += p.feedback_count || 0;
+  summaryEl.innerHTML = `
+    <div class="analytics-card">
+      <div class="analytics-card-value">${totalDownloads.toLocaleString()}</div>
+      <div class="analytics-card-label">itch.io Downloads</div>
+      <div class="analytics-card-sub">across ${itchStats.length} published</div>
+    </div>
+    <div class="analytics-card">
+      <div class="analytics-card-value">${totalViews.toLocaleString()}</div>
+      <div class="analytics-card-label">itch.io Views</div>
+      <div class="analytics-card-sub">page impressions</div>
+    </div>
+    <div class="analytics-card">
+      <div class="analytics-card-value">${totalPlays.toLocaleString()}</div>
+      <div class="analytics-card-label">In-App Plays</div>
+      <div class="analytics-card-sub">from dashboard preview</div>
+    </div>
+  `;
 
-      const genre = p.genre || 'Unknown';
-      if (!genreStats[genre]) genreStats[genre] = { plays: 0, count: 0 };
-      genreStats[genre].plays += plays;
-      genreStats[genre].count += 1;
-    });
-
-    const avgSession = totalPlays > 0 ? Math.round(totalSessions / totalPlays) : 0;
-
-    container.innerHTML = `
-      <div class="analytics-card">
-        <div class="analytics-card-value">${totalPlays.toLocaleString()}</div>
-        <div class="analytics-card-label">Total Plays</div>
-        <div class="analytics-card-sub">${projects.length} games</div>
-      </div>
-      <div class="analytics-card">
-        <div class="analytics-card-value">${avgSession}s</div>
-        <div class="analytics-card-label">Avg Session</div>
-        <div class="analytics-card-sub">per player</div>
-      </div>
-      <div class="analytics-card">
-        <div class="analytics-card-value">${totalFeedback}</div>
-        <div class="analytics-card-label">Total Feedback</div>
-        <div class="analytics-card-sub">${projects.length > 0 ? Math.round(totalFeedback / projects.length) : 0} avg/game</div>
+  if (itchStats.length === 0) {
+    tableEl.innerHTML = '<div class="performance-empty">No itch.io stats yet. Click refresh below to fetch.</div>';
+  } else {
+    tableEl.innerHTML = `
+      <table class="performance-data-table">
+        <thead>
+          <tr>
+            <th>Game</th>
+            <th>itch.io</th>
+            <th>Downloads</th>
+            <th>Views</th>
+            <th>Purchases</th>
+            <th>Updated</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${itchStats.map(g => `
+            <tr>
+              <td>${escapeHtml(g.title)}</td>
+              <td>${g.itch_url ? `<a href="${g.itch_url}" target="_blank" rel="noopener">open ↗</a>` : '-'}</td>
+              <td>${(g.downloads_count || 0).toLocaleString()}</td>
+              <td>${(g.views_count || 0).toLocaleString()}</td>
+              <td>${(g.purchases_count || 0).toLocaleString()}</td>
+              <td>${g.fetched_at ? g.fetched_at.replace('T', ' ').slice(0, 16) : '-'}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+      <div class="performance-actions">
+        <button id="refreshItchBtn" class="refresh-itch-btn">↻ Refresh from itch.io</button>
       </div>
     `;
+    const btn = $('#refreshItchBtn');
+    if (btn) {
+      btn.addEventListener('click', async () => {
+        btn.disabled = true;
+        btn.textContent = 'Refreshing...';
+        try {
+          await fetchJSON(`${API_BASE}/itch/refresh`, { method: 'POST' });
+          await renderPerformance();
+        } catch (err) {
+          alert('Failed: ' + (err.message || 'Unknown error'));
+          btn.disabled = false;
+          btn.textContent = '↻ Refresh from itch.io';
+        }
+      });
+    }
+  }
 
-  } catch (err) {
-    container.innerHTML = '<div class="analytics-empty">Failed to load analytics.</div>';
+  if (feedbackEl) {
+    try {
+      let feedback = [];
+      for (const p of inAppProjects) {
+        const fb = await fetchJSON(`${API_BASE}/feedback/${p.id}`);
+        if (fb && fb.length > 0) {
+          feedback = feedback.concat(fb.map(f => ({ ...f, project_name: p.name })));
+        }
+      }
+      if (feedback.length === 0) {
+        feedbackEl.innerHTML = '<div class="feedback-empty">No feedback yet.</div>';
+      } else {
+        feedback.sort((a, b) => new Date(b.posted_at || b.created_at) - new Date(a.posted_at || a.created_at));
+        feedbackEl.innerHTML = feedback.map(f => {
+          const cat = f.category || 'other';
+          return `
+            <div class="feedback-item">
+              <div class="feedback-item-header">
+                <span class="feedback-author">${escapeHtml(f.author || 'Anonymous')}</span>
+                <span class="feedback-project">${escapeHtml(f.project_name || '')}</span>
+                <span class="feedback-category">${cat}</span>
+              </div>
+              <div class="feedback-text">${escapeHtml(f.text || '')}</div>
+            </div>
+          `;
+        }).join('');
+      }
+    } catch {
+      feedbackEl.innerHTML = '<div class="feedback-empty">Failed to load feedback.</div>';
+    }
   }
 }
 
@@ -303,20 +368,51 @@ async function renderFinance() {
       </div>
     `;
 
-    if (dailyTrend.length > 0) {
-      const maxCost = Math.max(...dailyTrend.map(d => d.cost), 0.001);
-      const barWidth = Math.floor(100 / dailyTrend.length);
-
+    if (totalCost > 0) {
       let chartHtml = '<div class="finance-chart">';
-      chartHtml += '<div class="finance-chart-bars">';
-      dailyTrend.forEach(d => {
-        const height = Math.max(4, (d.cost / maxCost) * 100);
-        chartHtml += `<div class="finance-chart-bar" style="width:${barWidth}%;height:${height}%" title="$${d.cost.toFixed(3)} on ${d.day}"></div>`;
-      });
-      chartHtml += '</div>';
-      chartHtml += '<div class="finance-chart-labels">';
-      chartHtml += `<span>$0</span><span>$${maxCost.toFixed(3)}</span>`;
-      chartHtml += '</div>';
+
+      const byAgent = usage.by_agent || {};
+      const agentEntries = Object.entries(byAgent)
+        .sort((a, b) => b[1].cost - a[1].cost)
+        .slice(0, 6);
+      if (agentEntries.length > 0) {
+        chartHtml += '<div class="finance-chart-section">';
+        chartHtml += '<div class="finance-chart-title">By Agent</div>';
+        agentEntries.forEach(([name, data]) => {
+          const pct = ((data.cost / totalCost) * 100).toFixed(1);
+          chartHtml += `
+            <div class="finance-bar-row">
+              <div class="finance-bar-label">${escapeHtml(name)}</div>
+              <div class="finance-bar-track">
+                <div class="finance-bar-fill" style="width:${pct}%"></div>
+              </div>
+              <div class="finance-bar-value">$${data.cost.toFixed(3)} · ${pct}%</div>
+            </div>
+          `;
+        });
+        chartHtml += '</div>';
+      }
+
+      const modelEntries = Object.entries(byModel)
+        .sort((a, b) => b[1].cost - a[1].cost);
+      if (modelEntries.length > 0) {
+        chartHtml += '<div class="finance-chart-section">';
+        chartHtml += '<div class="finance-chart-title">By Model</div>';
+        modelEntries.forEach(([name, data]) => {
+          const pct = ((data.cost / totalCost) * 100).toFixed(1);
+          chartHtml += `
+            <div class="finance-bar-row">
+              <div class="finance-bar-label">${escapeHtml(name)}</div>
+              <div class="finance-bar-track">
+                <div class="finance-bar-fill" style="width:${pct}%"></div>
+              </div>
+              <div class="finance-bar-value">$${data.cost.toFixed(3)} · ${pct}%</div>
+            </div>
+          `;
+        });
+        chartHtml += '</div>';
+      }
+
       chartHtml += '</div>';
       breakdownContainer.innerHTML = chartHtml;
     } else {
@@ -329,98 +425,8 @@ async function renderFinance() {
   }
 }
 
-async function loadFeedbackProjects() {
-  const select = $('#feedbackProjectSelect');
-  if (!select) return;
-
-  try {
-    const projects = await fetchJSON(`${API_BASE}/orchestrator/projects`);
-    const gameProjects = await fetchJSON(`${API_BASE}/analytics/summary`);
-    const allProjects = [
-      ...(projects || []).map(p => ({ id: p.id, name: p.name })),
-      ...(gameProjects.projects || []).map(p => ({ id: p.id, name: p.name })),
-    ];
-
-    const seen = new Set();
-    const unique = allProjects.filter(p => {
-      if (seen.has(p.id)) return false;
-      seen.add(p.id);
-      return true;
-    });
-
-    select.innerHTML = '<option value="">All Projects</option>' +
-      unique.map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('');
-
-    select.onchange = () => renderFeedback(select.value);
-  } catch (err) {
-    select.innerHTML = '<option value="">Failed to load projects</option>';
-  }
-}
-
-async function renderFeedback(projectId) {
-  const container = $('#feedbackList');
-  if (!container) return;
-
-  container.innerHTML = '<div class="feedback-loading">Loading feedback...</div>';
-
-  try {
-    let feedback = [];
-    if (projectId) {
-      feedback = await fetchJSON(`${API_BASE}/feedback/${projectId}`);
-    } else {
-      const projects = await fetchJSON(`${API_BASE}/analytics/summary`);
-      for (const p of (projects.projects || [])) {
-        const fb = await fetchJSON(`${API_BASE}/feedback/${p.id}`);
-        if (fb && fb.length > 0) {
-          feedback = feedback.concat(fb.map(f => ({ ...f, project_name: p.name })));
-        }
-      }
-    }
-
-    if (!feedback || feedback.length === 0) {
-      container.innerHTML = '<div class="feedback-empty">No feedback yet.</div>';
-      return;
-    }
-
-    feedback.sort((a, b) => new Date(b.posted_at || b.created_at) - new Date(a.posted_at || a.created_at));
-
-    const categoryColors = {
-      bug: 'var(--accent-red)',
-      feature_request: 'var(--accent-cyan)',
-      praise: 'var(--accent-green)',
-      question: 'var(--accent-amber)',
-      other: 'var(--text-muted)',
-    };
-
-    let html = '';
-    feedback.forEach(f => {
-      const cat = f.category || 'other';
-      const catColor = categoryColors[cat] || 'var(--text-muted)';
-      html += `
-        <div class="feedback-item">
-          <div class="feedback-item-header">
-            <span class="feedback-author">${escapeHtml(f.author || 'Anonymous')}</span>
-            ${f.project_name ? `<span class="feedback-project">${escapeHtml(f.project_name)}</span>` : ''}
-            <span class="feedback-category" style="color:${catColor}">${cat}</span>
-          </div>
-          <div class="feedback-text">${escapeHtml(f.text || '')}</div>
-          ${f.ai_analysis ? `<div class="feedback-analysis">${escapeHtml(f.ai_analysis)}</div>` : ''}
-          <div class="feedback-meta">
-            <span class="feedback-votes">👍 ${f.vote_count || 0}</span>
-            <span class="feedback-time">${fmtRelativeTime(f.posted_at || f.created_at)}</span>
-          </div>
-        </div>
-      `;
-    });
-
-    container.innerHTML = html;
-
-  } catch (err) {
-    container.innerHTML = '<div class="feedback-empty">Failed to load feedback.</div>';
-  }
-}
-
 let allDecisionHistory = [];
+
 
 async function loadDecisionHistory() {
   const container = $('#decisionHistoryList');
@@ -513,14 +519,11 @@ function _renderQaBadge(qaResult, projectId) {
 }
 
 function _renderQaDetail(qaResult) {
-  if (!qaResult || typeof qaResult !== 'object') return '';
+  if (!qaResult) return '';
   const lines = [];
-
-  if (qaResult.errors && qaResult.errors.length > 0) {
-    lines.push('<div class="qa-section"><div class="qa-section-title">Errors</div>');
-    qaResult.errors.forEach(e => { lines.push(`<div class="qa-error-item">${escapeHtml(e)}</div>`); });
-    lines.push('</div>');
-  }
+  if (qaResult.errors) lines.push(`<div>❌ ${escapeHtml(qaResult.errors)}</div>`);
+  if (qaResult.warnings) lines.push(`<div>⚠ ${escapeHtml(qaResult.warnings)}</div>`);
+  if (qaResult.passed) lines.push(`<div>✅ ${escapeHtml(qaResult.passed)}</div>`);
 
   const checks = qaResult.checks || {};
   const playtest = checks.playtest;
@@ -548,6 +551,16 @@ function _renderQaDetail(qaResult) {
   }
 
   return lines.length ? `<div class="qa-detail-panel">${lines.join('')}</div>` : '';
+}
+
+function toggleProjectCard(projectId) {
+  const card = document.querySelector(`.project-card[data-project-id="${projectId}"]`);
+  if (!card) return;
+  card.classList.toggle('collapsed');
+  const toggle = card.querySelector('.project-card-toggle');
+  if (toggle) {
+    toggle.textContent = card.classList.contains('collapsed') ? '▸' : '▾';
+  }
 }
 
 async function renderProjectBoard() {
@@ -583,9 +596,10 @@ async function renderProjectBoard() {
           </div>
           <div class="board-column-cards">
             ${phaseProjects.length > 0 ? phaseProjects.map(p => `
-              <div class="project-card ${p.awaiting_decision ? 'awaiting-decision' : ''}" data-project-id="${p.id}">
-                <div class="project-card-header">
+              <div class="project-card collapsed ${p.awaiting_decision ? 'awaiting-decision' : ''}" data-project-id="${p.id}">
+                <div class="project-card-header" onclick="toggleProjectCard('${p.id}')">
                   <span class="project-name">${escapeHtml(p.name || 'Unnamed')}</span>
+                  <span class="project-card-toggle">▸</span>
                 </div>
                 <div class="project-card-meta">
                   <span class="project-genre-badge">${p.genre || 'General'}</span>
@@ -685,6 +699,8 @@ async function renderMarket() {
       fetchJSON(`${API_BASE}/market/latest`)
     ]);
 
+    const opportunities = (reportData?.opportunities || []).slice(0, 3);
+    const signals = (signalsData || []).slice(0, 20);
     const analysis = reportData?.raw_analysis || '暂无分析数据。市场扫描器运行后会自动填充。';
     let analysisHtml = '';
     try {
@@ -707,8 +723,6 @@ async function renderMarket() {
     } catch (e) {
       analysisHtml = `<p>${escapeHtml(analysis)}</p>`;
     }
-    const opportunities = (reportData?.opportunities || []).slice(0, 3);
-    const signals = (signalsData || []).slice(0, 20);
 
     const sourceMap = {};
     signals.forEach(s => {
@@ -1013,62 +1027,8 @@ function toggleSection(sectionId) {
   }
 }
 
-async function triggerPipeline() {
-  const btn = $('#runPipelineBtn');
-  if (!btn) return;
-
-  btn.classList.add('running');
-  btn.textContent = 'Running...';
-  pipelineRunning = true;
-
-  try {
-    await fetchJSON(`${API_BASE}/pipeline/run`);
-  } catch {
-    btn.classList.remove('running');
-    btn.textContent = '▶ Run';
-    pipelineRunning = false;
-    return;
-  }
-
-  if (pipelineStatusInterval) clearInterval(pipelineStatusInterval);
-  pipelineStatusInterval = setInterval(checkPipelineStatus, PIPELINE_POLL_INTERVAL);
-  checkPipelineStatus();
-}
-
-async function toggleForever() {
-  const btn = $('#foreverToggleBtn');
-  if (!btn) return;
-
-  if (foreverActive) {
-    // Stop forever mode
-    btn.disabled = true;
-    btn.textContent = 'Stopping...';
-    try {
-      await fetchJSON(`${API_BASE}/pipeline/stop`, { method: 'POST' });
-    } catch { /* ignore */ }
-    foreverActive = false;
-    btn.classList.remove('active');
-    btn.textContent = '⟳ 24/7 OFF';
-    btn.disabled = false;
-  } else {
-    // Start forever mode
-    btn.disabled = true;
-    btn.textContent = 'Starting...';
-    try {
-      await fetchJSON(`${API_BASE}/pipeline/run-forever?interval=3600`, { method: 'POST' });
-      foreverActive = true;
-      btn.classList.add('active');
-      btn.textContent = '● 24/7 ON';
-    } catch {
-      btn.textContent = '⟳ 24/7 OFF';
-    }
-    btn.disabled = false;
-  }
-}
-
 async function toggleScheduler() {
-  const btn = $('#startSchedulerBtn');
-  const stopBtn = $('#stopSchedulerBtn');
+  const btn = $('#schedulerToggleBtn');
   if (!btn) return;
 
   if (schedulerActive) {
@@ -1081,7 +1041,6 @@ async function toggleScheduler() {
     btn.classList.remove('active');
     btn.textContent = '💼 开始上班';
     btn.disabled = false;
-    if (stopBtn) stopBtn.style.display = 'none';
   } else {
     btn.disabled = true;
     btn.textContent = '启动中...';
@@ -1089,8 +1048,7 @@ async function toggleScheduler() {
       await fetchJSON(`${API_BASE}/pipeline/run-scheduler?interval=60`, { method: 'POST' });
       schedulerActive = true;
       btn.classList.add('active');
-      btn.textContent = '💼 运行中';
-      if (stopBtn) stopBtn.style.display = 'inline-flex';
+      btn.textContent = '🏢 上班中';
     } catch (err) {
       console.error('Failed to start scheduler:', err);
       alert('Failed to start scheduler: ' + err.message);
@@ -1101,48 +1059,11 @@ async function toggleScheduler() {
   }
 }
 
-async function toggleSchedulerPause() {
-  const stopBtn = $('#stopSchedulerBtn');
-  if (!stopBtn) return;
-  const isPaused = stopBtn.dataset.paused === 'true';
-  try {
-    if (isPaused) {
-      await fetchJSON(`${API_BASE}/scheduler/resume`, { method: 'POST' });
-      stopBtn.dataset.paused = 'false';
-      stopBtn.textContent = '⏸ 下班';
-      stopBtn.title = 'Pause scheduler (CEO stops creating new projects, existing ones continue)';
-    } else {
-      await fetchJSON(`${API_BASE}/scheduler/pause`, { method: 'POST' });
-      stopBtn.dataset.paused = 'true';
-      stopBtn.textContent = '▶ 上班';
-      stopBtn.title = 'Resume scheduler (CEO will start creating new projects again)';
-    }
-  } catch (err) {
-    console.error('Pause toggle failed:', err);
-    alert('Pause toggle failed: ' + err.message);
-  }
-}
-
 async function checkPipelineStatus() {
-  const btn = $('#runPipelineBtn');
-  const foreverBtn = $('#foreverToggleBtn');
-  if (!btn) return;
-
   try {
     const status = await fetchJSON(`${API_BASE}/pipeline/status`);
 
-    if (foreverBtn) {
-      foreverActive = status.forever_running;
-      if (foreverActive) {
-        foreverBtn.classList.add('active');
-        foreverBtn.textContent = '● 24/7 ON';
-      } else {
-        foreverBtn.classList.remove('active');
-        foreverBtn.textContent = '⟳ 24/7 OFF';
-      }
-    }
-
-    const schedulerBtn = $('#startSchedulerBtn');
+    const schedulerBtn = $('#schedulerToggleBtn');
     if (schedulerBtn) {
       schedulerActive = status.scheduler_running;
       if (schedulerActive) {
@@ -1154,42 +1075,28 @@ async function checkPipelineStatus() {
       }
     }
 
-    if (status.mode === 'scheduler') {
-      btn.classList.add('running');
-      btn.textContent = 'Running...';
-      pipelineRunning = true;
-      return;
-    }
-
-    if (!status.running) {
-      if (pipelineStatusInterval) {
-        clearInterval(pipelineStatusInterval);
-        pipelineStatusInterval = null;
-      }
-      pipelineRunning = false;
-      btn.classList.remove('running');
-
-      if (status.status === 'completed') {
-        btn.classList.add('completed');
-        btn.textContent = '✓ Done';
-        setTimeout(() => {
-          btn.classList.remove('completed');
-          btn.textContent = '▶ Run';
-        }, 3000);
-      } else if (status.status === 'failed') {
-        btn.classList.add('failed');
-        btn.textContent = '✗ Failed';
-        setTimeout(() => {
-          btn.classList.remove('failed');
-          btn.textContent = '▶ Run';
-        }, 5000);
-      } else {
-        btn.textContent = '▶ Run';
-      }
-
-      refreshAll();
-    }
+    pipelineRunning = status.running;
+    updateChatInputState();
   } catch {
+  }
+}
+
+function updateChatInputState() {
+  const input = $('#chatInput');
+  const btn = $('#chatSendBtn');
+  const area = document.querySelector('.chat-input-area');
+  if (!input || !btn) return;
+
+  if (schedulerActive) {
+    input.disabled = false;
+    input.placeholder = 'Send a message...';
+    btn.disabled = false;
+    if (area) area.classList.remove('chat-input-disabled');
+  } else {
+    input.disabled = true;
+    input.placeholder = 'Start work to chat with CEO';
+    btn.disabled = true;
+    if (area) area.classList.add('chat-input-disabled');
   }
 }
 
@@ -1452,6 +1359,9 @@ async function renderChat() {
 }
 
 async function sendChatMessage() {
+  if (!schedulerActive) {
+    return;
+  }
   const input = $('#chatInput');
   const container = $('#chatMessages');
   if (!input || !container) return;
@@ -1570,9 +1480,8 @@ async function refreshAll() {
   updateTimestamp();
   await Promise.allSettled([
     renderAgents(),
-    renderAnalytics(),
+    renderPerformance(),
     renderFinance(),
-    renderFeedback(),
     renderProjectBoard(),
     renderTaskMonitor(),
     renderMarket(),
@@ -1604,37 +1513,15 @@ function init() {
     });
   }
 
-  const runPipelineBtn = $('#runPipelineBtn');
-  if (runPipelineBtn) {
-    runPipelineBtn.addEventListener('click', triggerPipeline);
-  }
-
-  const foreverToggleBtn = $('#foreverToggleBtn');
-  if (foreverToggleBtn) {
-    foreverToggleBtn.addEventListener('click', toggleForever);
-  }
-
-  const startSchedulerBtn = $('#startSchedulerBtn');
-  if (startSchedulerBtn) {
-    startSchedulerBtn.addEventListener('click', toggleScheduler);
-  }
-
-  const quickPrototypeBtn = $('#quickPrototypeBtn');
-  if (quickPrototypeBtn) {
-    quickPrototypeBtn.addEventListener('click', openPrototypeModal);
-  }
-
-  const stopSchedulerBtn = $('#stopSchedulerBtn');
-  if (stopSchedulerBtn) {
-    stopSchedulerBtn.addEventListener('click', toggleSchedulerPause);
+  const schedulerToggleBtn = $('#schedulerToggleBtn');
+  if (schedulerToggleBtn) {
+    schedulerToggleBtn.addEventListener('click', toggleScheduler);
   }
 
   const previewCloseBtn = $('#previewCloseBtn');
   if (previewCloseBtn) {
     previewCloseBtn.addEventListener('click', closePreview);
   }
-
-  loadFeedbackProjects();
 
   const decisionTypeFilter = $('#decisionTypeFilter');
   if (decisionTypeFilter) {
@@ -1675,56 +1562,6 @@ function init() {
 }
 
 document.addEventListener('DOMContentLoaded', init);
-
-function openPrototypeModal() {
-  const modal = document.getElementById('prototypeModal');
-  if (modal) modal.classList.add('visible');
-  const input = document.getElementById('prototypeInput');
-  if (input) input.focus();
-}
-
-function closePrototypeModal() {
-  const modal = document.getElementById('prototypeModal');
-  if (modal) modal.classList.remove('visible');
-}
-
-async function submitPrototype() {
-  const input = document.getElementById('prototypeInput');
-  const statusEl = document.getElementById('prototypeStatus');
-  const btn = document.getElementById('prototypeSubmitBtn');
-  if (!input || !statusEl || !btn) return;
-
-  const concept = input.value.trim();
-  if (!concept) return;
-
-  btn.disabled = true;
-  btn.textContent = 'Generating...';
-  statusEl.textContent = 'Creating prototype...';
-  statusEl.className = 'prototype-status running';
-
-  try {
-    const result = await fetchJSON(`${API_BASE}/orchestrator/prototype`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ concept }),
-    });
-
-    statusEl.textContent = `Done in ${result.duration_seconds}s — click to play!`;
-    statusEl.className = 'prototype-status success';
-
-    btn.textContent = 'Generate';
-
-    closePrototypeModal();
-    openPreview(result.project_name);
-    refreshAll();
-  } catch (err) {
-    statusEl.textContent = 'Failed: ' + (err.message || 'Unknown error');
-    statusEl.className = 'prototype-status error';
-    btn.textContent = 'Generate';
-  }
-
-  btn.disabled = false;
-}
 
 let lastKnownPendingDecisions = 0;
 
@@ -1825,7 +1662,34 @@ async function checkPendingDecisions() {
     const decisions = await fetchJSON(`${API_BASE}/decisions`);
     const pending = Array.isArray(decisions) ? decisions.length : 0;
     checkAndNotifyDecisions(pending);
+    updatePendingBanner(pending);
   } catch {}
+}
+
+function updatePendingBanner(count) {
+  const banner = $('#pendingBanner');
+  if (!banner) return;
+  if (count > 0) {
+    const textEl = banner.querySelector('.pending-banner-text');
+    if (textEl) {
+      textEl.textContent = `You have ${count} pending decision${count > 1 ? 's' : ''} waiting — go to Executive Chat to respond`;
+    }
+    banner.style.display = 'flex';
+  } else {
+    banner.style.display = 'none';
+  }
+}
+
+function scrollToChat() {
+  const chat = $('#chatSection');
+  if (!chat) return;
+  const header = chat.querySelector('.section-header');
+  if (chat.classList.contains('collapsed') && header) {
+    header.click();
+  }
+  setTimeout(() => {
+    chat.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, 50);
 }
 
 const originalInit = init;
