@@ -77,26 +77,54 @@ async def check_click_start(page: Page) -> dict:
 
 
 async def check_score_system(page: Page) -> dict:
-    """Check if text content updates after interaction (game responding)."""
-    text_before = await page.inner_text("body")
+    """Check if game responds to interaction via __TEST__ interface or canvas pixel changes."""
+    test_state = None
+    try:
+        test_state = await page.evaluate("() => window.__TEST__ && window.__TEST__.state ? window.__TEST__.state() : null")
+    except Exception:
+        pass
+
+    if test_state and isinstance(test_state, dict):
+        canvas = await page.query_selector("canvas")
+        if canvas:
+            box = await canvas.bounding_box()
+            if box:
+                await page.mouse.click(box["x"] + box["width"] * 0.5, box["y"] + box["height"] * 0.5)
+                await page.wait_for_timeout(800)
+                for _ in range(2):
+                    await page.mouse.click(box["x"] + box["width"] * 0.5, box["y"] + box["height"] * 0.5)
+                    await page.wait_for_timeout(400)
+        try:
+            after_state = await page.evaluate("() => window.__TEST__ && window.__TEST__.state ? window.__TEST__.state() : null")
+        except Exception:
+            after_state = None
+        changed = after_state is not None and after_state != test_state
+        return {"name": "score_system", "passed": changed, "method": "__TEST__", "state_before": str(test_state)[:100], "state_after": str(after_state)[:100] if after_state else None}
+
     canvas = await page.query_selector("canvas")
-    if canvas:
-        box = await canvas.bounding_box()
-        if box:
-            for _ in range(3):
-                await page.mouse.click(
-                    box["x"] + box["width"] * 0.5,
-                    box["y"] + box["height"] * 0.5,
-                )
-                await page.wait_for_timeout(500)
-    text_after = await page.inner_text("body")
-    changed = text_before != text_after
-    return {"name": "score_system", "passed": changed, "text_changed": changed}
+    if not canvas:
+        return {"name": "score_system", "passed": False, "reason": "no canvas"}
 
+    before_screenshot = await canvas.screenshot()
+    box = await canvas.bounding_box()
+    if not box:
+        return {"name": "score_system", "passed": False, "reason": "canvas has no bounding box"}
 
-async def check_console_errors(page: Page) -> dict:
-    """Collect all console errors during test session."""
-    return {"name": "console_errors", "passed": True, "note": "checked via page_error listener"}
+    for i in range(5):
+        x = box["x"] + box["width"] * (0.3 + 0.1 * i)
+        y = box["y"] + box["height"] * (0.3 + 0.1 * i)
+        await page.mouse.click(x, y)
+        await page.wait_for_timeout(400)
+
+    await page.wait_for_timeout(500)
+    after_screenshot = await canvas.screenshot()
+
+    if before_screenshot and after_screenshot:
+        changed = before_screenshot != after_screenshot
+    else:
+        changed = False
+
+    return {"name": "score_system", "passed": changed, "method": "pixel_diff", "pixels_changed": changed}
 
 
 def check_complexity_score(game_dir: str | Path, page) -> dict:
