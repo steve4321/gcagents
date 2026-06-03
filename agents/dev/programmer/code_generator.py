@@ -44,7 +44,7 @@ Rules:
 - Add keyboard/mouse/touch controls
 - Use window.__TEST__ = { ready: false, state: () => ({...}) } for test access
 - Include basic gameplay analytics: call `navigator.sendBeacon('/api/analytics/event', new URLSearchParams({ game: '{game_name}', event: 'game_start' }))` when the game starts, and report 'game_over' with final score and 'play_time' in seconds when the game ends. This is non-blocking and should NOT impact gameplay.
-- Audio files are loaded via `<script>` tags in index.html (assets/audio/bgm.js and assets/audio/sfx.js). They export `window.GameBGM` and `window.GameSFX`. Use `window.GameBGM.start()` to start background music, `window.GameBGM.stop()` to stop it. Use `window.GameSFX.jump()`, `window.GameSFX.collect()`, `window.GameSFX.hit()`, `window.GameSFX.gameover()`, or `window.GameSFX.click()` to play sound effects at appropriate moments.
+- The HTML template has `<div id="game-container"></div>`. Set `parent: 'game-container'` in your Phaser game config so the canvas is rendered inside it.
 
 Return a JSON object mapping file paths to file contents:
 {"src/main.ts": "...", "src/game/scenes/GameScene.ts": "...", ...}"""
@@ -123,6 +123,46 @@ Fix the TypeScript/build errors. Return a JSON object with ONLY the files you mo
 
     if build_err:
         logger.error(f"Build still failing after {MAX_SELF_VERIFY_RETRIES} self-verify attempts: {build_err[:200]}")
+
+    runtime_err = _runtime_verify(code_path)
+    runtime_attempt = 0
+    while runtime_err and runtime_attempt < MAX_SELF_VERIFY_RETRIES:
+        runtime_attempt += 1
+        logger.warning(f"Self-verify runtime failed (attempt {runtime_attempt}): {runtime_err[:200]}")
+
+        existing_files = _read_existing_source(code_path)
+        existing_block = ""
+        if existing_files:
+            parts = []
+            for path, content in existing_files.items():
+                parts.append(f"### {path}\n```typescript\n{content}\n```")
+            existing_block = "\n\n## Current source files:\n\n" + "\n\n".join(parts)
+
+        messages = [
+            {"role": "system", "content": PROGRAMMER_SYSTEM_PROMPT},
+            {"role": "user", "content": f"""The game builds successfully but FAILS at runtime:
+
+{runtime_err[:TRUNC_LLM_PROMPT_ERROR]}
+{existing_block}
+
+The HTML template has `<div id="game-container"></div>`. Your Phaser config MUST use `parent: 'game-container'`.
+Fix the runtime errors. Return a JSON object with ONLY the files you modified."""},
+        ]
+        response = await llm.chat_completion(
+            model=model, messages=messages, temperature=0.2, max_tokens=8192,
+            agent_name="programmer", project_name=gdd.get("title", "unknown"),
+        )
+        files = _parse_code_files(response[0])
+        for fp, content in files.items():
+            full_path = code_path / fp
+            full_path.parent.mkdir(parents=True, exist_ok=True)
+            full_path.write_text(content, encoding="utf-8")
+
+        build_err = _install_and_build(code_path)
+        if build_err:
+            logger.warning(f"Runtime fix broke build: {build_err[:200]}")
+            break
+        runtime_err = _runtime_verify(code_path)
 
     return code_path
 
@@ -353,12 +393,12 @@ export default defineConfig({
   <title>Game</title>
   <style>
     body { margin: 0; background: #000; display: flex; justify-content: center; align-items: center; height: 100vh; }
+    #game-container { display: flex; justify-content: center; align-items: center; }
     canvas { display: block; }
   </style>
 </head>
 <body>
-  <script src="assets/audio/bgm.js"></script>
-  <script src="assets/audio/sfx.js"></script>
+  <div id="game-container"></div>
   <script type="module" src="/src/main.ts"></script>
 </body>
 </html>
@@ -407,6 +447,50 @@ def _install_and_build(project_dir: Path) -> str:
         return f"Build error: {e}"
     finally:
         shutil.rmtree(project_dir / "node_modules", ignore_errors=True)
+
+
+def _runtime_verify(project_dir: Path) -> str:
+    """Open built game in headless Playwright, check canvas renders. Returns '' on success."""
+    import asyncio
+    from playwright.async_api import async_playwright
+
+    dist_html = project_dir / "dist" / "index.html"
+    if not dist_html.exists():
+        return "dist/index.html not found"
+
+    async def _check():
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            page = await browser.new_page(viewport={"width": 800, "height": 600})
+            errors = []
+            page.on("pageerror", lambda e: errors.append(str(e)))
+
+            url = f"file://{dist_html.resolve()}"
+            await page.goto(url, wait_until="networkidle", timeout=15000)
+            await page.wait_for_timeout(3000)
+
+            canvas = await page.query_selector("canvas")
+            container = await page.query_selector("#game-container canvas")
+            has_canvas = canvas is not None or container is not None
+
+            await browser.close()
+
+            if errors:
+                return f"Runtime JS errors: {'; '.join(e[:200] for e in errors[:3])}"
+            if not has_canvas:
+                body_html = await page.inner_text("body")
+                return f"No canvas element found after 3s. Phaser failed to initialize. Body content: {body_html[:200] or '(empty)'}"
+            return ""
+
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                return loop.run_in_executor(pool, lambda: asyncio.run(_check())).result() if False else asyncio.run(_check())
+        return asyncio.run(_check())
+    except Exception as e:
+        return f"Runtime verify error: {e}"
 
 
 def _parse_code_files(text: str) -> dict[str, str]:
