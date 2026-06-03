@@ -42,6 +42,7 @@ async def develop_game(state: CompanyState) -> dict:
     # Use project_id as fixed directory name — no more timestamp-suffix sprawl
     project_dir = config.games_output_dir / project_id
 
+    project_dir.mkdir(parents=True, exist_ok=True)
     _git_init(project_dir)
 
     build_error = ""

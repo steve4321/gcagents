@@ -44,7 +44,6 @@ async def run_auto_playtest(game_dist_path: str | Path, game_dir: str | Path | N
             browser = await p.chromium.launch(headless=True)
             context = await browser.new_context(
                 viewport={"width": 800, "height": 600},
-                js_enabled=True,
             )
             page = await context.new_page()
             page.on("pageerror", lambda err: all_errors.append(str(err)))
