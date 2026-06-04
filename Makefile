@@ -40,6 +40,9 @@ dashboard:
 e2e:
 	python scripts/e2e_test.py
 
+bootstrap:
+	python scripts/bootstrap.py
+
 clean:
 	rm -rf .pytest_cache .ruff_cache .mypy_cache htmlcov .coverage **/__pycache__
 	find . -name "*.pyc" -delete

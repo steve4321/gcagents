@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 
-from sqlalchemy import text
+from sqlalchemy import bindparam, event, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 
 from shared.config import load_config
@@ -1319,7 +1319,72 @@ async def save_project(project: ProjectState) -> str:
                 },
             )
         await db.commit()
+        await _mirror_to_game_projects(db, project)
+        await db.commit()
         return project.id
+
+
+async def _mirror_to_game_projects(db: AsyncSession, project: ProjectState) -> None:
+    """Mirror the current projects state into game_projects for analytics.
+
+    The two tables have overlapping but distinct schemas:
+      - projects: rich lifecycle state (phase, gdd, code_path, art_assets_path)
+      - game_projects: published/feedback view (status, itch_url, current_version)
+    Mirror only the subset the analytics dashboard reads.
+    """
+    phase = project.phase.value if hasattr(project.phase, "value") else str(project.phase)
+    status = "live" if phase == "live" else phase
+    proposal_json = json.dumps(project.proposal) if project.proposal else None
+    gdd_json = json.dumps(project.gdd) if project.gdd else None
+    try:
+        existing = (
+            await db.execute(
+                text("SELECT id FROM game_projects WHERE name = :name"),
+                {"name": project.name},
+            )
+        ).fetchone()
+        if existing:
+            await db.execute(
+                text("""
+                    UPDATE game_projects SET genre=:genre, status=:status,
+                        gdd=:gdd, proposal=:proposal, itch_url=:itch_url,
+                        current_version=:current_version, updated_at=:updated_at
+                    WHERE name = :name
+                """),
+                {
+                    "name": project.name,
+                    "genre": project.genre or "unknown",
+                    "status": status,
+                    "gdd": gdd_json,
+                    "proposal": proposal_json,
+                    "itch_url": project.itch_url or "",
+                    "current_version": project.version or "0.0.0",
+                    "updated_at": datetime.now(UTC).isoformat(),
+                },
+            )
+        else:
+            await db.execute(
+                text("""
+                    INSERT INTO game_projects
+                        (name, genre, status, gdd, proposal, itch_url,
+                         current_version, created_at, updated_at)
+                    VALUES (:name, :genre, :status, :gdd, :proposal, :itch_url,
+                            :current_version, :created_at, :updated_at)
+                """),
+                {
+                    "name": project.name,
+                    "genre": project.genre or "unknown",
+                    "status": status,
+                    "gdd": gdd_json,
+                    "proposal": proposal_json,
+                    "itch_url": project.itch_url or "",
+                    "current_version": project.version or "0.0.0",
+                    "created_at": project.created_at or datetime.now(UTC).isoformat(),
+                    "updated_at": datetime.now(UTC).isoformat(),
+                },
+            )
+    except Exception:
+        pass
 
 
 async def get_project(project_id: str) -> ProjectState | None:
@@ -1890,6 +1955,42 @@ async def count_completed_tasks_by_type(project_id: str, task_type: str) -> int:
             {"pid": project_id, "task_type": task_type},
         )
         return rows.scalar() or 0
+
+
+async def count_completed_tasks_batch(
+    project_ids: list[str],
+    task_types: list[str] | None = None,
+) -> dict[tuple[str, str], int]:
+    """Batch count of completed tasks: (project_id, task_type) -> count.
+
+    Single SQL with GROUP BY; replaces per-project per-type N+1 calls.
+    """
+    if not project_ids:
+        return {}
+    engine = _get_engine()
+    async with AsyncSession(engine) as db:
+        if task_types:
+            rows = await db.execute(
+                text(
+                    "SELECT project_id, task_type, COUNT(*) FROM tasks "
+                    "WHERE project_id IN :pids AND task_type IN :ttypes "
+                    "AND status='completed' GROUP BY project_id, task_type"
+                ).bindparams(
+                    bindparam("pids", expanding=True),
+                    bindparam("ttypes", expanding=True),
+                ),
+                {"pids": project_ids, "ttypes": task_types},
+            )
+        else:
+            rows = await db.execute(
+                text(
+                    "SELECT project_id, task_type, COUNT(*) FROM tasks "
+                    "WHERE project_id IN :pids AND status='completed' "
+                    "GROUP BY project_id, task_type"
+                ).bindparams(bindparam("pids", expanding=True)),
+                {"pids": project_ids},
+            )
+    return {(r[0], r[1]): int(r[2]) for r in rows.fetchall()}
 
 
 async def get_api_usage_summary() -> dict:

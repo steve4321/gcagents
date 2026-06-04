@@ -73,6 +73,40 @@ class SqliteEventStore:
                     json.dumps(event.metadata),
                 ),
             )
+            self._mirror_to_event_logs(conn, event)
+
+    def _mirror_to_event_logs(self, conn, event: "Event") -> None:
+        """Mirror a domain event into the event_logs table for dashboard reads.
+
+        event_logs has fewer columns than domain_events; we map a summary.
+        Schema:
+          event_logs(id, event_type, severity, title, detail, source_agent,
+                     project_name, metadata_json, created_at)
+        """
+        payload = event.payload or {}
+        title = (
+            payload.get("title")
+            or f"{event.event_type.value} by {event.agent_name or 'system'}"
+        )
+        try:
+            conn.execute(
+                "INSERT INTO event_logs "
+                "(event_type, severity, title, detail, source_agent, "
+                " project_name, metadata_json, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    event.event_type.value,
+                    payload.get("severity", "info"),
+                    title[:200],
+                    json.dumps(payload, ensure_ascii=False)[:2000],
+                    event.agent_name or "",
+                    payload.get("project_name", "") or event.project_id or "",
+                    json.dumps(event.metadata, ensure_ascii=False)[:2000],
+                    event.timestamp,
+                ),
+            )
+        except Exception:
+            pass
 
     async def append_batch(self, events: list[Event]) -> None:
         await asyncio.to_thread(self._append_batch_sync, events)

@@ -69,9 +69,9 @@ class Event:
     tick_id: int
     project_id: str | None
     agent_name: str | None
-    payload: dict[str, Any] = field(default_factory=dict)
+    payload: dict[str, object] = field(default_factory=dict)
     parent_event_id: str | None = None  # causal chain
-    metadata: dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, object] = field(default_factory=dict)
 
     @staticmethod
     def new(

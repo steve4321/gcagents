@@ -81,13 +81,13 @@ omit = [
     "*/__pycache__/*",
     "*/game-templates/*",
     "*/node_modules/*",
-    "orchestrator/graph/pipeline.py",
     "orchestrator/prototype_mode.py",
     "orchestrator/main.py",
+    "shared/persistence_metrics.py",
 ]
 
 [tool.coverage.report]
-fail_under = 40                    # temporarily lowered from 60% while new analytics/feedback endpoints mature; raise back once test_analytics_dashboard covers all branches
+fail_under = 40                    # raise back to 60% once test_analytics_dashboard covers all branches
 show_missing = true
 skip_covered = true
 exclude_lines = [

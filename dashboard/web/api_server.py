@@ -701,41 +701,32 @@ async def _build_ceo_context() -> tuple[str, list[dict]]:
     return context, chat_history
 
 
+_CEO_PROMPT_CACHE: str | None = None
+
+
+def _load_ceo_prompt() -> str:
+    """Load CEO chat system prompt from config/prompts/ceo_chat.yaml.
+
+    Cached at module level; reload by clearing ``_CEO_PROMPT_CACHE``.
+    """
+    global _CEO_PROMPT_CACHE
+    if _CEO_PROMPT_CACHE is not None:
+        return _CEO_PROMPT_CACHE
+    from pathlib import Path
+    import yaml
+    path = Path(__file__).resolve().parents[2] / "config" / "prompts" / "ceo_chat.yaml"
+    with open(path) as _f:
+        data = yaml.safe_load(_f)
+    _CEO_PROMPT_CACHE = data["system"]
+    return _CEO_PROMPT_CACHE
+
+
 async def _generate_ceo_reply(content: str) -> str:
     from shared.llm_client import llm
 
     context, chat_history = await _build_ceo_context()
 
-    system_prompt = (
-        "你是 GCAgents 的 CEO，一家 AI 驱动的游戏公司的首席执行官。你全权负责公司运营。\n\n"
-        "## 你的职责\n"
-        "- 管理所有游戏项目的全生命周期\n"
-        "- 与人类讨论项目创意和方向\n"
-        "- 根据市场数据和公司状况做出决策\n"
-        "- 提出改善方案和新的创意\n"
-        "- 回答关于公司运营的任何问题\n\n"
-        "## 行动能力\n"
-        "你可以通过在回复中嵌入隐藏的 JSON 动作块来执行操作。格式：\n"
-        '[ACTION]{"action":"create_project","data":{...}}[/ACTION]\n'
-        '[ACTION]{"action":"cancel_project","data":{"project_id":"..."}}[/ACTION]\n'
-        '[ACTION]{"action":"publish_project","data":{"project_id":"..."}}[/ACTION]\n\n'
-        "### create_project: 当人类明确同意创建新项目时使用\n"
-        "data 需要: name (str), genre (str), description (str)\n\n"
-        "### cancel_project: 当人类明确同意取消项目时使用\n"
-        "data 需要: project_id (str) 或 project_name (str)\n\n"
-        "### publish_project: 当项目完成测试且人类同意发布时使用\n"
-        "data 需要: project_id (str) 或 project_name (str)\n\n"
-        "注意：这些动作块不会显示给用户。你必须在回复中用自然语言说明你做了什么。\n\n"
-        "## 沟通风格\n"
-        "- 简洁专业，用中文回复\n"
-        "- 主动提供建议和分析\n"
-        "- 基于数据做判断，不要泛泛而谈\n"
-        "- 对于人类提出的项目创意，先讨论可行性和市场情况，再决定是否创建\n"
-        "- 市场分析数据仅供参考，项目立项基于与人类的讨论结果\n\n"
-        f"## 当前公司状况\n{context}"
-    )
-
-    import re
+    system_prompt = _load_ceo_prompt().replace("{context}", context)
 
     messages = [{"role": "system", "content": system_prompt}]
     for msg in chat_history[-6:]:
@@ -1165,9 +1156,20 @@ if games_output.exists():
         name="games-preview",
     )
 
+@app.get("/metrics")
+async def metrics():
+    """Prometheus-format metrics endpoint (text/plain; version=0.0.4)."""
+    from shared.persistence_metrics import collect_metrics_text
+
+    text = await collect_metrics_text()
+    from fastapi.responses import PlainTextResponse
+    return PlainTextResponse(content=text, media_type="text/plain; version=0.0.4")
+
+
 app.mount(
     "/", StaticFiles(directory=str(ROOT_DIR / "dashboard" / "web"), html=True), name="dashboard"
 )
+
 
 if __name__ == "__main__":
     import uvicorn

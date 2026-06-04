@@ -829,6 +829,22 @@ async def _get_phase_ticks(project_id: str) -> int:
         return await count_completed_tasks(project_id)
 
 
+async def _get_phase_ticks_batch(project_ids: list[str]) -> dict[str, dict[str, int]]:
+    """Single SQL: returns {project_id: {task_type: count}} for all projects."""
+    from orchestrator.persistence import count_completed_tasks_batch
+
+    return _aggregate_phase_ticks(
+        await count_completed_tasks_batch(project_ids)
+    )
+
+
+def _aggregate_phase_ticks(flat: dict[tuple[str, str], int]) -> dict[str, dict[str, int]]:
+    out: dict[str, dict[str, int]] = {}
+    for (pid, ttype), cnt in flat.items():
+        out.setdefault(pid, {})[ttype] = cnt
+    return out
+
+
 async def _run_agent(task_type: str, project_id: str, params: dict) -> dict:
     project = await get_project(project_id) if project_id != "__system__" else None
 

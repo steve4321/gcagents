@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import shutil
 import subprocess
@@ -26,71 +27,26 @@ def is_grid_genre(genre: str) -> bool:
     return lower in GRID_GENRES or any(g in lower for g in GRID_GENRES)
 
 
-PROGRAMMER_SYSTEM_PROMPT = """You are an expert Phaser 4 + TypeScript game developer.
-Given a GDD (Game Design Document), generate a complete, playable Phaser 4 game.
+_PROMPT_CACHE: dict[str, str] = {}
 
-Generate the following files:
-1. `src/main.ts` - Entry point
-2. `src/game/config.ts` - Game configuration
-3. `src/game/scenes/BootScene.ts` - Asset loading
-4. `src/game/scenes/MenuScene.ts` - Main menu
-5. `src/game/scenes/GameScene.ts` - Main gameplay (most important)
-6. `src/game/scenes/GameOverScene.ts` - Game over screen
-7. `src/game/entities/` - Game entities as needed
-8. `src/game/systems/` - Game systems as needed
 
-Rules:
-- Use Phaser 4 API (not Phaser 3)
-- All code must be valid TypeScript with strict mode
-- CRITICAL: Use `import * as Phaser from 'phaser';` (NOT `import Phaser from 'phaser';` - Phaser ESM has no default export)
-- If an art_assets_path is provided in the prompt, load images from that directory in BootScene using this.load.image() and use them in game scenes instead of placeholder shapes. Copy image files from art_assets_path into the project's public/assets/ directory. Use the actual sprite/background filenames from that path.
-- If no art_assets_path is provided, use Phaser's built-in shape rendering for visuals (placeholder geometry)
-- Implement ALL mechanics specified in the GDD — do not skip or simplify any mechanic
-- Each mechanic must have real gameplay depth: state changes, visual feedback, player interaction
-- Include at least 3 enemy/obstacle types with distinct behaviors (not just recolored copies)
-- Implement a progression system across levels with increasing difficulty
-- Add visual feedback for all player actions: tween animations, color changes, particle effects
-- Include a scoring system with combos or multipliers when applicable
-- Include basic game loop: start → play → end
-- Add keyboard/mouse/touch controls
-- Use window.__TEST__ for test access. The __TEST__ interface MUST be declared in GameScene's create() method and expose rich game state for automated evaluation:
-  ```typescript
-  (window as any).__TEST__ = {
-    ready: false,
-    state: () => ({
-      score: this.score,
-      level: this.currentLevel,
-      lives: this.lives,
-      isGameOver: this.isGameOver,
-      enemyTypesSeen: this.enemyTypesSeen,
-      powerupsUsed: this.powerupsUsed,
-      sessionTime: (Date.now() - this.sessionStart) / 1000,
-    })
-  };
-  ```
-  Where: enemyTypesSeen is a Set/array of distinct enemy type names encountered, powerupsUsed counts power-up activations, sessionStart is Date.now() at game start. These fields are REQUIRED for gameplay depth evaluation.
-- Include basic gameplay analytics: call `navigator.sendBeacon('/api/analytics/event', new URLSearchParams({ game: '{game_name}', event: 'game_start' }))` when the game starts, and report 'game_over' with final score and 'play_time' in seconds when the game ends. This is non-blocking and should NOT impact gameplay.
-- The HTML template has `<div id="game-container"></div>`. Set `parent: 'game-container'` in your Phaser game config so the canvas is rendered inside it.
-- AD SDK: The HTML includes window.__triggerAdBreak() and window.__triggerHappyTime() globals. Call window.__triggerAdBreak?.() on game-over and before restart. Call window.__triggerHappyTime?.() on level-up, high-score, or achievement milestones. These are safe no-ops if no ad SDK is loaded.
+def _load_prompt(name: str) -> str:
+    """Load a prompt template from config/prompts/<name>.yaml.
 
-Return a JSON object mapping file paths to file contents:
-{"src/main.ts": "...", "src/game/scenes/GameScene.ts": "...", ...}
+    Returns the 'system' field. Caches per-name for performance.
+    """
+    if name in _PROMPT_CACHE:
+        return _PROMPT_CACHE[name]
+    from pathlib import Path
+    import yaml as _yaml
+    path = Path(__file__).resolve().parents[3] / "config" / "prompts" / f"{name}.yaml"
+    with open(path) as _f:
+        data = _yaml.safe_load(_f)
+    _PROMPT_CACHE[name] = data["system"]
+    return _PROMPT_CACHE[name]
 
-Additional requirements:
-- MONETIZATION: Implement the monetization model from the GDD. For ad_supported: add placeholder ad slots (interstitial between levels, rewarded video on game over for extra life). For free_to_play: implement IAP-tier unlock mechanics. For premium: ensure a complete experience.
-- RETENTION: Implement at least 2 retention features from the GDD (daily challenges, streak tracking, unlock progression, achievement notifications)
-- ENGAGEMENT: Implement at least 1 engagement mechanic (power-up collection, combo system with visual feedback, social share button on game over with score)
-- PROGRESSION DEPTH: Include a visible progression system (level unlock, score milestones, collectible unlocks) that gives players a reason to return
-- GRID GAMES: For grid-based genres (puzzle, match-3, merge, sudoku, tile, grid, bejeweled, tetris, candy), you MUST generate a `src/game/config.ts` file containing a `__GAME_CONFIG__` block as the single source of truth for grid coordinates:
-  ```typescript
-  // __GAME_CONFIG__ - Single source of truth for game coordinates
-  export const GAME_CONFIG = {
-      grid: { cols: 8, rows: 8, cellSize: 64, offsetX: 64, offsetY: 80 },
-      canvas: { width: 800, height: 600 },
-  };
-  ```
-  All grid calculations in scenes MUST reference GAME_CONFIG. Do NOT hardcode grid dimensions, offsets, or cell sizes in scene files.
-"""
+
+PROGRAMMER_SYSTEM_PROMPT = _load_prompt("programmer")
 
 
 def _read_existing_source(
@@ -182,8 +138,8 @@ Fix the TypeScript/build errors. Return a JSON object with ONLY the files you mo
             if not _validate_file_path(code_path, fp):
                 continue
             full_path = code_path / fp
-            full_path.parent.mkdir(parents=True, exist_ok=True)
-            full_path.write_text(content, encoding="utf-8")
+            await asyncio.to_thread(full_path.parent.mkdir, parents=True, exist_ok=True)
+            await asyncio.to_thread(full_path.write_text, content, encoding='utf-8')
         logger.info(f"Self-verify fix #{self_verify_attempt}: {len(files)} files")
         build_err = _install_and_build(code_path)
 
@@ -234,8 +190,8 @@ Fix the runtime errors. Return a JSON object with ONLY the files you modified.""
             if not _validate_file_path(code_path, fp):
                 continue
             full_path = code_path / fp
-            full_path.parent.mkdir(parents=True, exist_ok=True)
-            full_path.write_text(content, encoding="utf-8")
+            await asyncio.to_thread(full_path.parent.mkdir, parents=True, exist_ok=True)
+            await asyncio.to_thread(full_path.write_text, content, encoding='utf-8')
 
         build_err = _install_and_build(code_path)
         if build_err:
@@ -330,8 +286,8 @@ Return ONLY a JSON object of file paths to contents."""
         if not _validate_file_path(project_dir, file_path):
             continue
         full_path = project_dir / file_path
-        full_path.parent.mkdir(parents=True, exist_ok=True)
-        full_path.write_text(content, encoding="utf-8")
+        await asyncio.to_thread(full_path.parent.mkdir, parents=True, exist_ok=True)
+        await asyncio.to_thread(full_path.write_text, content, encoding='utf-8')
 
     logger.info(f"Generated {len(accumulated_files)} total files from {len(mechanics)} mechanics")
     return project_dir
@@ -396,8 +352,8 @@ Do NOT return unchanged files.""",
             if not _validate_file_path(project_dir, file_path):
                 continue
             full_path = project_dir / file_path
-            full_path.parent.mkdir(parents=True, exist_ok=True)
-            full_path.write_text(content, encoding="utf-8")
+            await asyncio.to_thread(full_path.parent.mkdir, parents=True, exist_ok=True)
+            await asyncio.to_thread(full_path.write_text, content, encoding='utf-8')
             logger.debug(f"Fixed: {file_path}")
 
         logger.info(f"Fix applied: {len(files)} files modified")
@@ -627,8 +583,8 @@ Return ONLY a JSON object mapping file paths to file contents. Include updated v
         if not _validate_file_path(project_dir, file_path):
             continue
         full_path = project_dir / file_path
-        full_path.parent.mkdir(parents=True, exist_ok=True)
-        full_path.write_text(content, encoding="utf-8")
+        await asyncio.to_thread(full_path.parent.mkdir, parents=True, exist_ok=True)
+        await asyncio.to_thread(full_path.write_text, content, encoding='utf-8')
         logger.debug(f"Generated: {file_path}")
 
     logger.info(
@@ -752,13 +708,28 @@ export default defineConfig({
 
 
 def _copy_art_assets(art_assets_path: str, project_dir: Path) -> None:
+    from shared.config import ROOT_DIR as _ROOT
     src = Path(art_assets_path)
     if not src.exists():
         logger.warning(f"Art assets path does not exist: {art_assets_path}")
         return
+    try:
+        src_resolved = src.resolve()
+    except OSError as e:
+        logger.warning(f"Art assets path could not be resolved: {art_assets_path}: {e}")
+        return
+    allowed_root = (_ROOT / "data" / "art").resolve()
+    try:
+        src_resolved.relative_to(allowed_root)
+    except ValueError:
+        logger.warning(
+            f"Refusing to copy art assets from outside allowed root: {src_resolved} "
+            f"(allowed: {allowed_root})"
+        )
+        return
     dst = project_dir / "public" / "assets"
     dst.mkdir(parents=True, exist_ok=True)
-    for f in src.iterdir():
+    for f in src_resolved.iterdir():
         if f.is_file() and f.suffix.lower() in (".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"):
             shutil.copy2(f, dst / f.name)
             logger.debug(f"Copied art asset: {f.name}")
