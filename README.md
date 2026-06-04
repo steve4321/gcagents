@@ -1,6 +1,8 @@
 # GCAgents
 
-Autonomous AI game company — researches markets, designs, develops, and publishes web mini-games, with human-in-the-loop approval gates.
+**GCAgents — Autonomous AI Game Company**
+
+ researches markets, designs, develops, and publishes web mini-games, with human-in-the-loop approval gates.
 
 ---
 
@@ -12,30 +14,38 @@ GCAgents System
 
   CEO Scheduler (tick-based, multi-project)
   ┌──────────────────────────────────────────────────────────────┐
-  │  Each tick: process instructions → check decision gates     │
-  │  → advance projects → execute tasks → update memory         │
-  └───────┬──────────┬──────────┬──────────┬───────────────────┘
-          │          │          │          │
-      ┌───▼───┐  ┌──▼────┐ ┌───▼──┐ ┌────▼─────┐
-      │Project│  │Project│ │Proj C│ │ Market   │
-      │   A   │  │   B   │ │   D  │ │ Scanner  │
-      │(dev)  │  │(design)│ │(paused)│ │ (12 src) │
-      └───────┘  └────────┘ └──────┘ └──────────┘
-          │          │          │          │
-  ┌───────────────────────────────────────────────────────────┐
-  │              Task Queue (scan/design/art/code/qa/build)   │
-  └───────────────────────────────────────────────────────────┘
+  │  Each tick: check gates → claim tasks (CAS) → execute DAG    │
+  │  → verify outputs → update memory → emit events              │
+  └───────┬────────────┬────────────┬────────────┬───────────────┘
+          │            │            │            │
+      ┌───▼───┐   ┌───▼────┐  ┌───▼───┐  ┌──────▼──────┐
+      │Project│   │Project│  │Proj C │  │   Market    │
+      │   A   │   │   B   │  │ (idle)│  │  Scanner   │
+      │(build)│   │(design)│  │       │  │  (12 src)  │
+      └───────┘   └────────┘  └────────┘  └─────────────┘
 
-  ┌─────────────┐     ┌─────────────────────────────────────┐
-  │  Dashboard  │     │  AI Models                          │
-  │  (FastAPI)  │     │  glm-4-flash (analysis) · deepseek  │
-  │  localhost  │     │  (code) · ComfyUI/SD (art)           │
-  │  :8080      │     └─────────────────────────────────────┘
-  └─────────────┘     ┌─────────────────────────────────────┐
-  ┌─────────────┐     │  12 Market Sources                  │
-  │   SQLite    │     │  itch · reddit · steamspy · tiktok  │
-  │   (local)   │     │  youtube · producthunt · ...        │
-  └─────────────┘     └─────────────────────────────────────┘
+  ┌──────────────────────────────────────────────────────────────┐
+  │  Kanban Board (CAS-based task claiming, not FIFO)            │
+  │  States: pending → claimed → running → verify → done         │
+  └──────────┬───────────────┬────────────────┬──────────────────┘
+             │               │                │
+        ┌────▼────┐    ┌─────▼────┐    ┌──────▼──────┐
+        │  DAG    │    │ Verification│  │ Event Store  │
+        │ Planner │    │ Framework   │  │ (append-only)│
+        │(waves)  │    │(strict/soft/│  │              │
+        └─────────┘    │ advisory)   │  └──────────────┘
+                       └─────────────┘
+
+  ┌──────────────┐     ┌────────────────────────────────────────┐
+  │  Dashboard   │     │  Model Router (cost-aware selection)   │
+  │  FastAPI     │     │  MiniMax-M3 (analysis) · DeepSeek Coder│
+  │  :8080       │     │  (code) · ComfyUI/SD (art) · GLM-4-flash│
+  └──────────────┘     └────────────────────────────────────────┘
+  ┌──────────────┐     ┌────────────────────────────────────────┐
+  │   SQLite     │     │  Skills System                         │
+  │  (async)     │     │  Pluggable conditionally-activated     │
+  │  18 tables   │     │  agent capabilities                    │
+  └──────────────┘     └────────────────────────────────────────┘
 ====================================================================
 ```
 
@@ -43,21 +53,31 @@ GCAgents System
 
 ## Features
 
-- **Multi-project scheduler** — CEO agent manages multiple game projects in parallel, each on its own lifecycle track
-- **12 market data sources** — itch.io, Reddit, SteamSpy, TikTok, YouTube, Google Play, App Store, X/Twitter, and more with cross-source correlation analysis
-- **5 human approval gates** — new project start, publishing, cancellation, budget overrun, and direction change require human sign-off
-- **3-layer error recovery** — retry with feedback, strategy change, then human decision point
-- **Mechanic planning layer** — GDD is decomposed into ordered mechanics; code generated per-mechanic for reliability
-- **AI art pipeline** — ComfyUI + Stable Diffusion 1.5 generates backgrounds, sprites, and UI icons
-- **Automated playtesting** — Playwright runs 8 verification checks against every build
-- **Prototype mode** — generate a playable demo in ~5 minutes using colored rectangles/emoji as placeholder art
+- **Multi-project scheduler** — CEO manages multiple games in parallel, each on its own lifecycle track
+- **12 market data sources** — cross-source correlation analysis across itch.io, Reddit, SteamSpy, TikTok, YouTube, Google Play, App Store, X/Twitter, Product Hunt, and more
+- **5 human approval gates** — new project, publish, cancel, budget, and direction change require human sign-off
+- **3-layer error recovery** — retry with feedback, strategy change, then human escalation
+- **Kanban task board** — CAS-based claiming replaces FIFO queue; tasks transition through pending → claimed → running → verify → done
+- **DAG execution planner** — wave-based parallel execution with dependency tracking across mechanics
+- **Event sourcing** — immutable event log with replay capability; every state change recorded as append-only event
+- **Verification framework** — 3-mode verification of every agent output (strict/soft/advisory)
+- **Model router** — 6-tier cost-aware AI model selection (strong/fast/cheap/code/art/audio)
+- **Context manager** — 4-layer progressive LLM context compression for long-running projects
+- **Sandbox execution** — subprocess isolation with resource limits for untrusted code
+- **Code graph** — PageRank-ranked dependency analysis for TypeScript projects
+- **Agent messaging** — SQLite-backed inter-agent mailbox with guaranteed delivery
+- **Skills system** — pluggable, conditionally-activated agent capabilities with dependency resolution
+- **Mechanic planning layer** — GDD decomposed into ordered mechanics; per-mechanic code generation with dependency tracking
+- **AI art pipeline** — ComfyUI + SD 1.5 with 5 style presets for backgrounds, sprites, and UI icons
+- **Automated playtesting** — Playwright 8-point verification against every build
+- **Prototype mode** — 5-minute playable demos using colored rectangles and emoji as placeholder art
 - **Auto-localization** — game UI strings translated to 15 languages
-- **Programmatic music** — Web Audio oscillator-based BGM per genre (Suno API optional)
-- **Executive chat** — talk to CEO through the Dashboard (CFO/COO run as internal nodes); receive decision cards you can approve/reject
-- **Document viewer** — view all agent work artifacts (proposal, GDD, market scan, art/music/QA/build reports) in a document modal per project
-- **Scheduler pause/resume** — pause the scheduler with a "⏸ 下班" button on the dashboard; resume with "▶ 上班"
-- **Inline approval** — approve/reject projects and view documents directly from project cards on the board
-- **Layered memory** — short-term events vs. long-term lessons; project context preserved across sessions
+- **Programmatic music** — Web Audio BGM per genre with optional Suno API integration
+- **Executive chat** — CEO-only interaction through decision cards; approve/reject through dashboard
+- **Document viewer** — view all agent work artifacts (proposal, GDD, market scan, reports) in-dashboard
+- **Scheduler pause/resume** — file-based pause mechanism via dashboard; state preserved across pauses
+- **Layered memory** — short-term events + long-term lessons + project context; fully queryable
+- **Security** — API key auth, path traversal protection, input validation, CEO action allowlist
 
 ---
 
@@ -65,16 +85,17 @@ GCAgents System
 
 | Layer | Technology | Purpose |
 |---|---|---|
-| Orchestration | Python 3.11 + LangGraph | Multi-project scheduling, state machine |
-| Analysis AI | Zhipu glm-4-flash (free) | Market analysis, game design, CFO evaluation |
-| Code AI | DeepSeek Coder | Phaser 4 + TypeScript game generation |
-| Art AI | ComfyUI + Stable Diffusion 1.5 | Game asset generation |
+| Orchestration | Python 3.11+ async | Multi-project tick scheduler |
+| Task Queue | Kanban board (SQLite) | CAS-based task claiming |
+| Execution | DAG Planner | Wave-based parallel execution |
+| Event Store | SQLite append-only | Immutable event log |
+| Analysis AI | MiniMax-M3 / GLM-4-flash | Market analysis, game design |
+| Code AI | DeepSeek Coder | Phaser 4 + TypeScript generation |
+| Art AI | ComfyUI + SD 1.5 | Game asset generation |
+| Verification | Playwright + custom | Multi-mode output verification |
 | Game Engine | Phaser 4 + TypeScript + Vite | Web mini-game runtime |
-| Dashboard | FastAPI + HTML/CSS/JS | Project board, task monitor, decision cards, document viewer, CEO reports |
-| Vector Store | ChromaDB | Memory search and long-term lesson retrieval |
-| Cache | Redis | Task queue, ephemeral state |
-| Database | SQLite (async) | Projects, decisions, tasks, logs, financial records |
-| Deployment | Butler CLI | itch.io publishing |
+| Dashboard | FastAPI + HTML/CSS/JS | 38+ API endpoints |
+| Database | SQLite (async SQLAlchemy) | 18 tables, full company operations |
 
 ---
 
@@ -87,14 +108,9 @@ cd gcagents
 pip install -e ".[dev]"
 
 # Configure API keys
-cp .env.example .env  # then edit .env and fill in:
-#   DEEPSEEK_API_KEY=sk-...
-#   ZHIPU_API_KEY=...
+cp .env.example .env  # then edit .env with your keys
 
-# Start backing services (optional — SQLite works without Docker)
-docker compose up -d  # redis, chromadb; postgres available for future migration; comfyui optional with --profile gpu
-
-# Run the scheduler (multi-project mode)
+# Run the scheduler
 python -m orchestrator.main run-scheduler
 
 # In a second terminal, start the dashboard
@@ -123,14 +139,15 @@ python -m dashboard.web.api_server
 **`.env`** — API keys and credentials:
 
 ```
-DEEPSEEK_API_KEY=sk-...        # code generation
-ZHIPU_API_KEY=...              # analysis/design (glm-4-flash)
+DEEPSEEK_API_KEY=sk-...        # code generation (DeepSeek Coder)
+ZHIPU_API_KEY=...              # analysis/design (GLM-4-flash)
+MINIMAX_API_KEY=...            # analysis (MiniMax-M3)
 BUTLER_API_KEY=...            # itch.io deployment
 BUTLER_USERNAME=...           # itch.io username
 SUNO_API_KEY=...              # music generation (optional)
 ```
 
-**`config/agents.yaml`** — Agent-to-model mappings and role assignments.
+**`config/agents.yaml`** — Agent-to-model mappings, cost tiers, and routing rules.
 
 **`config/sources.yaml`** — 12 market data source configurations and polling intervals.
 
@@ -143,17 +160,21 @@ gcagents/
 ├── orchestrator/             # Core orchestration
 │   ├── main.py               #   CLI entry (run, run-forever, run-scheduler, scan)
 │   ├── scheduler.py          #   CEO multi-project tick scheduler
-│   ├── task_queue.py          #   SQLite-backed task queue
+│   ├── kanban.py             #   CAS-based task board (claim/complete/priority)
+│   ├── planner.py            #   DAG execution planner (wave-based)
+│   ├── topology.py           #   Mechanic dependency resolver
+│   ├── event_store.py        #   Append-only event log with replay
 │   ├── decision_gate.py      #   5-type human approval gates
 │   ├── prototype_mode.py     #   Quick prototype (~5 min, no art)
 │   ├── persistence.py        #   DB schema (projects/tasks/decisions/memory)
 │   ├── state.py              #   CompanyState, PipelinePhase, retry metadata
+│   ├── model_router.py       #   6-tier cost-aware model selection
 │   └── graph/
-│       └── pipeline.py      #   Classic 13-node LangGraph pipeline (legacy)
+│       └── pipeline.py      #   Legacy 13-node pipeline
 ├── agents/                   # AI agents
 │   ├── research/
 │   │   ├── scanner.py        #   12-source market scanner
-│   │   ├── analyzer.py       #   Cross-source correlation, opportunity scoring
+│   │   ├── analyzer.py       #   Cross-source correlation, scoring
 │   │   └── sources/          #   Source adapters (itch, reddit, steamspy, etc.)
 │   └── dev/
 │       ├── designer/         #   GDD generation + mechanic planning
@@ -163,19 +184,27 @@ gcagents/
 │       ├── music/            #   Web Audio BGM + optional Suno API
 │       ├── localize/         #   15-language auto-translation
 │       └── builder/          #   Vite build → dist/
-├── dashboard/web/
-│   ├── api_server.py        #   FastAPI backend (43 endpoints)
-│   ├── index.html           #   Project board, task monitor, decision cards, document viewer
+├── shared/                   # Shared utilities
+│   ├── events.py             #   Event schemas and utilities
+│   ├── sandbox.py           #   Subprocess isolation with resource limits
+│   ├── verification.py       #   3-mode verification framework
+│   ├── model_router.py       #   Model routing client
+│   ├── context_manager.py    #   4-layer progressive LLM context compression
+│   ├── code_graph.py         #   PageRank-ranked dependency analysis
+│   ├── agent_messaging.py    #   SQLite-backed inter-agent mailbox
+│   ├── skills/               #   Skills system
+│   │   ├── base.py          #   Base skill class
+│   │   └── code_review.py   #   Code review skill
+│   └── tools/               #   Tool integrations
+│       ├── art/             #   Art generation tools
+│       ├── code_gen/        #   Code generation tools
+│       ├── deploy/          #   Deployment tools (Butler)
+│       └── file_ops/        #   File operation tools (stubs)
+├── dashboard/web/           # Dashboard
+│   ├── api_server.py        #   FastAPI backend (38+ endpoints)
+│   ├── index.html           #   Project board, task monitor, decision cards
 │   ├── app.js               #   Frontend logic
 │   └── style.css            #   Styles
-├── shared/
-│   ├── config.py            #   pydantic-settings env loading
-│   ├── models.py            #   ProjectState, DecisionPoint, TaskRecord
-│   ├── memory.py            #   Layered memory (short-term/long-term/project)
-│   ├── llm_client.py        #   Unified LLM client with token tracking
-│   ├── exceptions.py        #   Domain exception hierarchy
-│   ├── constants.py         #   Centralized constants (timeouts/thresholds)
-│   └── complexity.py        #   Game complexity scoring (GDD + code)
 ├── config/
 │   ├── agents.yaml          #   Agent → model mappings
 │   └── sources.yaml        #   12 market sources config
@@ -183,9 +212,11 @@ gcagents/
 │   ├── e2e_test.py          #   End-to-end test script
 │   └── setup_local.py       #   Local environment setup
 ├── data/
-│   ├── gcagents.db          #   SQLite database
+│   ├── gcagents.db          #   SQLite database (18 tables)
 │   └── games/              #   Generated game projects
-└── .env                    #   API keys (gitignored)
+└── tests/                   # Test suite
+    ├── test_*.py            #   168 tests across 14 files
+    └── conftest.py          #   Pytest configuration
 ```
 
 ---
@@ -199,7 +230,7 @@ gcagents/
 ## Development
 
 ```bash
-# Run tests
+# Run tests (168 tests across 14 files)
 pytest tests/
 
 # Lint
@@ -214,9 +245,3 @@ mypy .
 ## License
 
 [MIT](LICENSE)
-
----
-
-## Acknowledgments
-
-Built on LangGraph, FastAPI, Phaser, and ComfyUI.
