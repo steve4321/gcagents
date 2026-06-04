@@ -178,7 +178,7 @@ def _normalize_opportunities(opportunities: list[dict]) -> list[dict]:
             if old_key in opp and new_key not in opp:
                 opp[new_key] = opp.pop(old_key)
         if "target_platforms" not in opp:
-            opp["target_platforms"] = ["itch.io", "web"]
+            opp["target_platforms"] = ["itch.io", "crazygames", "poki"]
         if "competition_analysis" not in opp:
             opp["competition_analysis"] = "medium"
         if "source_agreement_score" not in opp:

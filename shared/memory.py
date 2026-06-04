@@ -145,42 +145,64 @@ class MemoryStore:
             self._store_long_term_sync, category, content, summary, importance
         )
 
+    @staticmethod
+    def _tokenize(text: str) -> list[str]:
+        return [t for t in text.lower().split() if len(t) >= 2]
+
+    def _build_match_sql(self, tokens: list[str], category: str | None) -> tuple[str, list]:
+        conditions: list[str] = []
+        params: list = []
+        for tok in tokens:
+            conditions.append("(LOWER(content) LIKE ? OR LOWER(summary) LIKE ?)")
+            params.extend([f"%{tok}%", f"%{tok}%"])
+        where = " AND ".join(conditions)
+        if category:
+            where = f"category = ? AND ({where})"
+            params.insert(0, category)
+        else:
+            where = f"project_id = '' AND ({where})"
+        return where, params
+
+    def _score_result(self, row: dict, tokens: list[str]) -> float:
+        score = float(row.get("importance", 0.5))
+        text = (row.get("content", "") + " " + row.get("summary", "")).lower()
+        for tok in tokens:
+            count = text.count(tok)
+            if count > 0:
+                score += min(count * 0.1, 0.3)
+        if row.get("access_count", 0) > 2:
+            score += 0.1
+        return score
+
     def _search_long_term_sync(
         self,
         query: str,
         category: str | None = None,
         limit: int = 5,
     ) -> list[dict]:
-        query_lower = query.lower()
+        tokens = self._tokenize(query)
+        if not tokens:
+            tokens = [query.lower()]
+        where, params = self._build_match_sql(tokens, category)
+        sql = (
+            f"SELECT * FROM memories WHERE {where} "
+            "ORDER BY importance DESC, created_at DESC LIMIT ?"
+        )
+        params.append(limit * 3)
         with self._connect() as conn:
-            if category:
-                rows = conn.execute(
-                    "SELECT * FROM memories "
-                    "WHERE category = ? "
-                    "AND (LOWER(content) LIKE ? "
-                    "OR LOWER(summary) LIKE ?) "
-                    "ORDER BY importance DESC, "
-                    "created_at DESC LIMIT ?",
-                    (category, f"%{query_lower}%", f"%{query_lower}%", limit),
-                ).fetchall()
-            else:
-                rows = conn.execute(
-                    "SELECT * FROM memories "
-                    "WHERE (LOWER(content) LIKE ? "
-                    "OR LOWER(summary) LIKE ?) "
-                    "AND project_id = '' "
-                    "ORDER BY importance DESC, "
-                    "created_at DESC LIMIT ?",
-                    (f"%{query_lower}%", f"%{query_lower}%", limit),
-                ).fetchall()
+            rows = conn.execute(sql, params).fetchall()
             results = [dict(r) for r in rows]
-            now = datetime.now(UTC).isoformat()
+        scored = [(r, self._score_result(r, tokens)) for r in results]
+        scored.sort(key=lambda x: -x[1])
+        results = [r for r, _ in scored[:limit]]
+        now = datetime.now(UTC).isoformat()
+        with self._connect() as conn:
             for r in results:
                 conn.execute(
                     "UPDATE memories SET access_count = access_count + 1, accessed_at = ? WHERE id = ?",
                     (now, r["id"]),
                 )
-            return results
+        return results
 
     async def search_long_term(
         self,
@@ -195,10 +217,11 @@ class MemoryStore:
     def _consolidate_sync(self, project_id: str) -> list[str]:
         """Consolidate short-term project memories into long-term lessons.
 
-        Groups recent events by category, creates a summary lesson for each,
-        and stores them as long-term memories with project_id=''.
+        Groups recent events by category, extracts agent-specific patterns
+        (success/failure modes for programmer, designer, QA), and stores
+        actionable lessons as long-term memories.
         """
-        recent = self._get_recent_sync(project_id, limit=50)
+        recent = self._get_recent_sync(project_id, limit=100)
         if not recent:
             return []
 
@@ -207,13 +230,41 @@ class MemoryStore:
             by_category.setdefault(m["category"], []).append(m["content"])
 
         lessons: list[str] = []
+
+        agent_categories = {
+            "tick_result": "agent_performance",
+            "error": "failure_pattern",
+            "success": "success_pattern",
+        }
+
         for cat, items in by_category.items():
-            summary = f"[{cat}] From {len(items)} events: " + "; ".join(items[:3])
+            effective_cat = agent_categories.get(cat, cat)
+            content_text = "\n".join(items[:10])
+
+            if len(items) <= 2:
+                summary = f"[{effective_cat}] From {len(items)} events: " + "; ".join(items[:2])
+            else:
+                patterns: dict[str, int] = {}
+                for item in items:
+                    key = item[:80]
+                    patterns[key] = patterns.get(key, 0) + 1
+                frequent = [k for k, v in sorted(patterns.items(), key=lambda x: -x[1]) if v > 1]
+                if frequent:
+                    summary = (
+                        f"[{effective_cat}] {len(items)} events, {len(frequent)} recurring: "
+                        + "; ".join(frequent[:3])
+                    )
+                else:
+                    summary = (
+                        f"[{effective_cat}] {len(items)} events: " + "; ".join(items[:3])
+                    )
+
+            importance = 0.7 if "fail" in effective_cat else 0.6
             self._store_long_term_sync(
-                category=f"lesson:{cat}",
-                content="\n".join(items[:10]),
+                category=f"lesson:{effective_cat}",
+                content=content_text,
                 summary=summary,
-                importance=0.6,
+                importance=importance,
             )
             lessons.append(summary)
 

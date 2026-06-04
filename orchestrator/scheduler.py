@@ -877,9 +877,35 @@ async def _run_agent(task_type: str, project_id: str, params: dict) -> dict:
         return result
 
     elif task_type == "deploy":
-        from agents.ops.deployer.itch_deployer import deploy_to_itch
+        from agents.ops.deployer.registry import deploy_to_all
 
-        return await deploy_to_itch(state)
+        target_platforms = ["itch.io"]
+        if project and project.proposal:
+            target_platforms = project.proposal.get("target_platforms", ["itch.io"])
+        target_platforms = [p for p in target_platforms if p != "web"]
+
+        platform_results = await deploy_to_all(
+            build_path=state.build_path or "",
+            project_name=Path(state.game_code_path or "game").name,
+            title=state.project_name or "",
+            target_platforms=target_platforms,
+        )
+
+        itch_url = ""
+        all_urls: dict[str, str] = {}
+        for platform, res in platform_results.items():
+            url = res.get("url", "")
+            if url:
+                all_urls[platform] = url
+            if platform == "itch.io" and url:
+                itch_url = url
+
+        result = {"platform_results": platform_results}
+        if itch_url:
+            result["itch_url"] = itch_url
+        if all_urls:
+            result["platform_urls"] = all_urls
+        return result
 
     else:
         logger.warning(f"Scheduler: unknown task type '{task_type}'")
@@ -1052,20 +1078,30 @@ async def _apply_task_result(task_result: dict) -> None:
 
     elif effective_type == "deploy":
         itch_url = result.get("itch_url")
+        platform_urls = result.get("platform_urls", {})
+        platform_results = result.get("platform_results", {})
         if itch_url:
             await set_project_live(pid, itch_url)
-            await emit(
-                "scheduler",
-                f"Project '{project.name}' published to {itch_url}",
-                source_agent="scheduler",
-                project_name=project.name,
-            )
-            await save_chat_message(
-                "assistant",
-                f"🚀 Project '{project.name}' is now live at {itch_url}",
-                agent_name="scheduler",
-            )
-            get_memory_store().consolidate(pid)
+        deployed = [p for p, r in platform_results.items() if r.get("url") and not r.get("error")]
+        failed = [p for p, r in platform_results.items() if r.get("error")]
+        summary_parts = []
+        if deployed:
+            summary_parts.append(f"deployed to {', '.join(deployed)}")
+        if failed:
+            summary_parts.append(f"failed on {', '.join(failed)}")
+        summary = "; ".join(summary_parts) if summary_parts else "no platforms configured"
+        await emit(
+            "scheduler",
+            f"Project '{project.name}' deploy: {summary}",
+            source_agent="scheduler",
+            project_name=project.name,
+        )
+        await save_chat_message(
+            "assistant",
+            f"🚀 Project '{project.name}' deploy: {summary}",
+            agent_name="scheduler",
+        )
+        get_memory_store().consolidate(pid)
 
 
 async def _generate_reports() -> None:

@@ -27,6 +27,15 @@ _MODEL_PROVIDER: dict[str, dict[str, str]] = {
     "MiniMax-M2.1": {"key_attr": "minimax_api_key", "base_url": "https://api.minimaxi.com/v1"},
 }
 
+_MODEL_FALLBACKS: dict[str, list[str]] = {
+    "deepseek-v4-pro": ["deepseek-v4-flash"],
+    "deepseek-coder": ["deepseek-v4-flash"],
+    "MiniMax-M3": ["MiniMax-M2.7", "MiniMax-M2.1"],
+    "MiniMax-M2.7": ["MiniMax-M2.1"],
+    "deepseek-v4-flash": [],
+    "MiniMax-M2.1": [],
+}
+
 _RETRYABLE_CODES = {429, 500, 502, 503}
 
 
@@ -64,10 +73,38 @@ class LLMClient:
         agent_name: str = "",
         project_name: str = "",
     ) -> tuple[str, dict]:
-        """Call LLM with retry/backoff, token tracking, and cost logging.
+        """Call LLM with retry/backoff, token tracking, cost logging, and fallback chain.
 
         Returns (response_text, usage_info) where usage_info has tokens + cost.
         """
+        tried: list[str] = []
+        current = model
+        while True:
+            tried.append(current)
+            try:
+                return await self._call_single(
+                    current, messages, max_tokens, temperature, agent_name, project_name,
+                )
+            except LLMApiError as e:
+                fallbacks = _MODEL_FALLBACKS.get(current, [])
+                remaining = [f for f in fallbacks if f not in tried]
+                if not remaining:
+                    raise
+                logger.warning(
+                    f"LLM model {current} failed ({e.status_code}), "
+                    f"falling back to {remaining[0]}"
+                )
+                current = remaining[0]
+
+    async def _call_single(
+        self,
+        model: str,
+        messages: list[dict],
+        max_tokens: int,
+        temperature: float,
+        agent_name: str,
+        project_name: str,
+    ) -> tuple[str, dict]:
         client = self._get_client(model)
 
         response = None

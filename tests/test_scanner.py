@@ -103,7 +103,7 @@ class TestNormalizeOpportunities:
 
     def test_adds_defaults(self):
         result = _normalize_opportunities([{"name": "X", "genre": "puzzle"}])
-        assert result[0]["target_platforms"] == ["itch.io", "web"]
+        assert result[0]["target_platforms"] == ["itch.io", "crazygames", "poki"]
         assert result[0]["competition_analysis"] == "medium"
         assert result[0]["trend_direction"] == "stable"
 
