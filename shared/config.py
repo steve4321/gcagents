@@ -24,6 +24,8 @@ class AppConfig(BaseSettings):
     x_bearer_token: str = ""
     butler_api_key: str = ""
     butler_username: str = ""
+    crazygames_api_key: str = ""
+    poki_api_key: str = ""
 
     db_url: str = f"sqlite+aiosqlite:///{ROOT_DIR / 'data' / 'gcagents.db'}"
     comfyui_url: str = "http://localhost:8188"
