@@ -107,6 +107,27 @@ class LLMClient:
     ) -> tuple[str, dict]:
         client = self._get_client(model)
 
+        pricing = MODEL_PRICING.get(model, {"input_per_1k": 0.0, "output_per_1k": 0.0})
+        estimated_input = sum(len(str(m).split()) for m in messages)
+        estimated_cost = (
+            estimated_input / 1000 * pricing["input_per_1k"]
+            + max_tokens / 1000 * pricing["output_per_1k"]
+        )
+
+        budget_exceeded = False
+        try:
+            from orchestrator.persistence import check_budget_available
+
+            budget_ok = await check_budget_available("monthly", estimated_cost)
+            if not budget_ok:
+                budget_exceeded = True
+                logger.warning(
+                    f"Budget exceeded for monthly (est ${estimated_cost:.6f}), "
+                    f"proceeding anyway (soft enforcement)"
+                )
+        except Exception:
+            pass
+
         response = None
         for attempt in range(LLM_MAX_RETRIES):
             try:
@@ -135,7 +156,6 @@ class LLMClient:
         completion_tokens = usage.completion_tokens if usage else 0
         total_tokens = usage.total_tokens if usage else 0
 
-        pricing = MODEL_PRICING.get(model, {"input_per_1k": 0.0, "output_per_1k": 0.0})
         cost_usd = (
             prompt_tokens / 1000 * pricing["input_per_1k"]
             + completion_tokens / 1000 * pricing["output_per_1k"]
@@ -146,6 +166,7 @@ class LLMClient:
             "completion_tokens": completion_tokens,
             "total_tokens": total_tokens,
             "cost_usd": cost_usd,
+            "budget_exceeded": budget_exceeded,
         }
 
         try:

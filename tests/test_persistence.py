@@ -914,3 +914,108 @@ async def test_get_project_decisions(tmp_db):
 
     decisions = await persist.get_project_decisions("proj-001")
     assert len(decisions) >= 1
+
+
+# ── H1: platform_urls persistence ──────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_update_project_platform_urls(tmp_db):
+    await persist.ensure_tables()
+
+    project = ProjectState(id="proj-001", name="Test", genre="puzzle", phase=ProjectPhase.LIVE)
+    await persist.save_project(project)
+
+    urls = {"itch.io": "https://test.itch.io/game", "github": "https://pages.github.io/game"}
+    await persist.update_project_platform_urls("proj-001", urls)
+
+    fetched = await persist.get_project("proj-001")
+    assert fetched.platform_urls == urls
+
+
+@pytest.mark.asyncio
+async def test_platform_urls_saved_with_project(tmp_db):
+    await persist.ensure_tables()
+
+    urls = {"itch.io": "https://test.itch.io/game"}
+    project = ProjectState(
+        id="proj-002",
+        name="PlatformTest",
+        genre="puzzle",
+        phase=ProjectPhase.LIVE,
+        platform_urls=urls,
+    )
+    await persist.save_project(project)
+
+    fetched = await persist.get_project("proj-002")
+    assert fetched.platform_urls == urls
+
+
+# ── H9: Project ID uniqueness ─────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_two_projects_same_name_different_ids(tmp_db):
+    await persist.ensure_tables()
+
+    p1 = ProjectState(id="abc123def456", name="My Game", genre="puzzle")
+    p2 = ProjectState(id="789ghi012jkl", name="My Game", genre="puzzle")
+    await persist.save_project(p1)
+    await persist.save_project(p2)
+
+    all_projects = await persist.get_all_projects()
+    same_name = [p for p in all_projects if p.name == "My Game"]
+    assert len(same_name) == 2
+    assert same_name[0].id != same_name[1].id
+
+
+@pytest.mark.asyncio
+async def test_new_id_generates_unique_ids():
+    from orchestrator.scheduler import _new_id
+
+    ids = {_new_id() for _ in range(100)}
+    assert len(ids) == 100
+    for project_id in ids:
+        assert len(project_id) == 12
+
+
+# ── H8: Budget check in LLM client ────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_budget_exceeded_in_usage_info(tmp_db):
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    await persist.ensure_tables()
+    await persist.set_budget("monthly", "recurring", 0.0000001)
+    await persist.record_spend("monthly", 0.0000001)
+
+    from shared.llm_client import LLMClient
+
+    client = LLMClient()
+
+    mock_usage = MagicMock()
+    mock_usage.prompt_tokens = 500
+    mock_usage.completion_tokens = 100
+    mock_usage.total_tokens = 600
+
+    mock_response = MagicMock()
+    mock_response.usage = mock_usage
+    mock_response.choices = [MagicMock()]
+    mock_response.choices[0].message.content = "test response"
+
+    mock_openai = AsyncMock()
+    mock_openai.chat.completions.create.return_value = mock_response
+
+    with patch.object(client, "_get_client", return_value=mock_openai):
+        _, usage_info = await client._call_single(
+            model="deepseek-v4-flash",
+            messages=[{"role": "user", "content": "hello"}],
+            max_tokens=100,
+            temperature=0.7,
+            agent_name="test",
+            project_name="test",
+        )
+
+    assert "budget_exceeded" in usage_info
+    assert usage_info["budget_exceeded"] is True

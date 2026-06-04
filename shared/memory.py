@@ -237,9 +237,40 @@ class MemoryStore:
             "success": "success_pattern",
         }
 
+        agent_role_map = {
+            "develop": "programmer",
+            "develop_simple": "programmer",
+            "code": "programmer",
+            "build": "programmer",
+            "design_game": "designer",
+            "design": "designer",
+            "qa": "qa",
+            "test": "qa",
+            "art_gen": "artist",
+            "art": "artist",
+            "generate_music": "music",
+            "music": "music",
+            "deploy": "deployer",
+            "market_scan": "scanner",
+            "scan": "scanner",
+        }
+
+        def _infer_agent_role(category: str, items: list[str]) -> str | None:
+            """Infer agent role from event category and content for role-based lesson indexing."""
+            if category in agent_role_map:
+                return agent_role_map[category]
+            for item in items[:5]:
+                lower = item.lower()
+                for key, role in agent_role_map.items():
+                    if key in lower:
+                        return role
+            return None
+
         for cat, items in by_category.items():
             effective_cat = agent_categories.get(cat, cat)
             content_text = "\n".join(items[:10])
+
+            agent_role = _infer_agent_role(cat, items)
 
             if len(items) <= 2:
                 summary = f"[{effective_cat}] From {len(items)} events: " + "; ".join(items[:2])
@@ -260,12 +291,22 @@ class MemoryStore:
                     )
 
             importance = 0.7 if "fail" in effective_cat else 0.6
+
             self._store_long_term_sync(
                 category=f"lesson:{effective_cat}",
                 content=content_text,
                 summary=summary,
                 importance=importance,
             )
+
+            if agent_role:
+                self._store_long_term_sync(
+                    category=f"lesson:{agent_role}",
+                    content=content_text,
+                    summary=summary,
+                    importance=importance,
+                )
+
             lessons.append(summary)
 
         logger.info(

@@ -332,6 +332,10 @@ async def ensure_tables():
             await db.execute(
                 text("ALTER TABLE projects ADD COLUMN art_assets_path TEXT DEFAULT ''")
             )
+        if "platform_urls" not in existing_cols:
+            await db.execute(
+                text("ALTER TABLE projects ADD COLUMN platform_urls TEXT DEFAULT '{}'")
+            )
 
         policy_cols = {
             row[1]
@@ -1252,6 +1256,7 @@ async def save_project(project: ProjectState) -> str:
                         art_status=:art_status,
                         music_status=:music_status,
                         qa_result=:qa_result, itch_url=:itch_url,
+                        platform_urls=:platform_urls,
                         version=:version, awaiting_decision=:awaiting_decision,
                         updated_at=:updated_at
                     WHERE id=:id
@@ -1272,6 +1277,7 @@ async def save_project(project: ProjectState) -> str:
                     "music_status": project.music_status,
                     "qa_result": json.dumps(project.qa_result) if project.qa_result else None,
                     "itch_url": project.itch_url,
+                    "platform_urls": json.dumps(project.platform_urls),
                     "version": project.version,
                     "awaiting_decision": project.awaiting_decision,
                     "updated_at": now,
@@ -1281,10 +1287,12 @@ async def save_project(project: ProjectState) -> str:
             await db.execute(
                 text("""
                     INSERT INTO projects (id, name, genre, phase, progress, proposal, gdd,
-                        code_path, art_assets_path, art_status, music_status, qa_result, itch_url, version,
+                        code_path, art_assets_path, art_status, music_status, qa_result, itch_url,
+                        platform_urls, version,
                         awaiting_decision, created_at, updated_at)
                     VALUES (:id, :name, :genre, :phase, :progress, :proposal, :gdd,
-                        :code_path, :art_assets_path, :art_status, :music_status, :qa_result, :itch_url, :version,
+                        :code_path, :art_assets_path, :art_status, :music_status, :qa_result, :itch_url,
+                        :platform_urls, :version,
                         :awaiting_decision, :created_at, :updated_at)
                 """),
                 {
@@ -1303,6 +1311,7 @@ async def save_project(project: ProjectState) -> str:
                     "music_status": project.music_status,
                     "qa_result": json.dumps(project.qa_result) if project.qa_result else None,
                     "itch_url": project.itch_url,
+                    "platform_urls": json.dumps(project.platform_urls),
                     "version": project.version,
                     "awaiting_decision": project.awaiting_decision,
                     "created_at": now,
@@ -1388,6 +1397,7 @@ def _row_to_project(d: dict) -> ProjectState:
         music_status=d.get("music_status", "pending"),
         qa_result=json.loads(d["qa_result"]) if d.get("qa_result") else None,
         itch_url=d.get("itch_url"),
+        platform_urls=json.loads(d.get("platform_urls", "{}")) if d.get("platform_urls") else {},
         version=d.get("version", "0.0.0"),
         awaiting_decision=d.get("awaiting_decision"),
         created_at=_parse_datetime(d.get("created_at")),
@@ -1764,6 +1774,17 @@ async def update_project_art_assets_path(project_id: str, art_assets_path: str) 
         await db.execute(
             text("UPDATE projects SET art_assets_path=:aap, updated_at=:now WHERE id=:id"),
             {"aap": art_assets_path, "now": now, "id": project_id},
+        )
+        await db.commit()
+
+
+async def update_project_platform_urls(project_id: str, platform_urls: dict[str, str]) -> None:
+    engine = _get_engine()
+    async with AsyncSession(engine) as db:
+        now = datetime.now(UTC).isoformat()
+        await db.execute(
+            text("UPDATE projects SET platform_urls=:pu, updated_at=:now WHERE id=:id"),
+            {"pu": json.dumps(platform_urls), "now": now, "id": project_id},
         )
         await db.commit()
 
@@ -2155,3 +2176,77 @@ async def get_analytics_summary() -> dict:
             result.append(pd)
 
         return {"projects": result}
+
+
+# ── Game Analytics Dashboard ─────────────────────────────────────────────────
+
+
+async def get_game_analytics_summary() -> dict:
+    """Aggregated play/retention metrics across all games."""
+    engine = _get_engine()
+    async with AsyncSession(engine) as db:
+        # Play counts (sum of event_game_start values)
+        plays = await db.execute(
+            text("""
+                SELECT project_id,
+                       COALESCE(SUM(metric_value), 0) as play_count,
+                       (SELECT AVG(m2.metric_value)
+                        FROM game_metrics m2
+                        WHERE m2.project_id = game_metrics.project_id
+                          AND m2.metric_name = 'last_score') as avg_score
+                FROM game_metrics
+                WHERE metric_name = 'event_game_start'
+                GROUP BY project_id
+            """)
+        )
+        plays_data: dict[int, dict] = {
+            r[0]: {"plays": int(r[1]), "avg_score": round(r[2], 2) if r[2] else None}
+            for r in plays.fetchall()
+        }
+
+        # Average session duration
+        sessions = await db.execute(
+            text("""
+                SELECT project_id, AVG(metric_value) as avg_session_seconds
+                FROM game_metrics
+                WHERE metric_name = 'avg_session_s'
+                GROUP BY project_id
+            """)
+        )
+        for r in sessions.fetchall():
+            if r[0] in plays_data:
+                plays_data[r[0]]["avg_session_seconds"] = round(r[1], 1)
+
+        # Recent 24h activity
+        recent = await db.execute(
+            text("""
+                SELECT project_id, metric_name, COUNT(*) as count
+                FROM game_metrics
+                WHERE recorded_at > datetime('now', '-1 day')
+                GROUP BY project_id, metric_name
+            """)
+        )
+        recent_data: dict[int, dict[str, int]] = {}
+        for r in recent.fetchall():
+            if r[0] not in recent_data:
+                recent_data[r[0]] = {}
+            recent_data[r[0]][r[1]] = r[2]
+
+        return {"by_game": plays_data, "recent_24h": recent_data}
+
+
+async def get_game_metrics_detail(project_id: int, days: int = 7) -> list[dict]:
+    """Detailed metrics for a specific game over the given time range."""
+    engine = _get_engine()
+    async with AsyncSession(engine) as db:
+        rows = await db.execute(
+            text("""
+                SELECT metric_name, metric_value, recorded_at
+                FROM game_metrics
+                WHERE project_id = :pid
+                  AND recorded_at > datetime('now', '-' || :days || ' days')
+                ORDER BY recorded_at DESC
+            """),
+            {"pid": project_id, "days": days},
+        )
+        return [dict(r._mapping) for r in rows.fetchall()]

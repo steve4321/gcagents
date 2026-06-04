@@ -1372,6 +1372,61 @@ function escapeHtml(text) {
   return div.innerHTML;
 }
 
+async function renderGameAnalytics() {
+  const summaryEl = document.getElementById('analyticsSummary');
+  const topGamesEl = document.getElementById('analyticsTopGames');
+  if (!summaryEl || !topGamesEl) return;
+
+  try {
+    const [analyticsResp, topResp] = await Promise.all([
+      fetch('/api/analytics/games'),
+      fetch('/api/analytics/top?limit=10'),
+    ]);
+    const analytics = await analyticsResp.json();
+    const topData = await topResp.json();
+
+    const games = analytics.by_game || {};
+    const totalPlays = Object.values(games).reduce((s, g) => s + (g.plays || 0), 0);
+    const sessions = Object.values(games).filter(g => g.avg_session_seconds != null);
+    const avgSession = sessions.length
+      ? sessions.reduce((s, g) => s + g.avg_session_seconds, 0) / sessions.length
+      : 0;
+
+    summaryEl.innerHTML = `
+      <div class="stat-card">
+        <div class="stat-label">Total Plays</div>
+        <div class="stat-value">${totalPlays.toLocaleString()}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Avg Session</div>
+        <div class="stat-value">${avgSession > 0 ? Math.round(avgSession) + 's' : '-'}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Active Games</div>
+        <div class="stat-value">${Object.keys(games).length}</div>
+      </div>
+    `;
+
+    const topGames = topData.top_games || [];
+    if (!topGames.length) {
+      topGamesEl.innerHTML = '<p class="analytics-empty">No analytics data yet. Deploy games to start collecting.</p>';
+      return;
+    }
+
+    topGamesEl.innerHTML = topGames.map((g, i) => `
+      <div class="game-row">
+        <span class="game-rank">#${i + 1}</span>
+        <span class="game-name">${escapeHtml(g.project_name)}</span>
+        <span class="game-plays">${g.plays} plays</span>
+        <span class="game-session">${g.avg_session_seconds != null ? Math.round(g.avg_session_seconds) + 's avg' : '-'}</span>
+      </div>
+    `).join('');
+  } catch (e) {
+    console.error('Game analytics load failed:', e);
+    summaryEl.innerHTML = '<p class="analytics-empty">Failed to load analytics.</p>';
+  }
+}
+
 async function refreshAll() {
   const btn = $('.refresh-btn');
   if (btn) {
@@ -1390,6 +1445,7 @@ async function refreshAll() {
     renderMemory(),
     renderChat(),
     loadEvents(),
+    renderGameAnalytics(),
   ]);
 
   if (btn) {

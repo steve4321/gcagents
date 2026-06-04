@@ -344,6 +344,50 @@ async def get_analytics_summary():
     return await get_analytics_summary()
 
 
+@app.get("/api/analytics/games")
+async def game_analytics():
+    from orchestrator.persistence import get_game_analytics_summary
+
+    return await get_game_analytics_summary()
+
+
+@app.get("/api/analytics/games/{project_id}")
+async def game_analytics_detail(project_id: int, days: int = Query(default=7, ge=1, le=90)):
+    from orchestrator.persistence import get_game_metrics_detail
+
+    metrics = await get_game_metrics_detail(project_id, days)
+    if not metrics:
+        from orchestrator.persistence import find_project_by_name
+
+        found = await find_project_by_name(str(project_id))
+        if not found:
+            raise HTTPException(404, "Project not found")
+    return {"project_id": project_id, "days": days, "metrics": metrics}
+
+
+@app.get("/api/analytics/top")
+async def top_games(limit: int = Query(default=10, ge=1, le=50)):
+    from orchestrator.persistence import get_game_analytics_summary, get_live_projects
+
+    summary = await get_game_analytics_summary()
+    live = await get_live_projects()
+    name_map = {g["id"]: g["name"] for g in live}
+
+    ranked = []
+    for pid, data in summary.get("by_game", {}).items():
+        ranked.append(
+            {
+                "project_id": pid,
+                "project_name": name_map.get(pid, str(pid)),
+                "plays": data.get("plays", 0),
+                "avg_score": data.get("avg_score"),
+                "avg_session_seconds": data.get("avg_session_seconds"),
+            }
+        )
+    ranked.sort(key=lambda x: x["plays"], reverse=True)
+    return {"top_games": ranked[:limit]}
+
+
 @app.get("/api/itch/stats")
 async def get_itch_stats():
     from orchestrator.persistence import get_latest_itch_stats
@@ -361,6 +405,27 @@ async def refresh_itch_stats():
 
 
 # ── Feedback API ──────────────────────────────────────────────────────────────
+
+
+@app.get("/api/feedback/summary")
+async def feedback_summary():
+    from orchestrator.persistence import get_live_projects, get_pending_feedback
+
+    projects = await get_live_projects()
+    result = []
+    for proj in projects:
+        feedback = await get_pending_feedback(str(proj["id"]))
+        entry = {
+            "project_id": proj["id"],
+            "project_name": proj["name"],
+            "total_pending": len(feedback),
+            "by_category": {},
+        }
+        for f in feedback:
+            cat = f.get("category", "other")
+            entry["by_category"][cat] = entry["by_category"].get(cat, 0) + 1
+        result.append(entry)
+    return {"games": result, "total_pending": sum(g["total_pending"] for g in result)}
 
 
 @app.get("/api/feedback/{project_id}")
@@ -753,7 +818,7 @@ async def _action_create_project(data: dict) -> None:
         return
 
     project = ProjectState(
-        id=str(uuid.uuid4()),
+        id=uuid.uuid4().hex[:12],
         name=name,
         genre=genre,
         phase=ProjectPhase.BACKLOG,

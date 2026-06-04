@@ -15,6 +15,16 @@ from shared.memory import get_memory_store
 MAX_SELF_VERIFY_RETRIES = 2
 MAX_SOURCE_CHARS_IN_PROMPT = 12000
 
+GRID_GENRES = {
+    "puzzle", "match-3", "match3", "merge", "sudoku", "tile",
+    "grid", "bejeweled", "tetris", "candy", "2048",
+}
+
+
+def is_grid_genre(genre: str) -> bool:
+    lower = genre.lower().replace("_", "-").replace(" ", "-")
+    return lower in GRID_GENRES or any(g in lower for g in GRID_GENRES)
+
 
 PROGRAMMER_SYSTEM_PROMPT = """You are an expert Phaser 4 + TypeScript game developer.
 Given a GDD (Game Design Document), generate a complete, playable Phaser 4 game.
@@ -61,6 +71,7 @@ Rules:
   Where: enemyTypesSeen is a Set/array of distinct enemy type names encountered, powerupsUsed counts power-up activations, sessionStart is Date.now() at game start. These fields are REQUIRED for gameplay depth evaluation.
 - Include basic gameplay analytics: call `navigator.sendBeacon('/api/analytics/event', new URLSearchParams({ game: '{game_name}', event: 'game_start' }))` when the game starts, and report 'game_over' with final score and 'play_time' in seconds when the game ends. This is non-blocking and should NOT impact gameplay.
 - The HTML template has `<div id="game-container"></div>`. Set `parent: 'game-container'` in your Phaser game config so the canvas is rendered inside it.
+- AD SDK: The HTML includes window.__triggerAdBreak() and window.__triggerHappyTime() globals. Call window.__triggerAdBreak?.() on game-over and before restart. Call window.__triggerHappyTime?.() on level-up, high-score, or achievement milestones. These are safe no-ops if no ad SDK is loaded.
 
 Return a JSON object mapping file paths to file contents:
 {"src/main.ts": "...", "src/game/scenes/GameScene.ts": "...", ...}
@@ -70,6 +81,15 @@ Additional requirements:
 - RETENTION: Implement at least 2 retention features from the GDD (daily challenges, streak tracking, unlock progression, achievement notifications)
 - ENGAGEMENT: Implement at least 1 engagement mechanic (power-up collection, combo system with visual feedback, social share button on game over with score)
 - PROGRESSION DEPTH: Include a visible progression system (level unlock, score milestones, collectible unlocks) that gives players a reason to return
+- GRID GAMES: For grid-based genres (puzzle, match-3, merge, sudoku, tile, grid, bejeweled, tetris, candy), you MUST generate a `src/game/config.ts` file containing a `__GAME_CONFIG__` block as the single source of truth for grid coordinates:
+  ```typescript
+  // __GAME_CONFIG__ - Single source of truth for game coordinates
+  export const GAME_CONFIG = {
+      grid: { cols: 8, rows: 8, cellSize: 64, offsetX: 64, offsetY: 80 },
+      canvas: { width: 800, height: 600 },
+  };
+  ```
+  All grid calculations in scenes MUST reference GAME_CONFIG. Do NOT hardcode grid dimensions, offsets, or cell sizes in scene files.
 """
 
 
@@ -688,9 +708,7 @@ export default defineConfig({
 });
 """
 
-    sdk_scripts = ""
-    platform_js_init = ""
-    target_platforms = []
+    target_platforms: list[str] = []
     if gdd:
         proposal = gdd.get("proposal", {})
         if isinstance(proposal, dict):
@@ -698,18 +716,11 @@ export default defineConfig({
         if not target_platforms:
             target_platforms = gdd.get("target_platforms", [])
 
-    from shared.constants import PLATFORM_SDK_SNIPPETS
-    for platform in target_platforms:
-        snippet = PLATFORM_SDK_SNIPPETS.get(platform)
-        if snippet:
-            sdk_scripts += f"\n  {snippet}"
+    from shared.ad_sdk import get_ad_helper_js, get_sdk_script_tags
 
-    if sdk_scripts:
-        platform_js_init = """
-  <script>
-    window.__PLATFORM_SDK__ = window.__PLATFORM_SDK__ || {};
-  </script>
-"""
+    sdk_script_tags = get_sdk_script_tags(target_platforms)
+    sdk_scripts_block = f"\n  {sdk_script_tags}" if sdk_script_tags else ""
+    ad_helper_block = get_ad_helper_js(target_platforms)
 
     index_html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -721,10 +732,11 @@ export default defineConfig({
     body {{ margin: 0; background: #000; display: flex; justify-content: center; align-items: center; height: 100vh; }}
     #game-container {{ display: flex; justify-content: center; align-items: center; }}
     canvas {{ display: block; }}
-  </style>{platform_js_init}{sdk_scripts}
+  </style>{sdk_scripts_block}
 </head>
 <body>
   <div id="game-container"></div>
+  {ad_helper_block}
   <script type="module" src="/src/main.ts"></script>
 </body>
 </html>

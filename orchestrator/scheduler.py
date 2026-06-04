@@ -40,6 +40,7 @@ from orchestrator.persistence import (
     update_project_gdd,
     update_project_music_status,
     update_project_phase,
+    update_project_platform_urls,
     update_project_proposal_and_phase,
     update_project_qa_result,
 )
@@ -136,6 +137,9 @@ async def scheduler_tick() -> dict | None:
 
     if _TICK_COUNT % ITCH_STATS_INTERVAL == 0:
         await _fetch_itch_stats()
+
+    if _TICK_COUNT > 0 and _TICK_COUNT % 30 == 0:
+        await _collect_and_route_feedback()
 
     await _advance_projects()
 
@@ -247,7 +251,7 @@ async def _handle_approved_decision(decision: DecisionPoint) -> None:
         ctx = decision.context
         name = ctx.get("name", f"project-{datetime.now(UTC).strftime('%Y%m%d-%H%M')}")
         project = ProjectState(
-            id=pid or _new_id(),
+            id=_new_id(),
             name=name,
             genre=ctx.get("genre", ""),
             phase=ProjectPhase.SCANNING,
@@ -339,6 +343,50 @@ async def _fetch_itch_stats() -> None:
             logger.info(f"Scheduler: refreshed itch.io stats for {len(results)} games")
     except (RuntimeError, ValueError, OSError) as e:
         logger.warning(f"Scheduler: itch stats fetch failed: {e}")
+
+
+async def _collect_and_route_feedback() -> None:
+    """Every 30 ticks, collect feedback from live games and route to update if needed."""
+    try:
+        from agents.ops.analytics.feedback_collector import collect_feedback
+
+        result = await collect_feedback()
+        collected = result.get("feedback_collected", 0)
+        if collected > 0:
+            await emit("scheduler", f"Collected {collected} feedback items", source_agent="scheduler")
+    except Exception as e:
+        logger.warning(f"Feedback collection failed: {e}")
+        return
+
+    try:
+        from orchestrator.persistence import get_live_projects, get_pending_feedback
+
+        projects = await get_live_projects()
+        for proj in projects:
+            feedback = await get_pending_feedback(str(proj["id"]))
+            bug_feature = [f for f in feedback if f.get("category") in ("bug", "feature")]
+            if len(bug_feature) >= 2:
+                await emit(
+                    "scheduler",
+                    f"Game '{proj['name']}' has {len(bug_feature)} unprocessed bug/feature feedback - routing to update",
+                    source_agent="scheduler",
+                )
+                await save_chat_message(
+                    "assistant",
+                    f"📋 Game '{proj['name']}' has {len(bug_feature)} unprocessed feedback items. Routing to update cycle.",
+                    agent_name="scheduler",
+                )
+                await enqueue(
+                    str(proj["id"]),
+                    "develop",
+                    {
+                        "project_name": proj["name"],
+                        "mode": "update",
+                        "feedback_count": len(bug_feature),
+                    },
+                )
+    except Exception as e:
+        logger.warning(f"Feedback routing failed: {e}")
 
 
 async def _ceo_evaluate_new_projects() -> None:
@@ -1082,6 +1130,8 @@ async def _apply_task_result(task_result: dict) -> None:
         platform_results = result.get("platform_results", {})
         if itch_url:
             await set_project_live(pid, itch_url)
+        if platform_urls:
+            await update_project_platform_urls(pid, platform_urls)
         deployed = [p for p, r in platform_results.items() if r.get("url") and not r.get("error")]
         failed = [p for p, r in platform_results.items() if r.get("error")]
         summary_parts = []
@@ -1154,6 +1204,27 @@ async def _generate_reports() -> None:
         f"💰 **本月支出**: ${total_cost:.2f} / ${budget_limit:.2f} ({total_cost / budget_limit * 100:.0f}%)"
     )
 
+    if live:
+        try:
+            from orchestrator.persistence import get_pending_feedback
+
+            feedback_summary = []
+            for p in live:
+                pid = p.id
+                pending = await get_pending_feedback(pid)
+                if pending:
+                    categories: dict[str, int] = {}
+                    for f in pending:
+                        cat = f.get("category", "other")
+                        categories[cat] = categories.get(cat, 0) + 1
+                    feedback_summary.append(f"  {p.name}: {dict(categories)}")
+            if feedback_summary:
+                lines.append("")
+                lines.append("📊 Feedback Status:")
+                lines.extend(feedback_summary)
+        except Exception as e:
+            logger.debug(f"Report feedback summary failed: {e}")
+
     report = "\n".join(lines)
     await save_chat_message("assistant", report, agent_name="ceo", metadata={"type": "report"})
 
@@ -1161,4 +1232,4 @@ async def _generate_reports() -> None:
 def _new_id() -> str:
     import uuid
 
-    return str(uuid.uuid4())
+    return uuid.uuid4().hex[:12]

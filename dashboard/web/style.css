@@ -2567,6 +2567,88 @@ body {
 }
 
 /* ============================================
+   Game Analytics Dashboard Panel
+   ============================================ */
+.analytics-summary {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-4);
+  margin-bottom: var(--space-5);
+}
+@media (max-width: 768px) {
+  .analytics-summary { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 480px) {
+  .analytics-summary { grid-template-columns: 1fr; }
+}
+.stat-card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  text-align: center;
+}
+.stat-label {
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  margin-bottom: 0.25rem;
+}
+.stat-value {
+  color: var(--accent-cyan);
+  font-size: 1.8rem;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  line-height: 1.2;
+}
+.analytics-top-games {
+  margin-top: var(--space-4);
+}
+.analytics-loading,
+.analytics-empty {
+  text-align: center;
+  padding: 1.5rem;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+.game-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.game-row:last-child {
+  border-bottom: none;
+}
+.game-rank {
+  color: var(--text-muted);
+  width: 30px;
+  font-weight: 700;
+  font-size: 0.8rem;
+}
+.game-name {
+  flex: 1;
+  color: var(--text-primary);
+  font-size: 0.85rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.game-plays {
+  color: var(--accent-cyan);
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+.game-session {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  width: 100px;
+  text-align: right;
+}
+
+/* ============================================
    Game Performance
    ============================================ */
 .performance-summary {
