@@ -57,6 +57,7 @@ class GameProject(BaseModel):
     gdd: dict | None = None
     proposal: GameProposal
     itch_url: str | None = None
+    platform_urls: dict[str, str] = {}
     current_version: str = "0.0.0"
     feedback_count: int = 0
     created_at: datetime = datetime.now()
@@ -165,6 +166,7 @@ class ProjectState(BaseModel):
     music_status: str = "pending"
     qa_result: dict | None = None
     itch_url: str | None = None
+    platform_urls: dict[str, str] = {}
     version: str = "0.0.0"
     awaiting_decision: str | None = None
     created_at: datetime = datetime.now()

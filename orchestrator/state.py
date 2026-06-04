@@ -31,6 +31,7 @@ class CompanyState(BaseModel):
     game_code_path: str | None = None
     build_path: str | None = None
     itch_url: str | None = None
+    platform_urls: dict[str, str] = {}
     qa_results: dict | None = None
     errors: list[str] = []
     retry_count: int = 0
