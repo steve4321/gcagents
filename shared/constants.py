@@ -38,4 +38,29 @@ NPM_BUILD_TIMEOUT = 120  # seconds for npm build
 
 # ── Default AI Models ────────────────────────────────────────────────────
 DEFAULT_ANALYSIS_MODEL = "MiniMax-M3"  # analysis, design, translation
-DEFAULT_CODE_MODEL = "MiniMax-M3"  # code generation
+DEFAULT_CODE_MODEL = "MiniMax-M2.1"  # code generation
+
+# ── Platforms ──────────────────────────────────────────────────────────────
+SUPPORTED_PLATFORMS = ("itch.io", "crazygames", "poki", "newgrounds")
+
+PLATFORM_SDK_SNIPPETS: dict[str, str] = {
+    "crazygames": (
+        '<script src="https://sdk.crazygames.com/crazygames-sdk-v1.js"></script>'
+    ),
+    "poki": (
+        '<script src="https://game-cdn.poki.com/sdk/v4/poki-sdk.js"></script>'
+    ),
+}
+
+PLATFORM_AD_PATTERNS: dict[str, dict] = {
+    "crazygames": {
+        "init": "const CrazySDK = window.CrazyGames.CrazySDK; CrazySDK.getInstance().init();",
+        "adbreak": "CrazySDK.getInstance().requestAd('midgame', () => { /* resume */ }, (err) => { /* resume */ });",
+        "happytime": "CrazySDK.getInstance().happytime();",
+    },
+    "poki": {
+        "init": "const PokiSDK = window.PokiSDK; PokiSDK.init().then(() => {});",
+        "adbreak": "PokiSDK.commercialBreak().then(() => { /* resume */ });",
+        "happytime": "PokiSDK.gameplayStop(); PokiSDK.customEvent('levelComplete', { score });",
+    },
+}
