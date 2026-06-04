@@ -35,10 +35,42 @@ models:
     provider: suno
     api_key_env: "SUNO_API_KEY"
 
+model_tiers:
+  strong:
+    primary: "MiniMax-M3"
+    fallback: "deepseek-v4-flash"
+    roles: [planning, ceo, architecture, game_design]
+
+  fast:
+    primary: "MiniMax-M3"
+    fallback: "glm-4-flash"
+    roles: [analysis, classification, summarization, evaluation]
+
+  cheap:
+    primary: "glm-4-flash"
+    fallback: null
+    roles: [translation, formatting, commit_message, simple_validation, intent_classification]
+
+  code:
+    primary: "MiniMax-M2.1"
+    fallback: "deepseek-v4-flash"
+    roles: [code_gen, code_edit, code_review]
+
+  art:
+    primary: "stable-diffusion-xl"
+    fallback: null
+    roles: [art_gen]
+
+  audio:
+    primary: "suno"
+    fallback: null
+    roles: [music_gen]
+
 agents:
   ceo:
     model_role: ceo
     max_retries: 3
+    tools: []
 
   market_scanner:
     schedule: "0 6 * * *"  # daily at 6am
@@ -48,28 +80,35 @@ agents:
       - google_play
       - reddit
       - app_store
+    tools: []
 
   game_designer:
     model_role: designer
+    tools: [read_file, write_file, search_code]
 
   art_director:
     comfyui_url: "http://localhost:8188"
+    tools: [generate_art, generate_sprite, generate_icon]
 
   lead_programmer:
     model_role: lead_programmer
     phaser_version: "4"
+    tools: [read_file, write_file, edit_file, search_code, run_build, glob]
 
   qa_agent:
     model_role: qa
     playwright_headless: true
+    tools: [read_file, run_build, run_playwright, search_code]
 
   deploy_agent:
     itch_username: ""
     itch_api_key_env: "BUTLER_API_KEY"
+    tools: [deploy_to_itch]
 
   analytics_agent:
     model_role: analytics
     report_schedule: "0 9 * * 1"  # weekly monday 9am
+    tools: [read_file, search_code]
 
 scheduler:
   market_scan_interval: 5

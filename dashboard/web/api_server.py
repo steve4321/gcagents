@@ -5,14 +5,13 @@ import os
 import subprocess
 import sys
 from contextlib import asynccontextmanager
-from pathlib import Path
 
-from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from loguru import logger
 
-from shared.config import load_config, ROOT_DIR
+from shared.config import ROOT_DIR, load_config
 
 config = load_config()
 
@@ -53,6 +52,7 @@ async def get_api_key(request: Request) -> None:
     if api_key != _DASHBOARD_API_KEY:
         raise HTTPException(status_code=401, detail="Invalid or missing X-API-Key")
 
+
 # Track running pipeline process
 _scheduler_process: subprocess.Popen | None = None
 
@@ -66,7 +66,8 @@ async def broadcast_event(event_data: dict):
     for ws in _event_clients:
         try:
             await ws.send_json({"type": "event", "data": event_data})
-        except Exception:
+        except (RuntimeError, OSError, ValueError) as e:
+            logger.debug(f"WebSocket send failed, disconnecting: {e}")
             disconnected.add(ws)
     _event_clients.difference_update(disconnected)
 
@@ -75,6 +76,7 @@ async def broadcast_event(event_data: dict):
 async def lifespan(app: FastAPI):
     global engine
     from orchestrator.persistence import _get_engine, ensure_tables
+
     engine = _get_engine()
     await ensure_tables()
     yield
@@ -105,20 +107,25 @@ def games_dir() -> list[dict]:
     for d in sorted(games_path.iterdir()):
         if d.is_dir() and (d / "dist").exists():
             dist_files = list((d / "dist").rglob("*"))
-            results.append({
-                "name": d.name,
-                "dist_size": sum(f.stat().st_size for f in dist_files if f.is_file()),
-                "file_count": len(dist_files),
-                "updated": max(f.stat().st_mtime for f in dist_files) if dist_files else 0,
-            })
+            results.append(
+                {
+                    "name": d.name,
+                    "dist_size": sum(f.stat().st_size for f in dist_files if f.is_file()),
+                    "file_count": len(dist_files),
+                    "updated": max(f.stat().st_mtime for f in dist_files) if dist_files else 0,
+                }
+            )
     return results
 
 
 @app.get("/api/status")
 async def get_status():
     from orchestrator.persistence import (
-        get_orchestrator_state, get_last_scan_time, get_latest_project,
+        get_last_scan_time,
+        get_latest_project,
+        get_orchestrator_state,
     )
+
     state = await get_orchestrator_state()
     scan_time = await get_last_scan_time()
     project = await get_latest_project()
@@ -140,6 +147,7 @@ async def get_status():
 @app.get("/api/agents")
 async def get_agents():
     from orchestrator.persistence import get_agent_logs, get_agent_stats
+
     agents = await get_agent_logs()
     stats = await get_agent_stats()
     return {"logs": agents, "stats": stats}
@@ -148,6 +156,7 @@ async def get_agents():
 @app.get("/api/market/report")
 async def get_market_report():
     from orchestrator.persistence import get_market_report_detail
+
     d = await get_market_report_detail()
     if not d:
         return None
@@ -159,12 +168,14 @@ async def get_market_report():
 @app.get("/api/market/latest")
 async def get_market_latest():
     from orchestrator.persistence import get_latest_market_signals
+
     return await get_latest_market_signals()
 
 
 @app.get("/api/projects")
 async def list_projects():
     from orchestrator.persistence import get_all_projects
+
     projects = await get_all_projects()
     out = []
     for p in projects:
@@ -177,18 +188,21 @@ async def list_projects():
 @app.get("/api/pipeline/history")
 async def get_pipeline_history():
     from orchestrator.persistence import get_orchestrator_history
+
     return await get_orchestrator_history()
 
 
 @app.get("/api/memory")
 async def get_memory():
     from orchestrator.persistence import get_company_memory
+
     return await get_company_memory()
 
 
 @app.get("/api/gdd/{project_id}")
 async def get_gdd(project_id: int):
     from orchestrator.persistence import get_project_gdd
+
     d = await get_project_gdd(str(project_id))
     if not d:
         raise HTTPException(404, "Project not found")
@@ -207,23 +221,31 @@ async def get_gdd(project_id: int):
 
 # ── Pipeline Control ──────────────────────────────────────────────────────────
 
+
 @app.post("/api/pipeline/run-scheduler", dependencies=[Depends(get_api_key)])
-async def trigger_scheduler(interval: int = 60):
+async def trigger_scheduler(interval: int = Query(default=60, ge=1, le=3600)):
     global _scheduler_process
     if _scheduler_process is not None and _scheduler_process.poll() is None:
         return {"status": "already_running", "message": "Scheduler is already running"}
 
     result = subprocess.run(
         ["pgrep", "-f", "orchestrator.main run-scheduler"],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     if result.stdout.strip():
         return {"status": "already_running", "message": "Scheduler is already running (external)"}
 
     try:
         _scheduler_process = subprocess.Popen(
-            [sys.executable, "-m", "orchestrator.main", "run-scheduler",
-             "--interval", str(interval)],
+            [
+                sys.executable,
+                "-m",
+                "orchestrator.main",
+                "run-scheduler",
+                "--interval",
+                str(interval),
+            ],
             cwd=ROOT_DIR,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -232,7 +254,11 @@ async def trigger_scheduler(interval: int = 60):
         logger.error(f"Failed to start scheduler: {e}")
         return {"status": "error", "message": f"Failed to start scheduler: {e}"}
     logger.info(f"Scheduler started (pid={_scheduler_process.pid}, interval={interval}s)")
-    return {"status": "started", "mode": "scheduler", "message": f"Scheduler started (interval={interval}s)"}
+    return {
+        "status": "started",
+        "mode": "scheduler",
+        "message": f"Scheduler started (interval={interval}s)",
+    }
 
 
 @app.post("/api/pipeline/stop", dependencies=[Depends(get_api_key)])
@@ -251,7 +277,8 @@ async def stop_scheduler():
 
     result = subprocess.run(
         ["pgrep", "-f", "orchestrator.main run-scheduler"],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     for pid_str in result.stdout.strip().splitlines():
         try:
@@ -270,29 +297,33 @@ async def stop_scheduler():
 async def check_pipeline_status():
     global _scheduler_process
 
-    scheduler_running = (
-        _scheduler_process is not None and _scheduler_process.poll() is None
-    )
+    scheduler_running = _scheduler_process is not None and _scheduler_process.poll() is None
     if not scheduler_running:
         result = subprocess.run(
             ["pgrep", "-f", "orchestrator.main run-scheduler"],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
         )
         scheduler_running = bool(result.stdout.strip())
 
     if scheduler_running:
-        return {"running": True, "mode": "scheduler", "scheduler_running": True,
-                "status": "running"}
+        return {
+            "running": True,
+            "mode": "scheduler",
+            "scheduler_running": True,
+            "status": "running",
+        }
 
-    return {"running": False, "mode": "idle", "scheduler_running": False,
-            "status": "idle"}
+    return {"running": False, "mode": "idle", "scheduler_running": False, "status": "idle"}
 
 
 # ── Analytics ─────────────────────────────────────────────────────────────────
 
+
 @app.post("/api/analytics/event")
 async def receive_analytics(game: str = "", event: str = "", score: float = 0, play_time: int = 0):
-    from orchestrator.persistence import save_game_metric, find_project_by_name
+    from orchestrator.persistence import find_project_by_name, save_game_metric
+
     try:
         pid = await find_project_by_name(game)
         if pid:
@@ -309,12 +340,14 @@ async def receive_analytics(game: str = "", event: str = "", score: float = 0, p
 @app.get("/api/analytics/summary")
 async def get_analytics_summary():
     from orchestrator.persistence import get_analytics_summary
+
     return await get_analytics_summary()
 
 
 @app.get("/api/itch/stats")
 async def get_itch_stats():
     from orchestrator.persistence import get_latest_itch_stats
+
     stats = await get_latest_itch_stats()
     return {"stats": stats, "total_downloads": sum(s["downloads_count"] for s in stats)}
 
@@ -322,15 +355,18 @@ async def get_itch_stats():
 @app.post("/api/itch/refresh")
 async def refresh_itch_stats():
     from agents.ops.deployer.itch_stats import fetch_itch_stats
+
     results = await fetch_itch_stats()
     return {"refreshed": len(results), "games": results}
 
 
 # ── Feedback API ──────────────────────────────────────────────────────────────
 
+
 @app.get("/api/feedback/{project_id}")
 async def list_feedback(project_id: int, unprocessed_only: bool = False):
-    from orchestrator.persistence import get_pending_feedback, get_all_feedback
+    from orchestrator.persistence import get_all_feedback, get_pending_feedback
+
     if unprocessed_only:
         return await get_pending_feedback(str(project_id))
     return await get_all_feedback(str(project_id))
@@ -339,6 +375,7 @@ async def list_feedback(project_id: int, unprocessed_only: bool = False):
 @app.get("/api/projects/{project_id}/documents")
 async def get_project_documents(project_id: str):
     from orchestrator.persistence import get_project, get_project_tasks
+
     project = await get_project(project_id)
     if not project:
         raise HTTPException(404, "Project not found")
@@ -426,10 +463,12 @@ async def get_project_documents(project_id: str):
 @app.get("/api/projects/live")
 async def list_live_projects():
     from orchestrator.persistence import get_live_projects
+
     return await get_live_projects()
 
 
 # ── WebSocket Event Stream ─────────────────────────────────────────────────────
+
 
 @app.websocket("/ws/events")
 async def events_websocket(websocket: WebSocket):
@@ -442,6 +481,7 @@ async def events_websocket(websocket: WebSocket):
     _event_clients.add(websocket)
     try:
         from orchestrator.persistence import get_recent_events
+
         events = await get_recent_events(limit=50)
         for event in reversed(events):
             await websocket.send_json({"type": "event", "data": event})
@@ -455,6 +495,7 @@ async def events_websocket(websocket: WebSocket):
 
 # ── Chat API ───────────────────────────────────────────────────────────────────
 
+
 @app.post("/api/chat/send", dependencies=[Depends(get_api_key)])
 async def send_chat_message(message: dict):
     content = message.get("content", "").strip()
@@ -466,7 +507,7 @@ async def send_chat_message(message: dict):
     if target_agent != "ceo":
         raise HTTPException(400, "Only CEO is available")
 
-    from orchestrator.persistence import save_chat_message, log_event
+    from orchestrator.persistence import log_event, save_chat_message
 
     await save_chat_message(
         role="user",
@@ -526,9 +567,11 @@ async def _build_ceo_context() -> tuple[str, list[dict]]:
     market_summary = "  （暂无市场报告）"
     if market and market.get("opportunities_json"):
         try:
-            opps = json.loads(market["opportunities_json"]) if isinstance(
-                market["opportunities_json"], str
-            ) else market["opportunities_json"]
+            opps = (
+                json.loads(market["opportunities_json"])
+                if isinstance(market["opportunities_json"], str)
+                else market["opportunities_json"]
+            )
             if isinstance(opps, list):
                 top = opps[:3]
                 opp_lines = []
@@ -671,6 +714,17 @@ async def _execute_ceo_actions(reply: str) -> str:
         action_type = action.get("action")
         data = action.get("data", {})
 
+        ALLOWED_ACTIONS = {
+            "create_project",
+            "cancel_project",
+            "publish_project",
+            "update_project",
+            "pause_project",
+        }
+        if action_type not in ALLOWED_ACTIONS:
+            logger.warning(f"Unknown CEO action type: {action_type}")
+            continue
+
         if action_type == "create_project":
             await _action_create_project(data)
         elif action_type == "cancel_project":
@@ -756,35 +810,47 @@ async def _action_publish_project(data: dict) -> None:
 @app.get("/api/chat/history")
 async def get_chat_history_api(limit: int = 100):
     from orchestrator.persistence import get_chat_history
+
     return await get_chat_history(limit)
 
 
 # ── Events API ─────────────────────────────────────────────────────────────────
 
+
 @app.get("/api/events")
 async def get_events(limit: int = 200, event_type: str = ""):
     from orchestrator.persistence import get_recent_events
+
     return await get_recent_events(limit, event_type)
 
 
 # ── Finance API ────────────────────────────────────────────────────────────────
 
+
 @app.post("/api/finance/budget", dependencies=[Depends(get_api_key)])
 async def set_budget(budget: dict):
-    from orchestrator.persistence import set_budget as db_set_budget, log_event
+    from orchestrator.persistence import log_event
+    from orchestrator.persistence import set_budget as db_set_budget
 
     category = budget.get("category", "monthly")
     budget_type = budget.get("budget_type", "monthly")
     limit_usd = budget.get("budget_limit_usd", 0)
+    if not isinstance(limit_usd, (int, float)) or limit_usd < 0:
+        raise HTTPException(
+            status_code=400, detail="budget_limit_usd must be a non-negative number"
+        )
 
     await db_set_budget(category, budget_type, limit_usd)
-    await log_event("finance", "info", f"Budget set: {category} ${limit_usd}", source_agent="dashboard")
+    await log_event(
+        "finance", "info", f"Budget set: {category} ${limit_usd}", source_agent="dashboard"
+    )
     return {"status": "ok"}
 
 
 @app.get("/api/finance/summary")
 async def get_finance_summary(days: int = 30):
-    from orchestrator.persistence import get_usage_summary, get_active_budgets
+    from orchestrator.persistence import get_active_budgets, get_usage_summary
+
     summary = await get_usage_summary(days)
     budgets = await get_active_budgets()
     return {"usage": summary, "budgets": budgets}
@@ -793,12 +859,14 @@ async def get_finance_summary(days: int = 30):
 @app.get("/api/policy")
 async def get_policy():
     from orchestrator.persistence import get_company_policy
+
     return await get_company_policy()
 
 
 @app.post("/api/policy", dependencies=[Depends(get_api_key)])
 async def set_policy(policy: dict):
-    from orchestrator.persistence import set_company_policy, log_event
+    from orchestrator.persistence import log_event, set_company_policy
+
     await set_company_policy(policy)
     await log_event("policy", "info", "Company policy updated", source_agent="dashboard")
     return {"status": "ok"}
@@ -807,6 +875,7 @@ async def set_policy(policy: dict):
 @app.get("/api/decisions")
 async def list_decisions():
     from orchestrator.decision_gate import get_pending
+
     decisions = await get_pending()
     return [d.model_dump() for d in decisions]
 
@@ -814,6 +883,7 @@ async def list_decisions():
 @app.get("/api/decisions/history")
 async def get_decision_history(limit: int = 50):
     from orchestrator.persistence import get_decision_history
+
     return await get_decision_history(limit)
 
 
@@ -821,14 +891,17 @@ async def get_decision_history(limit: int = 50):
 async def respond_decision(decision_id: str, response: str = "", conditions: str = ""):
     from orchestrator.decision_gate import resolve
     from orchestrator.persistence import update_project_awaiting_decision
+
     result = await resolve(decision_id, response)
     if not result:
         raise HTTPException(404, "Decision not found")
 
     if conditions:
         result.context["conditions"] = conditions
-        from orchestrator.persistence import _get_engine
         from sqlalchemy import text
+
+        from orchestrator.persistence import _get_engine
+
         engine = _get_engine()
         async with engine.begin() as conn:
             await conn.execute(
@@ -852,14 +925,24 @@ async def respond_decision(decision_id: str, response: str = "", conditions: str
 @app.post("/api/projects/{project_id}/advance")
 async def advance_project(project_id: str):
     from orchestrator.persistence import get_project, update_project_phase
-    from shared.models import ProjectPhase
 
     project = await get_project(project_id)
     if not project:
         raise HTTPException(404, "Project not found")
 
-    phase_order = ["backlog", "scanning", "designing", "developing", "testing", "building", "publishing", "live"]
-    current_idx = phase_order.index(project.phase.value) if project.phase.value in phase_order else -1
+    phase_order = [
+        "backlog",
+        "scanning",
+        "designing",
+        "developing",
+        "testing",
+        "building",
+        "publishing",
+        "live",
+    ]
+    current_idx = (
+        phase_order.index(project.phase.value) if project.phase.value in phase_order else -1
+    )
 
     if current_idx < 0 or current_idx >= len(phase_order) - 1:
         return {"status": "error", "message": "Project is already at final phase"}
@@ -884,7 +967,6 @@ async def cancel_project(project_id: str):
 async def _apply_approved_decision(decision) -> None:
     from orchestrator.persistence import get_project, update_project_phase
     from orchestrator.task_queue import enqueue
-    from shared.models import ProjectPhase
 
     dtype = decision.decision_type.value
     pid = decision.project_id
@@ -906,7 +988,7 @@ async def _apply_approved_decision(decision) -> None:
 
 
 async def _apply_rejected_decision(decision) -> None:
-    from orchestrator.persistence import get_project, update_project_phase
+    from orchestrator.persistence import update_project_phase
 
     dtype = decision.decision_type.value
     pid = decision.project_id
@@ -924,6 +1006,7 @@ async def _apply_rejected_decision(decision) -> None:
 @app.get("/api/orchestrator/projects")
 async def list_orchestrator_projects():
     from orchestrator.persistence import get_all_projects
+
     projects = await get_all_projects()
     return [p.model_dump() for p in projects]
 
@@ -931,6 +1014,7 @@ async def list_orchestrator_projects():
 @app.get("/api/orchestrator/projects/{project_id}")
 async def get_orchestrator_project(project_id: str):
     from orchestrator.persistence import get_project
+
     project = await get_project(project_id)
     if not project:
         raise HTTPException(404, "Project not found")
@@ -939,7 +1023,8 @@ async def get_orchestrator_project(project_id: str):
 
 @app.get("/api/orchestrator/tasks")
 async def list_tasks(project_id: str = ""):
-    from orchestrator.persistence import get_pending_tasks, get_project_tasks, get_project
+    from orchestrator.persistence import get_pending_tasks, get_project, get_project_tasks
+
     if project_id:
         tasks = await get_project_tasks(project_id)
     else:
@@ -960,6 +1045,7 @@ async def list_tasks(project_id: str = ""):
 @app.post("/api/projects/{project_id}/pause", dependencies=[Depends(get_api_key)])
 async def pause_project(project_id: str):
     from orchestrator.persistence import update_project_phase
+
     await update_project_phase(project_id, "paused")
     return {"status": "paused"}
 
@@ -967,6 +1053,7 @@ async def pause_project(project_id: str):
 @app.post("/api/projects/{project_id}/resume", dependencies=[Depends(get_api_key)])
 async def resume_project(project_id: str):
     from orchestrator.persistence import get_project, update_project_phase
+
     project = await get_project(project_id)
     if not project:
         raise HTTPException(404, "Project not found")
@@ -976,9 +1063,11 @@ async def resume_project(project_id: str):
 
 # ── Layered Memory API ────────────────────────────────────────────────────────
 
+
 @app.get("/api/memory/{project_id}/recent")
 async def get_recent_memories(project_id: str, category: str = "", limit: int = 20):
     from shared.memory import get_memory_store
+
     store = get_memory_store()
     return store.get_recent(project_id, category=category or None, limit=limit)
 
@@ -988,6 +1077,7 @@ async def search_memories(q: str = "", category: str = "", limit: int = 10):
     if not q:
         raise HTTPException(400, "Query parameter 'q' is required")
     from shared.memory import get_memory_store
+
     store = get_memory_store()
     return store.search_long_term(q, category=category or None, limit=limit)
 
@@ -995,6 +1085,7 @@ async def search_memories(q: str = "", category: str = "", limit: int = 10):
 @app.get("/api/memory/lessons")
 async def get_all_lessons():
     from shared.memory import get_memory_store
+
     store = get_memory_store()
     return store.get_all_lessons()
 
@@ -1009,10 +1100,13 @@ if games_output.exists():
         name="games-preview",
     )
 
-app.mount("/", StaticFiles(directory=str(ROOT_DIR / "dashboard" / "web"), html=True), name="dashboard")
+app.mount(
+    "/", StaticFiles(directory=str(ROOT_DIR / "dashboard" / "web"), html=True), name="dashboard"
+)
 
 if __name__ == "__main__":
     import uvicorn
+
     _host = "127.0.0.1" if not _DASHBOARD_API_KEY else "0.0.0.0"
     if _DASHBOARD_API_KEY:
         logger.info("DASHBOARD_API_KEY configured — requiring X-API-Key on control-plane endpoints")
