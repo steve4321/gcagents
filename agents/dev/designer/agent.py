@@ -1,4 +1,5 @@
 """Game designer agent — generates GDD from proposals and plans mechanics."""
+
 from __future__ import annotations
 
 from loguru import logger
@@ -19,6 +20,7 @@ async def design_game(state: CompanyState) -> dict:
     gdd = await generate_gdd(proposal, config)
 
     from .mechanic_planner import plan_mechanics
+
     mechanics = await plan_mechanics(gdd)
     if mechanics:
         gdd["mechanics"] = mechanics

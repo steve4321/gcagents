@@ -1,4 +1,5 @@
 """Extract translatable strings from generated game code."""
+
 from __future__ import annotations
 
 import json
@@ -19,7 +20,7 @@ def extract_strings(game_dist_path: str | Path) -> dict[str, str]:
 
     for html_file in dist.glob("**/*.html"):
         content = html_file.read_text(encoding="utf-8", errors="ignore")
-        text_nodes = re.findall(r'>([^<]{2,})<', content)
+        text_nodes = re.findall(r">([^<]{2,})<", content)
         for text in text_nodes:
             text = text.strip()
             if text and not text.startswith(("{", "//", "/*", "<!")):
@@ -32,9 +33,8 @@ def extract_strings(game_dist_path: str | Path) -> dict[str, str]:
         js_strings = re.findall(r'["\']([A-Z][^"\']{2,})["\']', content)
         for text in js_strings:
             text = text.strip()
-            if (
-                any(c.isalpha() for c in text)
-                and not text.startswith(("http", "function", "var ", "let ", "const "))
+            if any(c.isalpha() for c in text) and not text.startswith(
+                ("http", "function", "var ", "let ", "const ")
             ):
                 key = f"str_{counter:03d}"
                 strings[key] = text

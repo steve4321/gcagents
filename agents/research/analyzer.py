@@ -4,6 +4,7 @@ Collects market signals, builds an analysis prompt with genre counts,
 cross-source agreement, and competition density, then calls LLM to
 identify the top 3 game opportunities.
 """
+
 from __future__ import annotations
 
 from collections import Counter
@@ -91,13 +92,17 @@ def _build_analysis_prompt(signals: list[MarketSignal], genre_counts: Counter) -
     for genre, count in top_genres:
         sources_list = genre_sources.get(genre, set())
         source_agreement = len(sources_list) / max(len(set(s.source for s in signals)), 1)
-        lines.append(f"- {genre}: {count} mentions (sources: {', '.join(sorted(sources_list))}, agreement: {source_agreement:.0%})")
+        lines.append(
+            f"- {genre}: {count} mentions (sources: {', '.join(sorted(sources_list))}, agreement: {source_agreement:.0%})"
+        )
 
     lines.append("")
     lines.append("## Cross-Source Genre Correlation")
     for genre, sources in sorted(genre_sources.items(), key=lambda x: -len(x[1]))[:8]:
         if len(sources) >= 2:
-            lines.append(f"- {genre}: confirmed by {len(sources)} sources ({', '.join(sorted(sources))})")
+            lines.append(
+                f"- {genre}: confirmed by {len(sources)} sources ({', '.join(sorted(sources))})"
+            )
 
     lines.append("")
     lines.append("## Competition Density")
@@ -118,8 +123,10 @@ def _build_analysis_prompt(signals: list[MarketSignal], genre_counts: Counter) -
             lines.append(f'- "{title}" found in {count} sources')
 
     lines.append("")
-    lines.append("Identify the best 3 game opportunities based on this data. "
-                 "Consider cross-source agreement, competition density, and trend direction.")
+    lines.append(
+        "Identify the best 3 game opportunities based on this data. "
+        "Consider cross-source agreement, competition density, and trend direction."
+    )
 
     return "\n".join(lines)
 

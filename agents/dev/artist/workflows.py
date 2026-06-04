@@ -129,7 +129,9 @@ UI_ELEMENT_WORKFLOW: dict = {
 }
 
 
-def build_workflow(template: dict, positive_prompt: str, negative_prompt: str, seed: int = 42) -> dict:
+def build_workflow(
+    template: dict, positive_prompt: str, negative_prompt: str, seed: int = 42
+) -> dict:
     wf = deepcopy(template)
     wf["2"]["inputs"]["text"] = positive_prompt
     wf["3"]["inputs"]["text"] = negative_prompt

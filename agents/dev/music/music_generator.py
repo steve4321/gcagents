@@ -1,4 +1,5 @@
 """Music generation for game projects."""
+
 from __future__ import annotations
 
 import json
@@ -102,9 +103,7 @@ async def generate_game_audio(
 # -- Suno API (optional primary backend) --
 
 
-async def _try_suno_generation(
-    genre: str, mood: str, audio_dir: Path, api_key: str
-) -> Path | None:
+async def _try_suno_generation(genre: str, mood: str, audio_dir: Path, api_key: str) -> Path | None:
     """Attempt Suno API generation. Returns bgm path on success, None on failure."""
     try:
         import httpx
@@ -164,7 +163,7 @@ def _generate_bgm_js(genre: str, mood: str) -> str:
     return f"""// Procedural BGM generated for {genre} game ({mood} mood)
 (function() {{
   var ctx = new (window.AudioContext || window.webkitAudioContext)();
-  var tempo = {config['tempo']};
+  var tempo = {config["tempo"]};
   var beatDur = 60 / tempo;
   var playing = false;
   var nextNote = 0;

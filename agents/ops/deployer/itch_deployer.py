@@ -1,9 +1,8 @@
 from __future__ import annotations
 
+import re
 import subprocess
 from pathlib import Path
-
-import re
 
 from loguru import logger
 
@@ -42,7 +41,8 @@ async def deploy_to_itch(state: CompanyState) -> dict:
 
         result = subprocess.run(
             [
-                "butler", "push",
+                "butler",
+                "push",
                 str(build_path),
                 f"{config.butler_username}/{slug}:{channel}",
             ],

@@ -3,6 +3,7 @@
 Each fetcher takes a SourceConfig and returns a list of MarketSignal objects.
 Sources are scanned in parallel via asyncio.gather().
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -15,7 +16,11 @@ import httpx
 from loguru import logger
 
 from shared.config import SourceConfig
-from shared.constants import APPSTORE_REQUEST_INTERVAL, DEFAULT_SOURCE_SCORE, REDDIT_REQUEST_INTERVAL
+from shared.constants import (
+    APPSTORE_REQUEST_INTERVAL,
+    DEFAULT_SOURCE_SCORE,
+    REDDIT_REQUEST_INTERVAL,
+)
 from shared.models import MarketSignal
 
 
@@ -30,20 +35,22 @@ async def fetch_itch_rss(config: SourceConfig) -> list[MarketSignal]:
 
                 for entry in feed.entries[:20]:
                     tags = [tag.term for tag in getattr(entry, "tags", [])]
-                    signals.append(MarketSignal(
-                        source="itch_rss",
-                        signal_type="new_game",
-                        genre=tags[0] if tags else None,
-                        title=entry.title,
-                        data={
-                            "url": entry.link,
-                            "tags": tags,
-                            "published": entry.get("published", ""),
-                            "summary": entry.get("summary", ""),
-                        },
-                        score=_score_itch_entry(entry, tags),
-                        captured_at=datetime.now(),
-                    ))
+                    signals.append(
+                        MarketSignal(
+                            source="itch_rss",
+                            signal_type="new_game",
+                            genre=tags[0] if tags else None,
+                            title=entry.title,
+                            data={
+                                "url": entry.link,
+                                "tags": tags,
+                                "published": entry.get("published", ""),
+                                "summary": entry.get("summary", ""),
+                            },
+                            score=_score_itch_entry(entry, tags),
+                            captured_at=datetime.now(),
+                        )
+                    )
             except (httpx.HTTPError, httpx.TimeoutException, ValueError, KeyError, TypeError) as e:
                 logger.error(f"itch.io RSS fetch failed for {feed_url}: {e}")
 
@@ -61,15 +68,17 @@ async def fetch_statkraken(config: SourceConfig) -> list[MarketSignal]:
                 items = resp.json().get("data", resp.json().get("items", []))
 
                 for item in items[:20]:
-                    signals.append(MarketSignal(
-                        source=f"statkraken_{platform}",
-                        signal_type="trending",
-                        genre=item.get("category", item.get("genre")),
-                        title=item.get("title", item.get("name", "Unknown")),
-                        data=item,
-                        score=float(item.get("rating", item.get("score", 0))),
-                        captured_at=datetime.now(),
-                    ))
+                    signals.append(
+                        MarketSignal(
+                            source=f"statkraken_{platform}",
+                            signal_type="trending",
+                            genre=item.get("category", item.get("genre")),
+                            title=item.get("title", item.get("name", "Unknown")),
+                            data=item,
+                            score=float(item.get("rating", item.get("score", 0))),
+                            captured_at=datetime.now(),
+                        )
+                    )
             except (httpx.HTTPError, httpx.TimeoutException, ValueError, KeyError, TypeError) as e:
                 logger.error(f"StatKraken fetch failed for {platform}: {e}")
 
@@ -88,20 +97,22 @@ async def fetch_google_play(config: SourceConfig) -> list[MarketSignal]:
                 num=20,
             )
             for app in result:
-                signals.append(MarketSignal(
-                    source="google_play",
-                    signal_type="chart",
-                    genre=category.replace("GAME_", "").lower(),
-                    title=app["title"],
-                    data={
-                        "package": app["appId"],
-                        "score": app.get("score"),
-                        "installs": app.get("installs", ""),
-                        "genre": app.get("genre", ""),
-                    },
-                    score=float(app.get("score", 0)) / 5.0,
-                    captured_at=datetime.now(),
-                ))
+                signals.append(
+                    MarketSignal(
+                        source="google_play",
+                        signal_type="chart",
+                        genre=category.replace("GAME_", "").lower(),
+                        title=app["title"],
+                        data={
+                            "package": app["appId"],
+                            "score": app.get("score"),
+                            "installs": app.get("installs", ""),
+                            "genre": app.get("genre", ""),
+                        },
+                        score=float(app.get("score", 0)) / 5.0,
+                        captured_at=datetime.now(),
+                    )
+                )
             await asyncio.sleep(1.0 / config.throttle_per_second)
         except (httpx.HTTPError, httpx.TimeoutException, ValueError, KeyError, TypeError) as e:
             logger.error(f"Google Play scrape failed for {category}: {e}")
@@ -123,20 +134,22 @@ async def fetch_reddit(config: SourceConfig) -> list[MarketSignal]:
 
                 for post in posts:
                     d = post["data"]
-                    signals.append(MarketSignal(
-                        source=f"reddit_{subreddit}",
-                        signal_type="community_hot",
-                        genre=subreddit,
-                        title=d["title"],
-                        data={
-                            "url": f"https://reddit.com{d['permalink']}",
-                            "score": d["score"],
-                            "num_comments": d["num_comments"],
-                            "selftext": d.get("selftext", "")[:500],
-                        },
-                        score=min(d["score"] / 1000.0, 1.0),
-                        captured_at=datetime.now(),
-                    ))
+                    signals.append(
+                        MarketSignal(
+                            source=f"reddit_{subreddit}",
+                            signal_type="community_hot",
+                            genre=subreddit,
+                            title=d["title"],
+                            data={
+                                "url": f"https://reddit.com{d['permalink']}",
+                                "score": d["score"],
+                                "num_comments": d["num_comments"],
+                                "selftext": d.get("selftext", "")[:500],
+                            },
+                            score=min(d["score"] / 1000.0, 1.0),
+                            captured_at=datetime.now(),
+                        )
+                    )
                 await asyncio.sleep(REDDIT_REQUEST_INTERVAL)
             except (httpx.HTTPError, httpx.TimeoutException, ValueError, KeyError, TypeError) as e:
                 logger.error(f"Reddit fetch failed for r/{subreddit}: {e}")
@@ -161,17 +174,23 @@ async def fetch_app_store(config: SourceConfig) -> list[MarketSignal]:
                 entries = data.get("feed", {}).get("entry", [])
                 for entry in entries[:20]:
                     entry_data = entry.get("im:name", entry.get("title", {}))
-                    title = entry_data.get("label", "") if isinstance(entry_data, dict) else str(entry_data)
+                    title = (
+                        entry_data.get("label", "")
+                        if isinstance(entry_data, dict)
+                        else str(entry_data)
+                    )
 
-                    signals.append(MarketSignal(
-                        source="app_store",
-                        signal_type="top_chart",
-                        genre="casual",
-                        title=title,
-                        data={"raw": entry},
-                        score=DEFAULT_SOURCE_SCORE,
-                        captured_at=datetime.now(),
-                    ))
+                    signals.append(
+                        MarketSignal(
+                            source="app_store",
+                            signal_type="top_chart",
+                            genre="casual",
+                            title=title,
+                            data={"raw": entry},
+                            score=DEFAULT_SOURCE_SCORE,
+                            captured_at=datetime.now(),
+                        )
+                    )
                 await asyncio.sleep(APPSTORE_REQUEST_INTERVAL)
             except (httpx.HTTPError, httpx.TimeoutException, ValueError, KeyError, TypeError) as e:
                 logger.error(f"App Store fetch failed for {endpoint_key}: {e}")
@@ -200,20 +219,22 @@ async def fetch_itch_api(config: SourceConfig) -> list[MarketSignal]:
                 for game in games[:15]:
                     views = game.get("views", 0) or 0
                     score = min(views / 10000.0, 1.0) if views > 0 else 0.1
-                    signals.append(MarketSignal(
-                        source="itch_api",
-                        signal_type="popular_tag",
-                        genre=tag,
-                        title=game.get("title", game.get("name", "Unknown")),
-                        data={
-                            "url": game.get("url", ""),
-                            "tags": [tag],
-                            "views": views,
-                            "price": game.get("price", 0),
-                        },
-                        score=score,
-                        captured_at=datetime.now(),
-                    ))
+                    signals.append(
+                        MarketSignal(
+                            source="itch_api",
+                            signal_type="popular_tag",
+                            genre=tag,
+                            title=game.get("title", game.get("name", "Unknown")),
+                            data={
+                                "url": game.get("url", ""),
+                                "tags": [tag],
+                                "views": views,
+                                "price": game.get("price", 0),
+                            },
+                            score=score,
+                            captured_at=datetime.now(),
+                        )
+                    )
             except (httpx.HTTPError, httpx.TimeoutException, ValueError, KeyError, TypeError) as e:
                 logger.error(f"itch.io API fetch failed for tag '{tag}': {e}")
 
@@ -237,20 +258,26 @@ async def fetch_plugplay(config: SourceConfig) -> list[MarketSignal]:
             for game in games[:25]:
                 play_count = game.get("play_count", game.get("plays", 0)) or 0
                 rating = game.get("rating", game.get("score", 0)) or 0
-                score = min((play_count / 5000.0) + (float(rating) / 5.0) * 0.3, 1.0) if play_count or rating else 0.2
-                signals.append(MarketSignal(
-                    source="plugplay",
-                    signal_type="trending",
-                    genre=game.get("category", game.get("genre")),
-                    title=game.get("title", game.get("name", "Unknown")),
-                    data={
-                        "url": game.get("url", ""),
-                        "play_count": play_count,
-                        "rating": rating,
-                    },
-                    score=score,
-                    captured_at=datetime.now(),
-                ))
+                score = (
+                    min((play_count / 5000.0) + (float(rating) / 5.0) * 0.3, 1.0)
+                    if play_count or rating
+                    else 0.2
+                )
+                signals.append(
+                    MarketSignal(
+                        source="plugplay",
+                        signal_type="trending",
+                        genre=game.get("category", game.get("genre")),
+                        title=game.get("title", game.get("name", "Unknown")),
+                        data={
+                            "url": game.get("url", ""),
+                            "play_count": play_count,
+                            "rating": rating,
+                        },
+                        score=score,
+                        captured_at=datetime.now(),
+                    )
+                )
         except (httpx.HTTPError, httpx.TimeoutException, ValueError, KeyError, TypeError) as e:
             logger.error(f"PlugPlay fetch failed: {e}")
 
@@ -264,8 +291,21 @@ async def fetch_x_trends(config: SourceConfig) -> list[MarketSignal]:
         return []
 
     signals = []
-    gaming_keywords = {"game", "gaming", "indie", "steam", "playstation", "xbox", "nintendo",
-                       "esport", "twitch", "roblox", "fortnite", "mobile game", "web game"}
+    gaming_keywords = {
+        "game",
+        "gaming",
+        "indie",
+        "steam",
+        "playstation",
+        "xbox",
+        "nintendo",
+        "esport",
+        "twitch",
+        "roblox",
+        "fortnite",
+        "mobile game",
+        "web game",
+    }
     async with httpx.AsyncClient() as client:
         for woeid in getattr(config, "gaming_woeids", [1]):
             try:
@@ -275,7 +315,9 @@ async def fetch_x_trends(config: SourceConfig) -> list[MarketSignal]:
                 resp.raise_for_status()
                 trends_data = resp.json().get("data", resp.json())
 
-                trends_list = trends_data if isinstance(trends_data, list) else trends_data.get("trends", [])
+                trends_list = (
+                    trends_data if isinstance(trends_data, list) else trends_data.get("trends", [])
+                )
 
                 for trend in trends_list[:30]:
                     name = trend.get("trend", {}).get("name", trend.get("name", ""))
@@ -285,20 +327,25 @@ async def fetch_x_trends(config: SourceConfig) -> list[MarketSignal]:
                     if not any(kw in name_lower for kw in gaming_keywords):
                         continue
 
-                    tweet_volume = trend.get("trend", {}).get("tweet_volume", trend.get("tweet_volume", 0)) or 0
+                    tweet_volume = (
+                        trend.get("trend", {}).get("tweet_volume", trend.get("tweet_volume", 0))
+                        or 0
+                    )
                     score = min(tweet_volume / 50000.0, 1.0) if tweet_volume > 0 else 0.2
-                    signals.append(MarketSignal(
-                        source="x_trends",
-                        signal_type="social_trend",
-                        genre="gaming",
-                        title=name,
-                        data={
-                            "tweet_volume": tweet_volume,
-                            "woeid": woeid,
-                        },
-                        score=score,
-                        captured_at=datetime.now(),
-                    ))
+                    signals.append(
+                        MarketSignal(
+                            source="x_trends",
+                            signal_type="social_trend",
+                            genre="gaming",
+                            title=name,
+                            data={
+                                "tweet_volume": tweet_volume,
+                                "woeid": woeid,
+                            },
+                            score=score,
+                            captured_at=datetime.now(),
+                        )
+                    )
             except (httpx.HTTPError, httpx.TimeoutException, ValueError, KeyError, TypeError) as e:
                 logger.error(f"X trends fetch failed for woeid {woeid}: {e}")
 
@@ -307,7 +354,15 @@ async def fetch_x_trends(config: SourceConfig) -> list[MarketSignal]:
 
 async def fetch_steam_spy(config: SourceConfig) -> list[MarketSignal]:
     signals = []
-    tags_to_query = config.tags or ["indie", "casual", "puzzle", "action", "strategy", "simulation", "arcade"]
+    tags_to_query = config.tags or [
+        "indie",
+        "casual",
+        "puzzle",
+        "action",
+        "strategy",
+        "simulation",
+        "arcade",
+    ]
     async with httpx.AsyncClient() as client:
         for tag in tags_to_query:
             try:
@@ -328,22 +383,24 @@ async def fetch_steam_spy(config: SourceConfig) -> list[MarketSignal]:
 
                     genre_raw = app.get("genre", "")
                     genre = genre_raw.split(",")[0].strip().lower() if genre_raw else tag
-                    signals.append(MarketSignal(
-                        source="steam_spy",
-                        signal_type="steam_popularity",
-                        genre=genre,
-                        title=app.get("name", "Unknown"),
-                        data={
-                            "app_id": app_id,
-                            "positive": positive,
-                            "negative": negative,
-                            "owners": app.get("owners", ""),
-                            "players_2weeks": players_2w,
-                            "genre_raw": genre_raw,
-                        },
-                        score=score,
-                        captured_at=datetime.now(),
-                    ))
+                    signals.append(
+                        MarketSignal(
+                            source="steam_spy",
+                            signal_type="steam_popularity",
+                            genre=genre,
+                            title=app.get("name", "Unknown"),
+                            data={
+                                "app_id": app_id,
+                                "positive": positive,
+                                "negative": negative,
+                                "owners": app.get("owners", ""),
+                                "players_2weeks": players_2w,
+                                "genre_raw": genre_raw,
+                            },
+                            score=score,
+                            captured_at=datetime.now(),
+                        )
+                    )
                 await asyncio.sleep(1)
             except (httpx.HTTPError, httpx.TimeoutException, ValueError, KeyError, TypeError) as e:
                 logger.error(f"SteamSpy fetch failed for tag '{tag}': {e}")
@@ -371,26 +428,30 @@ async def fetch_youtube_trending(config: SourceConfig) -> list[MarketSignal]:
                             break
 
                     score = min(views / 100000.0, 1.0) if views > 0 else 0.2
-                    signals.append(MarketSignal(
-                        source="youtube_trending",
-                        signal_type="video_trend",
-                        genre="gaming",
-                        title=entry.get("title", "Unknown"),
-                        data={
-                            "url": entry.get("link", ""),
-                            "published": entry.get("published", ""),
-                            "views": views,
-                        },
-                        score=score,
-                        captured_at=datetime.now(),
-                    ))
+                    signals.append(
+                        MarketSignal(
+                            source="youtube_trending",
+                            signal_type="video_trend",
+                            genre="gaming",
+                            title=entry.get("title", "Unknown"),
+                            data={
+                                "url": entry.get("link", ""),
+                                "published": entry.get("published", ""),
+                                "views": views,
+                            },
+                            score=score,
+                            captured_at=datetime.now(),
+                        )
+                    )
             except (httpx.HTTPError, httpx.TimeoutException, ValueError, KeyError, TypeError) as e:
                 logger.error(f"YouTube trending fetch failed for {feed_url}: {e}")
 
         search_terms = config.search_terms or ["indie game", "web game", "html5 game"]
         for term in search_terms:
             try:
-                search_url = f"https://www.youtube.com/results?search_query={term}&sp=EgIQAQ%253D%253D"
+                search_url = (
+                    f"https://www.youtube.com/results?search_query={term}&sp=EgIQAQ%253D%253D"
+                )
                 resp = await client.get(search_url, timeout=30, follow_redirects=True)
                 html_text = resp.text
 
@@ -400,18 +461,20 @@ async def fetch_youtube_trending(config: SourceConfig) -> list[MarketSignal]:
                 for i, title in enumerate(video_titles[:10]):
                     views = int(view_counts[i]) if i < len(view_counts) else 0
                     score = min(views / 500000.0, 1.0) if views > 0 else 0.15
-                    signals.append(MarketSignal(
-                        source="youtube_trending",
-                        signal_type="video_trend",
-                        genre="gaming",
-                        title=title,
-                        data={
-                            "search_term": term,
-                            "views": views,
-                        },
-                        score=score,
-                        captured_at=datetime.now(),
-                    ))
+                    signals.append(
+                        MarketSignal(
+                            source="youtube_trending",
+                            signal_type="video_trend",
+                            genre="gaming",
+                            title=title,
+                            data={
+                                "search_term": term,
+                                "views": views,
+                            },
+                            score=score,
+                            captured_at=datetime.now(),
+                        )
+                    )
             except (httpx.HTTPError, httpx.TimeoutException, ValueError, KeyError, TypeError) as e:
                 logger.error(f"YouTube search fetch failed for '{term}': {e}")
 
@@ -428,19 +491,21 @@ async def fetch_product_hunt(config: SourceConfig) -> list[MarketSignal]:
                 feed = feedparser.parse(resp.text)
 
                 for entry in feed.entries[:20]:
-                    signals.append(MarketSignal(
-                        source="product_hunt",
-                        signal_type="new_product",
-                        genre="gaming",
-                        title=entry.get("title", "Unknown"),
-                        data={
-                            "url": entry.get("link", ""),
-                            "published": entry.get("published", ""),
-                            "summary": entry.get("summary", ""),
-                        },
-                        score=DEFAULT_SOURCE_SCORE,
-                        captured_at=datetime.now(),
-                    ))
+                    signals.append(
+                        MarketSignal(
+                            source="product_hunt",
+                            signal_type="new_product",
+                            genre="gaming",
+                            title=entry.get("title", "Unknown"),
+                            data={
+                                "url": entry.get("link", ""),
+                                "published": entry.get("published", ""),
+                                "summary": entry.get("summary", ""),
+                            },
+                            score=DEFAULT_SOURCE_SCORE,
+                            captured_at=datetime.now(),
+                        )
+                    )
             except (httpx.HTTPError, httpx.TimeoutException, ValueError, KeyError, TypeError) as e:
                 logger.error(f"ProductHunt fetch failed for {feed_url}: {e}")
 
@@ -456,7 +521,7 @@ async def fetch_tiktok_tags(config: SourceConfig) -> list[MarketSignal]:
                 url = f"{config.base_url}/tag/{tag}"
                 headers = {
                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                                  "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 }
                 resp = await client.get(url, headers=headers, timeout=30)
                 html_text = resp.text
@@ -470,28 +535,32 @@ async def fetch_tiktok_tags(config: SourceConfig) -> list[MarketSignal]:
                 if unique_titles:
                     for title in unique_titles:
                         score = min(views / 1000000.0, 1.0) if views > 0 else 0.3
-                        signals.append(MarketSignal(
+                        signals.append(
+                            MarketSignal(
+                                source="tiktok_tags",
+                                signal_type="social_trend",
+                                genre="gaming",
+                                title=title,
+                                data={
+                                    "tag": tag,
+                                    "views": views,
+                                },
+                                score=score,
+                                captured_at=datetime.now(),
+                            )
+                        )
+                else:
+                    signals.append(
+                        MarketSignal(
                             source="tiktok_tags",
                             signal_type="social_trend",
                             genre="gaming",
-                            title=title,
-                            data={
-                                "tag": tag,
-                                "views": views,
-                            },
-                            score=score,
+                            title=f"#{tag} trending",
+                            data={"tag": tag, "views": views},
+                            score=0.3,
                             captured_at=datetime.now(),
-                        ))
-                else:
-                    signals.append(MarketSignal(
-                        source="tiktok_tags",
-                        signal_type="social_trend",
-                        genre="gaming",
-                        title=f"#{tag} trending",
-                        data={"tag": tag, "views": views},
-                        score=0.3,
-                        captured_at=datetime.now(),
-                    ))
+                        )
+                    )
             except (httpx.HTTPError, httpx.TimeoutException, ValueError, KeyError, TypeError) as e:
                 logger.error(f"TikTok tag fetch failed for #{tag}: {e}")
 
@@ -499,7 +568,15 @@ async def fetch_tiktok_tags(config: SourceConfig) -> list[MarketSignal]:
 
 
 def _score_itch_entry(entry, tags: list[str]) -> float:
-    hot_genres = {"puzzle", "idle", "clicker", "platformer", "tower-defense", "roguelike", "match-3"}
+    hot_genres = {
+        "puzzle",
+        "idle",
+        "clicker",
+        "platformer",
+        "tower-defense",
+        "roguelike",
+        "match-3",
+    }
     tag_match = len(set(t.lower() for t in tags) & hot_genres) / max(len(hot_genres), 1)
     return min(tag_match + 0.2, 1.0)
 

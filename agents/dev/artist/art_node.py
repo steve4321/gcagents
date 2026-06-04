@@ -15,6 +15,7 @@ async def generate_art(state: CompanyState) -> dict:
 
     try:
         from agents.dev.artist.art_agent import generate_art as _generate_art_impl
+
         result = await _generate_art_impl(state)
 
         updated_gdd = state.gdd

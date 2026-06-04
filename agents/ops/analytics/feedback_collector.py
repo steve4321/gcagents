@@ -13,7 +13,6 @@ from orchestrator.persistence import (
 from shared.config import load_config
 from shared.llm_client import llm
 
-
 _FEEDBACK_CATEGORIES = ["bug", "feature", "praise", "question", "other"]
 
 _CATEGORIZE_PROMPT = """You are categorizing game feedback from players. Given a comment,
@@ -57,13 +56,15 @@ def _parse_itch_comments(html: str, base_url: str) -> list[dict]:
         if not text or not post_id:
             continue
 
-        comments.append({
-            "post_id": str(post_id),
-            "author": author,
-            "text": text[:5000],
-            "posted_at": posted_at,
-            "vote_count": vote_count,
-        })
+        comments.append(
+            {
+                "post_id": str(post_id),
+                "author": author,
+                "text": text[:5000],
+                "posted_at": posted_at,
+                "vote_count": vote_count,
+            }
+        )
 
     return comments
 
@@ -119,7 +120,9 @@ async def collect_feedback() -> dict:
             logger.info(f"Found {len(comments)} comments on {project['name']}")
 
             for comment in comments:
-                category, reason, summary = await _categorize_feedback(comment["text"], config, project_name=project['name'])
+                category, reason, summary = await _categorize_feedback(
+                    comment["text"], config, project_name=project["name"]
+                )
                 saved = await save_feedback(
                     project_id=project_id,
                     post_id=comment["post_id"],
@@ -128,7 +131,9 @@ async def collect_feedback() -> dict:
                     posted_at=comment["posted_at"],
                     vote_count=comment["vote_count"],
                     category=category,
-                    ai_analysis=json.dumps({"reason": reason, "summary": summary}, ensure_ascii=False),
+                    ai_analysis=json.dumps(
+                        {"reason": reason, "summary": summary}, ensure_ascii=False
+                    ),
                 )
                 if saved:
                     total_saved += 1

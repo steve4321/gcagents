@@ -1,8 +1,10 @@
 """Programmatic checks for generated web games via headless Playwright."""
+
 from __future__ import annotations
 
 from pathlib import Path
 
+from loguru import logger
 from playwright.async_api import Page
 
 
@@ -27,12 +29,7 @@ async def check_canvas_renders(page: Page) -> dict:
         return {"name": "canvas_renders", "passed": False, "reason": "no canvas"}
     width = await canvas.get_attribute("width")
     height = await canvas.get_attribute("height")
-    has_size = (
-        width is not None
-        and height is not None
-        and int(width) > 0
-        and int(height) > 0
-    )
+    has_size = width is not None and height is not None and int(width) > 0 and int(height) > 0
     return {"name": "canvas_renders", "passed": has_size, "width": width, "height": height}
 
 
@@ -80,26 +77,41 @@ async def check_score_system(page: Page) -> dict:
     """Check if game responds to interaction via __TEST__ interface or canvas pixel changes."""
     test_state = None
     try:
-        test_state = await page.evaluate("() => window.__TEST__ && window.__TEST__.state ? window.__TEST__.state() : null")
-    except Exception:
-        pass
+        test_state = await page.evaluate(
+            "() => window.__TEST__ && window.__TEST__.state ? window.__TEST__.state() : null"
+        )
+    except (RuntimeError, TimeoutError) as e:
+        logger.debug(f"Score system check evaluate skipped: {e}")
 
     if test_state and isinstance(test_state, dict):
         canvas = await page.query_selector("canvas")
         if canvas:
             box = await canvas.bounding_box()
             if box:
-                await page.mouse.click(box["x"] + box["width"] * 0.5, box["y"] + box["height"] * 0.5)
+                await page.mouse.click(
+                    box["x"] + box["width"] * 0.5, box["y"] + box["height"] * 0.5
+                )
                 await page.wait_for_timeout(800)
                 for _ in range(2):
-                    await page.mouse.click(box["x"] + box["width"] * 0.5, box["y"] + box["height"] * 0.5)
+                    await page.mouse.click(
+                        box["x"] + box["width"] * 0.5, box["y"] + box["height"] * 0.5
+                    )
                     await page.wait_for_timeout(400)
         try:
-            after_state = await page.evaluate("() => window.__TEST__ && window.__TEST__.state ? window.__TEST__.state() : null")
-        except Exception:
+            after_state = await page.evaluate(
+                "() => window.__TEST__ && window.__TEST__.state ? window.__TEST__.state() : null"
+            )
+        except (RuntimeError, TimeoutError) as e:
+            logger.debug(f"Score system after_state evaluate skipped: {e}")
             after_state = None
         changed = after_state is not None and after_state != test_state
-        return {"name": "score_system", "passed": changed, "method": "__TEST__", "state_before": str(test_state)[:100], "state_after": str(after_state)[:100] if after_state else None}
+        return {
+            "name": "score_system",
+            "passed": changed,
+            "method": "__TEST__",
+            "state_before": str(test_state)[:100],
+            "state_after": str(after_state)[:100] if after_state else None,
+        }
 
     canvas = await page.query_selector("canvas")
     if not canvas:
@@ -124,12 +136,17 @@ async def check_score_system(page: Page) -> dict:
     else:
         changed = False
 
-    return {"name": "score_system", "passed": changed, "method": "pixel_diff", "pixels_changed": changed}
+    return {
+        "name": "score_system",
+        "passed": changed,
+        "method": "pixel_diff",
+        "pixels_changed": changed,
+    }
 
 
 def check_complexity_score(game_dir: str | Path) -> dict:
     """Verify game meets minimum complexity threshold."""
-    from shared.complexity import score_code, MIN_PASSING_SCORE
+    from shared.complexity import MIN_PASSING_SCORE, score_code
 
     game_path = Path(game_dir) if not isinstance(game_dir, Path) else game_dir
     score, metrics = score_code(game_path)

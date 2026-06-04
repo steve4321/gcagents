@@ -1,4 +1,5 @@
 """Per-project art style configuration for consistent visual identity."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

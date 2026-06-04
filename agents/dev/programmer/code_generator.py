@@ -57,7 +57,9 @@ Additional requirements:
 """
 
 
-def _read_existing_source(project_dir: Path, max_chars: int = MAX_SOURCE_CHARS_IN_PROMPT) -> dict[str, str]:
+def _read_existing_source(
+    project_dir: Path, max_chars: int = MAX_SOURCE_CHARS_IN_PROMPT
+) -> dict[str, str]:
     """Read existing .ts source files from project_dir/src/ for inclusion in retry prompt."""
     files: dict[str, str] = {}
     total = 0
@@ -71,7 +73,13 @@ def _read_existing_source(project_dir: Path, max_chars: int = MAX_SOURCE_CHARS_I
     return files
 
 
-async def generate_game_code(gdd: dict, project_dir: Path, config: AppConfig, build_error: str = "", art_assets_path: str = "") -> Path:
+async def generate_game_code(
+    gdd: dict,
+    project_dir: Path,
+    config: AppConfig,
+    build_error: str = "",
+    art_assets_path: str = "",
+) -> Path:
     logger.info(f"Generating Phaser 4 game code for: {gdd.get('title', 'unknown')}")
 
     project_dir.mkdir(parents=True, exist_ok=True)
@@ -89,15 +97,21 @@ async def generate_game_code(gdd: dict, project_dir: Path, config: AppConfig, bu
 
     mechanics = gdd.get("mechanics")
     if mechanics and not build_error:
-        code_path = await _generate_by_mechanics(gdd, project_dir, config, model, max_tokens, art_assets_path)
+        code_path = await _generate_by_mechanics(
+            gdd, project_dir, config, model, max_tokens, art_assets_path
+        )
     else:
-        code_path = await _generate_all_at_once(gdd, project_dir, config, model, max_tokens, build_error, art_assets_path)
+        code_path = await _generate_all_at_once(
+            gdd, project_dir, config, model, max_tokens, build_error, art_assets_path
+        )
 
     build_err = _install_and_build(code_path)
     self_verify_attempt = 0
     while build_err and self_verify_attempt < MAX_SELF_VERIFY_RETRIES:
         self_verify_attempt += 1
-        logger.warning(f"Self-verify build failed (attempt {self_verify_attempt}/{MAX_SELF_VERIFY_RETRIES}): {build_err[:200]}")
+        logger.warning(
+            f"Self-verify build failed (attempt {self_verify_attempt}/{MAX_SELF_VERIFY_RETRIES}): {build_err[:200]}"
+        )
 
         existing_files = _read_existing_source(code_path)
         existing_block = ""
@@ -109,19 +123,28 @@ async def generate_game_code(gdd: dict, project_dir: Path, config: AppConfig, bu
 
         messages = [
             {"role": "system", "content": PROGRAMMER_SYSTEM_PROMPT},
-            {"role": "user", "content": f"""Build FAILED with this error:
+            {
+                "role": "user",
+                "content": f"""Build FAILED with this error:
 
 {build_err[:TRUNC_LLM_PROMPT_ERROR]}
 {existing_block}
 
-Fix the TypeScript/build errors. Return a JSON object with ONLY the files you modified."""},
+Fix the TypeScript/build errors. Return a JSON object with ONLY the files you modified.""",
+            },
         ]
         response = await llm.chat_completion(
-            model=model, messages=messages, temperature=0.2, max_tokens=8192,
-            agent_name="programmer", project_name=gdd.get("title", "unknown"),
+            model=model,
+            messages=messages,
+            temperature=0.2,
+            max_tokens=8192,
+            agent_name="programmer",
+            project_name=gdd.get("title", "unknown"),
         )
         files = _parse_code_files(response[0])
         for fp, content in files.items():
+            if not _validate_file_path(code_path, fp):
+                continue
             full_path = code_path / fp
             full_path.parent.mkdir(parents=True, exist_ok=True)
             full_path.write_text(content, encoding="utf-8")
@@ -129,13 +152,17 @@ Fix the TypeScript/build errors. Return a JSON object with ONLY the files you mo
         build_err = _install_and_build(code_path)
 
     if build_err:
-        logger.error(f"Build still failing after {MAX_SELF_VERIFY_RETRIES} self-verify attempts: {build_err[:200]}")
+        logger.error(
+            f"Build still failing after {MAX_SELF_VERIFY_RETRIES} self-verify attempts: {build_err[:200]}"
+        )
 
     runtime_err = _runtime_verify(code_path)
     runtime_attempt = 0
     while runtime_err and runtime_attempt < MAX_SELF_VERIFY_RETRIES:
         runtime_attempt += 1
-        logger.warning(f"Self-verify runtime failed (attempt {runtime_attempt}): {runtime_err[:200]}")
+        logger.warning(
+            f"Self-verify runtime failed (attempt {runtime_attempt}): {runtime_err[:200]}"
+        )
 
         existing_files = _read_existing_source(code_path)
         existing_block = ""
@@ -147,20 +174,29 @@ Fix the TypeScript/build errors. Return a JSON object with ONLY the files you mo
 
         messages = [
             {"role": "system", "content": PROGRAMMER_SYSTEM_PROMPT},
-            {"role": "user", "content": f"""The game builds successfully but FAILS at runtime:
+            {
+                "role": "user",
+                "content": f"""The game builds successfully but FAILS at runtime:
 
 {runtime_err[:TRUNC_LLM_PROMPT_ERROR]}
 {existing_block}
 
 The HTML template has `<div id="game-container"></div>`. Your Phaser config MUST use `parent: 'game-container'`.
-Fix the runtime errors. Return a JSON object with ONLY the files you modified."""},
+Fix the runtime errors. Return a JSON object with ONLY the files you modified.""",
+            },
         ]
         response = await llm.chat_completion(
-            model=model, messages=messages, temperature=0.2, max_tokens=8192,
-            agent_name="programmer", project_name=gdd.get("title", "unknown"),
+            model=model,
+            messages=messages,
+            temperature=0.2,
+            max_tokens=8192,
+            agent_name="programmer",
+            project_name=gdd.get("title", "unknown"),
         )
         files = _parse_code_files(response[0])
         for fp, content in files.items():
+            if not _validate_file_path(code_path, fp):
+                continue
             full_path = code_path / fp
             full_path.parent.mkdir(parents=True, exist_ok=True)
             full_path.write_text(content, encoding="utf-8")
@@ -175,7 +211,12 @@ Fix the runtime errors. Return a JSON object with ONLY the files you modified.""
 
 
 async def _generate_by_mechanics(
-    gdd: dict, project_dir: Path, config: AppConfig, model: str, max_tokens: int, art_assets_path: str = "",
+    gdd: dict,
+    project_dir: Path,
+    config: AppConfig,
+    model: str,
+    max_tokens: int,
+    art_assets_path: str = "",
 ) -> Path:
     mechanics = gdd["mechanics"]
     game_title = gdd.get("title", "game")
@@ -185,11 +226,18 @@ async def _generate_by_mechanics(
 
     for i, mechanic in enumerate(mechanics):
         dep_names = mechanic.get("dependencies", [])
-        relevant_existing = {k: v for k, v in accumulated_files.items()
-                             if any(d in k.lower().replace("/", "_").replace(".", "_") for d in dep_names)}
-        existing_summary = "\n".join(
-            f"- {path} ({len(content)} chars)" for path, content in relevant_existing.items()
-        ) if relevant_existing else "None yet."
+        relevant_existing = {
+            k: v
+            for k, v in accumulated_files.items()
+            if any(d in k.lower().replace("/", "_").replace(".", "_") for d in dep_names)
+        }
+        existing_summary = (
+            "\n".join(
+                f"- {path} ({len(content)} chars)" for path, content in relevant_existing.items()
+            )
+            if relevant_existing
+            else "None yet."
+        )
 
         art_instruction = ""
         if art_assets_path and i == 0:
@@ -201,8 +249,8 @@ In game scenes, use the loaded image sprites instead of placeholder shapes.
         mechanic_prompt = f"""You are building a Phaser 4 + TypeScript game incrementally, mechanic by mechanic.
 
 Game: {game_title}
-Genre: {gdd.get('genre', 'unknown')}
-Summary: {gdd.get('summary', '')}
+Genre: {gdd.get("genre", "unknown")}
+Summary: {gdd.get("summary", "")}
 
 Current mechanic ({i + 1}/{len(mechanics)}): {json.dumps(mechanic, indent=2)}
 
@@ -219,6 +267,9 @@ Implement this mechanic now. Return a JSON object mapping file paths to file con
 
 Return ONLY a JSON object of file paths to contents."""
 
+        if art_instruction:
+            mechanic_prompt += f"\n\n{art_instruction}"
+
         response = await llm.chat_completion(
             model=model,
             messages=[
@@ -233,11 +284,15 @@ Return ONLY a JSON object of file paths to contents."""
 
         new_files = _parse_code_files(response[0])
         accumulated_files.update(new_files)
-        logger.info(f"Mechanic '{mechanic.get('name', '?')}' → {len(new_files)} files (total: {len(accumulated_files)})")
+        logger.info(
+            f"Mechanic '{mechanic.get('name', '?')}' → {len(new_files)} files (total: {len(accumulated_files)})"
+        )
 
     src_dir = project_dir / "src"
     src_dir.mkdir(parents=True, exist_ok=True)
     for file_path, content in accumulated_files.items():
+        if not _validate_file_path(project_dir, file_path):
+            continue
         full_path = project_dir / file_path
         full_path.parent.mkdir(parents=True, exist_ok=True)
         full_path.write_text(content, encoding="utf-8")
@@ -247,7 +302,13 @@ Return ONLY a JSON object of file paths to contents."""
 
 
 async def _generate_all_at_once(
-    gdd: dict, project_dir: Path, config: AppConfig, model: str, max_tokens: int, build_error: str, art_assets_path: str = "",
+    gdd: dict,
+    project_dir: Path,
+    config: AppConfig,
+    model: str,
+    max_tokens: int,
+    build_error: str,
+    art_assets_path: str = "",
 ) -> Path:
     game_title = gdd.get("title", "game")
     art_instruction = ""
@@ -271,13 +332,16 @@ In game scenes, use the loaded image sprites instead of placeholder shapes.
         retry_max_tokens = min(max_tokens, 8192)
         messages = [
             {"role": "system", "content": PROGRAMMER_SYSTEM_PROMPT},
-            {"role": "user", "content": f"""The previous build/QA FAILED with these specific issues:
+            {
+                "role": "user",
+                "content": f"""The previous build/QA FAILED with these specific issues:
 
 {build_error[:TRUNC_LLM_PROMPT_ERROR]}
 {existing_block}
 
 Fix ONLY the files that need to change. Return a JSON object with ONLY the files you modified.
-Do NOT return unchanged files."""},
+Do NOT return unchanged files.""",
+            },
         ]
 
         response = await llm.chat_completion(
@@ -293,6 +357,8 @@ Do NOT return unchanged files."""},
         files = _parse_code_files(text)
 
         for file_path, content in files.items():
+            if not _validate_file_path(project_dir, file_path):
+                continue
             full_path = project_dir / file_path
             full_path.parent.mkdir(parents=True, exist_ok=True)
             full_path.write_text(content, encoding="utf-8")
@@ -333,6 +399,8 @@ Include basic gameplay analytics: call `navigator.sendBeacon('/api/analytics/eve
     src_dir.mkdir(parents=True, exist_ok=True)
 
     for file_path, content in files.items():
+        if not _validate_file_path(project_dir, file_path):
+            continue
         full_path = project_dir / file_path
         full_path.parent.mkdir(parents=True, exist_ok=True)
         full_path.write_text(content, encoding="utf-8")
@@ -436,9 +504,13 @@ def _copy_art_assets(art_assets_path: str, project_dir: Path) -> None:
 def _install_and_build(project_dir: Path) -> str:
     """Run npm install + build. Returns empty string on success, error message on failure."""
     try:
-        subprocess.run(["npm", "install"], cwd=str(project_dir), capture_output=True, timeout=120, check=True)
+        subprocess.run(
+            ["npm", "install"], cwd=str(project_dir), capture_output=True, timeout=120, check=True
+        )
         logger.info("npm install completed")
-        result = subprocess.run(["npm", "run", "build"], cwd=str(project_dir), capture_output=True, timeout=120)
+        result = subprocess.run(
+            ["npm", "run", "build"], cwd=str(project_dir), capture_output=True, timeout=120
+        )
         if result.returncode != 0:
             stderr = result.stderr.decode(errors="replace")[:500]
             logger.warning(f"Build failed: {stderr}")
@@ -494,11 +566,30 @@ def _runtime_verify(project_dir: Path) -> str:
         loop = asyncio.get_event_loop()
         if loop.is_running():
             import concurrent.futures
+
             with concurrent.futures.ThreadPoolExecutor() as pool:
-                return loop.run_in_executor(pool, lambda: asyncio.run(_check())).result() if False else asyncio.run(_check())
+                return (
+                    loop.run_in_executor(pool, lambda: asyncio.run(_check())).result()
+                    if False
+                    else asyncio.run(_check())
+                )
         return asyncio.run(_check())
     except Exception as e:
         return f"Runtime verify error: {e}"
+
+
+def _validate_file_path(project_dir: Path, rel_path: str) -> bool:
+    """Validate that rel_path does not escape project_dir (path traversal defense)."""
+    if ".." in Path(rel_path).parts:
+        logger.warning(f"Skipping file with '..' in path: {rel_path}")
+        return False
+    resolved = (project_dir / rel_path).resolve()
+    if not resolved.is_relative_to(project_dir.resolve()):
+        logger.warning(
+            f"Skipping file outside project directory: {rel_path} (resolved to {resolved})"
+        )
+        return False
+    return True
 
 
 def _parse_code_files(text: str) -> dict[str, str]:
@@ -528,7 +619,8 @@ def _parse_code_files(text: str) -> dict[str, str]:
 
     # Case 4: multiple ```json blocks — concatenate
     import re
-    blocks = re.findall(r'```(?:json)?\s*\n(.*?)```', text, re.DOTALL)
+
+    blocks = re.findall(r"```(?:json)?\s*\n(.*?)```", text, re.DOTALL)
     if blocks:
         combined = {}
         for block in blocks:

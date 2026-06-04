@@ -41,15 +41,9 @@ class SpriteGenerator:
             f"transparent background, full body centered, 8-bit retro game character, "
             "high quality, clean outlines"
         )
-        positive = (
-            self._art_style.enrich_prompt(base_prompt) if self._art_style else base_prompt
-        )
-        workflow = build_workflow(
-            CHARACTER_SPRITE_WORKFLOW, positive, self._negative_prompt()
-        )
-        workflow["7"]["inputs"]["filename_prefix"] = (
-            f"char_{character.lower().replace(' ', '_')}"
-        )
+        positive = self._art_style.enrich_prompt(base_prompt) if self._art_style else base_prompt
+        workflow = build_workflow(CHARACTER_SPRITE_WORKFLOW, positive, self._negative_prompt())
+        workflow["7"]["inputs"]["filename_prefix"] = f"char_{character.lower().replace(' ', '_')}"
 
         prompt_id = await self._client.queue_prompt(workflow)
         images = await self._client.get_output_images(prompt_id, output_dir)
@@ -66,10 +60,7 @@ class SpriteGenerator:
     ) -> dict[str, Path]:
         logger.info(f"Generating {len(characters)} character sprites in style: {style}")
 
-        tasks = [
-            self._generate_single_character(char, style, output_dir)
-            for char in characters
-        ]
+        tasks = [self._generate_single_character(char, style, output_dir) for char in characters]
         results_list = await asyncio.gather(*tasks)
 
         results: dict[str, Path] = {}
@@ -91,15 +82,11 @@ class SpriteGenerator:
             f"pixel art game background {theme}, game environment tileset, "
             "2D side-scrolling level, retro game scenery, vibrant colors, looping tile"
         )
-        positive = (
-            self._art_style.enrich_prompt(base_prompt) if self._art_style else base_prompt
-        )
+        positive = self._art_style.enrich_prompt(base_prompt) if self._art_style else base_prompt
         workflow = build_workflow(BACKGROUND_WORKFLOW, positive, self._negative_prompt())
         workflow["4"]["inputs"]["width"] = dimensions[0]
         workflow["4"]["inputs"]["height"] = dimensions[1]
-        workflow["7"]["inputs"]["filename_prefix"] = (
-            f"bg_{theme.lower().replace(' ', '_')}"
-        )
+        workflow["7"]["inputs"]["filename_prefix"] = f"bg_{theme.lower().replace(' ', '_')}"
 
         prompt_id = await self._client.queue_prompt(workflow)
         images = await self._client.get_output_images(prompt_id, output_dir)
@@ -120,15 +107,9 @@ class SpriteGenerator:
             f"pixel art ui icon {element}, {style} style, "
             "game user interface element, high contrast, retro game ui, 32x32 icon, flat design"
         )
-        positive = (
-            self._art_style.enrich_prompt(base_prompt) if self._art_style else base_prompt
-        )
-        workflow = build_workflow(
-            UI_ELEMENT_WORKFLOW, positive, self._negative_prompt()
-        )
-        workflow["7"]["inputs"]["filename_prefix"] = (
-            f"ui_{element.lower().replace(' ', '_')}"
-        )
+        positive = self._art_style.enrich_prompt(base_prompt) if self._art_style else base_prompt
+        workflow = build_workflow(UI_ELEMENT_WORKFLOW, positive, self._negative_prompt())
+        workflow["7"]["inputs"]["filename_prefix"] = f"ui_{element.lower().replace(' ', '_')}"
 
         prompt_id = await self._client.queue_prompt(workflow)
         images = await self._client.get_output_images(prompt_id, output_dir)
@@ -145,10 +126,7 @@ class SpriteGenerator:
     ) -> dict[str, Path]:
         logger.info(f"Generating {len(elements)} UI elements in style: {style}")
 
-        tasks = [
-            self._generate_single_ui_element(elem, style, output_dir)
-            for elem in elements
-        ]
+        tasks = [self._generate_single_ui_element(elem, style, output_dir) for elem in elements]
         results_list = await asyncio.gather(*tasks)
 
         results: dict[str, Path] = {}

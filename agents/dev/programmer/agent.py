@@ -15,9 +15,21 @@ def _git_init(project_dir: Path) -> None:
     """Initialize a git repo in the project directory if not already one."""
     if (project_dir / ".git").exists():
         return
-    subprocess.run(["git", "init"], cwd=str(project_dir), capture_output=True, timeout=10, check=True)
-    subprocess.run(["git", "config", "user.email", "bot@gcagents.local"], cwd=str(project_dir), capture_output=True, timeout=5)
-    subprocess.run(["git", "config", "user.name", "GCAgents Bot"], cwd=str(project_dir), capture_output=True, timeout=5)
+    subprocess.run(
+        ["git", "init"], cwd=str(project_dir), capture_output=True, timeout=10, check=True
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "bot@gcagents.local"],
+        cwd=str(project_dir),
+        capture_output=True,
+        timeout=5,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "GCAgents Bot"],
+        cwd=str(project_dir),
+        capture_output=True,
+        timeout=5,
+    )
     (project_dir / ".gitignore").write_text("node_modules/\ndist/\n*.log\n")
 
 
@@ -26,7 +38,9 @@ def _git_commit(project_dir: Path, message: str) -> None:
     subprocess.run(["git", "add", "-A"], cwd=str(project_dir), capture_output=True, timeout=30)
     subprocess.run(
         ["git", "commit", "--allow-empty", "-m", message],
-        cwd=str(project_dir), capture_output=True, timeout=30,
+        cwd=str(project_dir),
+        capture_output=True,
+        timeout=30,
     )
 
 
@@ -53,10 +67,12 @@ async def develop_game(state: CompanyState) -> dict:
             build_error = str(state.errors)
 
     is_retry = bool(build_error) or bool(state.retry_feedback)
-    commit_msg = f"fix: retry build after error" if is_retry else f"feat: initial code generation"
+    commit_msg = "fix: retry build after error" if is_retry else "feat: initial code generation"
 
     code_path = await generate_game_code(
-        gdd, project_dir, config,
+        gdd,
+        project_dir,
+        config,
         build_error=build_error,
         art_assets_path=state.art_assets_path or "",
     )
@@ -65,7 +81,10 @@ async def develop_game(state: CompanyState) -> dict:
 
     result = subprocess.run(
         ["git", "rev-list", "--count", "HEAD"],
-        cwd=str(project_dir), capture_output=True, text=True, timeout=10,
+        cwd=str(project_dir),
+        capture_output=True,
+        text=True,
+        timeout=10,
     )
     commit_count = int(result.stdout.strip()) if result.returncode == 0 else 1
 

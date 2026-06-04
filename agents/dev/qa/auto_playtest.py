@@ -1,7 +1,8 @@
 """Automated playtest runner using headless Playwright."""
+
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from loguru import logger
@@ -34,7 +35,7 @@ async def run_auto_playtest(game_dist_path: str | Path, game_dir: str | Path | N
         return {"passed": False, "score": 0.0, "error": f"index.html not found at {index_html}"}
 
     url = f"file://{index_html.resolve()}"
-    started_at = datetime.now(timezone.utc)
+    started_at = datetime.now(UTC)
 
     all_errors: list[str] = []
     results: list[dict] = []
@@ -68,15 +69,18 @@ async def run_auto_playtest(game_dist_path: str | Path, game_dir: str | Path | N
                     results.append({"name": name, "passed": False, "error": str(e)})
                     logger.warning(f"Playtest [ERROR] {name}: {e}")
 
-            results.append({
-                "name": "console_errors",
-                "passed": len(all_errors) == 0,
-                "error_count": len(all_errors),
-                "errors": all_errors[:5],
-            })
+            results.append(
+                {
+                    "name": "console_errors",
+                    "passed": len(all_errors) == 0,
+                    "error_count": len(all_errors),
+                    "errors": all_errors[:5],
+                }
+            )
 
             if game_dir:
                 from agents.dev.qa.playtest_checks import check_complexity_score
+
                 complexity_result = check_complexity_score(game_dir)
                 results.append(complexity_result)
 
@@ -103,7 +107,7 @@ async def run_auto_playtest(game_dist_path: str | Path, game_dir: str | Path | N
     )
     final_score = round(min(base_score, complexity_score), 2)
 
-    elapsed = datetime.now(timezone.utc) - started_at
+    elapsed = datetime.now(UTC) - started_at
     duration_ms = int(elapsed.total_seconds() * 1000)
 
     min_pass_count = max(total_count - 2, 1)

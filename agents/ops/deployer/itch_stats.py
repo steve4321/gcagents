@@ -1,27 +1,27 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import sqlite3
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 from loguru import logger
 
-from shared.config import load_config
+from shared.config import DB_PATH, load_config
 
 
 def _title_to_slug(title: str) -> str:
     import re
+
     t = title.lower()
     t = re.sub(r"[^a-z0-9]+", "-", t)
     return t.strip("-")
 
 
-def _find_local_project_id(itch_title: str) -> str | None:
-    import sqlite3
-    from pathlib import Path
-    db_path = Path(__file__).resolve().parents[3] / "data" / "gcagents.db"
-    if not db_path.exists():
-        return None
+def _find_project_id_sync(db_path: Path, itch_title: str) -> str | None:
+    """Synchronous sqlite3 lookup — run via asyncio.to_thread()."""
     conn = sqlite3.connect(str(db_path))
     try:
         slug = _title_to_slug(itch_title)
@@ -32,6 +32,13 @@ def _find_local_project_id(itch_title: str) -> str | None:
         return row[0] if row else None
     finally:
         conn.close()
+
+
+async def _find_local_project_id(itch_title: str) -> str | None:
+    if not DB_PATH.exists():
+        logger.warning(f"DB not found at {DB_PATH}")
+        return None
+    return await asyncio.to_thread(_find_project_id_sync, DB_PATH, itch_title)
 
 
 async def fetch_itch_stats() -> list[dict]:
@@ -62,10 +69,11 @@ async def fetch_itch_stats() -> list[dict]:
         views = int(g.get("views_count", 0) or 0)
         purchases = int(g.get("purchases_count", 0) or 0)
         itch_url = g.get("url", "")
-        project_id = _find_local_project_id(title) or f"itch-{itch_game_id}"
+        project_id = await _find_local_project_id(title) or f"itch-{itch_game_id}"
 
         try:
             from orchestrator.persistence import save_itch_stat
+
             await save_itch_stat(
                 project_id=project_id,
                 itch_game_id=itch_game_id,
@@ -78,15 +86,17 @@ async def fetch_itch_stats() -> list[dict]:
         except Exception as e:
             logger.warning(f"Failed to save itch stat for {title}: {e}")
 
-        results.append({
-            "project_id": project_id,
-            "itch_game_id": itch_game_id,
-            "title": title,
-            "itch_url": itch_url,
-            "downloads_count": downloads,
-            "views_count": views,
-            "purchases_count": purchases,
-        })
+        results.append(
+            {
+                "project_id": project_id,
+                "itch_game_id": itch_game_id,
+                "title": title,
+                "itch_url": itch_url,
+                "downloads_count": downloads,
+                "views_count": views,
+                "purchases_count": purchases,
+            }
+        )
 
     logger.info(f"Fetched itch.io stats for {len(results)} games")
     return results

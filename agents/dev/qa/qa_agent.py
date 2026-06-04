@@ -3,6 +3,7 @@
 Checks: project structure, build artifacts, and 8-point automated verification.
 Failing QA feeds back to the developer for retry.
 """
+
 from __future__ import annotations
 
 import subprocess
@@ -83,6 +84,7 @@ def _check_build_exists(project_dir: Path) -> bool:
 
 def _try_build(project_dir: Path) -> tuple[bool, str]:
     import shutil
+
     try:
         install = subprocess.run(
             ["npm", "install"],

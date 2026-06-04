@@ -47,9 +47,9 @@ async def plan_mechanics(gdd: dict) -> list[dict]:
         "polish last (effects, sound).\n\n"
         "IMPORTANT COMPLEXITY RULES:\n"
         "- Generate AT LEAST 5 mechanics for any game (minimum: player_movement, score_system, enemy_system, level_progression, and one unique gameplay mechanic)\n"
-        "- Each mechanic's complexity should be \"medium\" or higher for at least 3 mechanics\n"
-        "- The \"inputs\" and \"outputs\" lists must each have at least 2 items\n"
-        "- The \"constraints\" list must have at least 1 item per mechanic\n"
+        '- Each mechanic\'s complexity should be "medium" or higher for at least 3 mechanics\n'
+        '- The "inputs" and "outputs" lists must each have at least 2 items\n'
+        '- The "constraints" list must have at least 1 item per mechanic\n'
         "- Each mechanic MUST have a 'category' tag indicating its purpose\n"
         "- At least 1 mechanic should be categorized as 'retention' (e.g., daily challenges, streak systems)\n"
         "- At least 1 mechanic should be categorized as 'engagement' (e.g., power-ups, collections, social features)\n\n"
@@ -73,9 +73,9 @@ async def plan_mechanics(gdd: dict) -> list[dict]:
 
     logger.info(f"Planned {len(mechanics)} mechanics for '{gdd.get('title', 'unknown')}'")
     for m in mechanics:
-        order = m.get('implementation_order', '?')
-        name = m.get('name', '?')
-        cx = m.get('complexity', '?')
+        order = m.get("implementation_order", "?")
+        name = m.get("name", "?")
+        cx = m.get("complexity", "?")
         logger.debug(f"  [{order}] {name} ({cx})")
 
     return mechanics

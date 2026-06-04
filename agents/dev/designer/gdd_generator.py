@@ -119,9 +119,9 @@ async def generate_gdd(proposal: GameProposal, config: AppConfig) -> dict:
 Name: {proposal.name}
 Genre: {proposal.genre}
 Description: {proposal.description}
-Target Platforms: {', '.join(proposal.target_platforms)}
+Target Platforms: {", ".join(proposal.target_platforms)}
 Differentiation: {proposal.differentiation}
-Reference Games: {', '.join(proposal.reference_games)}
+Reference Games: {", ".join(proposal.reference_games)}
 Market Score: {proposal.market_opportunity_score}
 Estimated Dev Hours: {proposal.estimated_dev_hours}
 Complexity Target: {"simple (8h)" if proposal.estimated_dev_hours <= 10 else "standard (16h)" if proposal.estimated_dev_hours <= 20 else "complex (32h+)"}
@@ -143,7 +143,9 @@ IMPORTANT: This game should have enough depth to engage a player for 5-10 minute
         project_name=proposal.name,
     )
     gdd = _parse_gdd(text)
-    logger.info(f"GDD generated: {gdd.get('title', 'untitled')} with {len(gdd.get('scenes', []))} scenes")
+    logger.info(
+        f"GDD generated: {gdd.get('title', 'untitled')} with {len(gdd.get('scenes', []))} scenes"
+    )
 
     return gdd
 
