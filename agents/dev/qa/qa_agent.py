@@ -50,12 +50,23 @@ async def run_qa(state: CompanyState) -> dict:
             f"duration={playtest_results.get('duration_ms', 0)}ms"
         )
 
+    code_review_result = None
+    if build_ok and project_dir.exists():
+        code_review_result = await _run_code_review(project_dir)
+        if code_review_result:
+            logger.info(
+                f"Code review: score={code_review_result.get('score', '?')}, "
+                f"issues={len(code_review_result.get('issues', []))}"
+            )
+
     checks = {
         "project_structure": structure_ok,
         "build_artifacts": build_ok,
     }
     if playtest_results is not None:
         checks["playtest"] = playtest_results
+    if code_review_result is not None:
+        checks["code_review"] = code_review_result
 
     playtest_passed = playtest_results["passed"] if playtest_results else False
     all_passed = structure_ok and build_ok and playtest_passed
@@ -76,6 +87,27 @@ async def run_qa(state: CompanyState) -> dict:
             "qa_results": qa_results,
             "retry_count": state.retry_count + 1,
         }
+
+
+async def _run_code_review(project_dir: Path) -> dict | None:
+    try:
+        from skills.base import SkillContext
+        from skills.code_review import CodeReviewSkill
+
+        skill = CodeReviewSkill()
+        ctx = SkillContext(
+            task_type="develop",
+            artifact_path=str(project_dir),
+        )
+        if not skill.should_activate(ctx):
+            return None
+        result = await skill.execute(ctx)
+        if result.success and result.output:
+            return result.output
+    except Exception as e:
+        from loguru import logger
+        logger.debug(f"Code review skill skipped: {e}")
+    return None
 
 
 def _check_build_exists(project_dir: Path) -> bool:

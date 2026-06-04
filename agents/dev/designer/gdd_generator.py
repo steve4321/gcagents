@@ -9,6 +9,41 @@ from shared.constants import DEFAULT_ANALYSIS_MODEL
 from shared.llm_client import llm
 from shared.models import GameProposal
 
+# Genre → Phaser architecture knowledge (loaded from config)
+try:
+    from pathlib import Path
+    import yaml as _yaml
+
+    _phaser_kb_path = Path(__file__).resolve().parent.parent.parent.parent / "config" / "phaser_knowledge.yaml"
+    if _phaser_kb_path.exists():
+        with open(_phaser_kb_path) as _f:
+            _PHASER_KB = _yaml.safe_load(_f)
+    else:
+        _PHASER_KB = None
+except Exception:
+    _PHASER_KB = None
+
+
+def _genre_architecture_hint(genre: str) -> str:
+    """Return a Phaser architecture hint for the given genre from the knowledge base."""
+    if not _PHASER_KB:
+        return ""
+    genre_map = _PHASER_KB.get("genre_architecture_map", {})
+    entry = genre_map.get(genre, genre_map.get(genre.replace("-", "_"), genre_map.get(genre.replace("-", ""), None)))
+    if not entry:
+        return ""
+    lines = [
+        f"\n## Recommended Architecture for {genre}:",
+        f"- Physics: {entry.get('recommended_physics', 'arcade')}",
+        f"- Pattern: {entry.get('recommended_pattern', 'state_machine')}",
+        f"- Core Systems: {', '.join(entry.get('core_systems', []))}",
+        f"- Data-Driven Files: {', '.join(entry.get('data_driven', []))}",
+        f"- Scenes: {', '.join(entry.get('typical_scenes', []))}",
+        f"- Minimum Mechanics: {entry.get('min_mechanics', 5)}",
+        f"- Code Organization: {entry.get('code_organization', 'scenes/entities/systems')}",
+    ]
+    return "\n".join(lines)
+
 DESIGNER_SYSTEM_PROMPT = """You are an expert game designer specializing in web mini-games.
 Given a game proposal, create a detailed Game Design Document (GDD).
 
@@ -78,7 +113,26 @@ The GDD must be a JSON object with these sections:
     "starting_lives": 3,
     "difficulty_curve": "gradual increase over 10 levels"
   },
-  "estimated_play_session_minutes": 5
+  "estimated_play_session_minutes": 5,
+  "technical_architecture": {
+    "game_pattern": "state_machine | entity_component | grid_based | wave_based | upgrade_tree",
+    "physics_engine": "arcade | matter | none",
+    "phaser_plugins": ["list of needed plugins"],
+    "scene_architecture": {
+      "GameScene": {
+        "sub_systems": ["LevelManager", "EnemySpawner"],
+        "uses_physics": true,
+        "physics_engine": "arcade"
+      }
+    },
+    "code_organization": "scenes/entities/systems/data",
+    "data_driven": {
+      "levels": "data/levels.json",
+      "enemies": "data/enemies.json",
+      "powerups": "data/powerups.json"
+    },
+    "reusable_components": ["HUD", "UpgradeShop", "ComboCounter"]
+  }
 }
 
 COMPLEXITY REQUIREMENTS (MANDATORY — games that are too simple will be rejected by QA):
@@ -103,6 +157,15 @@ COMMERCIAL REQUIREMENTS (MANDATORY):
 
 Do NOT design a trivial game. The target play session is 5-10 minutes with replay value.
 
+TECHNICAL ARCHITECTURE (MANDATORY):
+- The "technical_architecture" field MUST be included with: game_pattern, physics_engine, phaser_plugins, scene_architecture, code_organization, data_driven, reusable_components
+- Choose game_pattern based on genre: platformer/shooter/runner→state_machine, puzzle/card→grid_based, tower-defense→wave_based, idle→upgrade_tree, rpg→entity_component
+- Choose physics_engine: platformer/shooter→arcade, puzzle→none, physics_puzzle→matter
+- scene_architecture MUST describe each scene's sub_systems and whether it uses physics
+- data_driven MUST specify at least 2 JSON data files for game content (levels, enemies, powerups, upgrades, waves)
+- reusable_components MUST list at least 2 components that should be shared across scenes
+- code_organization MUST specify the directory structure: scenes/, entities/, systems/, data/
+
 Return ONLY the JSON object, no other text."""
 
 
@@ -125,11 +188,14 @@ Reference Games: {", ".join(proposal.reference_games)}
 Market Score: {proposal.market_opportunity_score}
 Estimated Dev Hours: {proposal.estimated_dev_hours}
 Complexity Target: {"simple (8h)" if proposal.estimated_dev_hours <= 10 else "standard (16h)" if proposal.estimated_dev_hours <= 20 else "complex (32h+)"}
+{_genre_architecture_hint(proposal.genre)}
 
 Generate a complete, detailed GDD. Make the game fun and engaging for web play.
 Scale complexity to match the dev hours: more hours = more mechanics, scenes, and depth.
 
-IMPORTANT: This game should have enough depth to engage a player for 5-10 minutes. Simple one-button games will be rejected."""
+IMPORTANT: This game should have enough depth to engage a player for 5-10 minutes. Simple one-button games will be rejected.
+
+DESIGN FOR DEPTH: Include data-driven content (levels with varying enemy compositions, upgrade trees with meaningful choices, multiple enemy AI patterns). The game should feel like it was made by a skilled game designer, not a template."""
 
     text, usage = await llm.chat_completion(
         model=model,
@@ -138,7 +204,7 @@ IMPORTANT: This game should have enough depth to engage a player for 5-10 minute
             {"role": "user", "content": user_prompt},
         ],
         temperature=0.8,
-        max_tokens=3000,
+        max_tokens=6000,
         agent_name="designer",
         project_name=proposal.name,
     )

@@ -144,6 +144,84 @@ async def check_score_system(page: Page) -> dict:
     }
 
 
+async def check_gameplay_depth(page: Page) -> dict:
+    """Evaluate if the game has meaningful gameplay depth via __TEST__ interface.
+
+    Simulates 30 seconds of gameplay by clicking and pressing keys,
+    then reads the __TEST__ state to verify multiple game systems are working.
+    """
+    canvas = await page.query_selector("canvas")
+    if not canvas:
+        return {"name": "gameplay_depth", "passed": False, "reason": "no canvas"}
+
+    box = await canvas.bounding_box()
+    if not box:
+        return {"name": "gameplay_depth", "passed": False, "reason": "canvas has no bounding box"}
+
+    # Try to start the game
+    await page.mouse.click(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+    await page.wait_for_timeout(1000)
+
+    # Simulate 30 seconds of gameplay with varied inputs
+    for i in range(30):
+        # Click at different positions
+        x = box["x"] + box["width"] * (0.2 + 0.6 * ((i % 5) / 4))
+        y = box["y"] + box["height"] * (0.3 + 0.4 * ((i % 3) / 2))
+        await page.mouse.click(x, y)
+
+        # Press random movement keys
+        keys = ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Space", "KeyW", "KeyA", "KeyS", "KeyD"]
+        key = keys[i % len(keys)]
+        await page.keyboard.down(key)
+        await page.wait_for_timeout(50)
+        await page.keyboard.up(key)
+        await page.wait_for_timeout(900)
+
+    # Read __TEST__ state
+    state = None
+    try:
+        state = await page.evaluate(
+            "() => window.__TEST__ && window.__TEST__.state ? window.__TEST__.state() : null"
+        )
+    except Exception:
+        pass
+
+    if not state or not isinstance(state, dict):
+        return {
+            "name": "gameplay_depth",
+            "passed": False,
+            "reason": "__TEST__ state not available after 30s play",
+        }
+
+    checks = {
+        "score_changes": isinstance(state.get("score"), (int, float)) and state["score"] > 0,
+        "level_progression": (
+            (isinstance(state.get("level"), (int, float)) and state["level"] > 1)
+            or (isinstance(state.get("currentLevel"), (int, float)) and state["currentLevel"] > 1)
+        ),
+        "multiple_enemy_types": (
+            isinstance(state.get("enemyTypesSeen"), (list, set))
+            and len(list(state.get("enemyTypesSeen", []))) >= 2
+        ),
+        "powerup_usage": isinstance(state.get("powerupsUsed"), (int, float)) and state["powerupsUsed"] > 0,
+        "game_over_possible": state.get("lives") is not None or state.get("isGameOver") is not None,
+        "session_time_tracked": isinstance(state.get("sessionTime"), (int, float)) and state["sessionTime"] > 5,
+    }
+
+    depth_score = sum(checks.values()) / len(checks)
+    passed = depth_score >= 0.5
+
+    return {
+        "name": "gameplay_depth",
+        "passed": passed,
+        "score": round(depth_score, 2),
+        "detail": checks,
+        "state_snapshot": {k: v for k, v in state.items() if k != "enemyTypesSeen"} | {
+                    "enemyTypesSeen": list(state.get("enemyTypesSeen", []))[:5]
+                },
+    }
+
+
 def check_complexity_score(game_dir: str | Path) -> dict:
     """Verify game meets minimum complexity threshold."""
     from shared.complexity import MIN_PASSING_SCORE, score_code

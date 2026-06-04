@@ -8,8 +8,9 @@ from pathlib import Path
 from loguru import logger
 
 from shared.config import AppConfig
-from shared.constants import DEFAULT_ANALYSIS_MODEL, TRUNC_LLM_PROMPT_ERROR
+from shared.constants import DEFAULT_ANALYSIS_MODEL, DEFAULT_CODE_MODEL, TRUNC_LLM_PROMPT_ERROR
 from shared.llm_client import llm
+from shared.memory import get_memory_store
 
 MAX_SELF_VERIFY_RETRIES = 2
 MAX_SOURCE_CHARS_IN_PROMPT = 12000
@@ -42,7 +43,22 @@ Rules:
 - Include a scoring system with combos or multipliers when applicable
 - Include basic game loop: start → play → end
 - Add keyboard/mouse/touch controls
-- Use window.__TEST__ = { ready: false, state: () => ({...}) } for test access
+- Use window.__TEST__ for test access. The __TEST__ interface MUST be declared in GameScene's create() method and expose rich game state for automated evaluation:
+  ```typescript
+  (window as any).__TEST__ = {
+    ready: false,
+    state: () => ({
+      score: this.score,
+      level: this.currentLevel,
+      lives: this.lives,
+      isGameOver: this.isGameOver,
+      enemyTypesSeen: this.enemyTypesSeen,
+      powerupsUsed: this.powerupsUsed,
+      sessionTime: (Date.now() - this.sessionStart) / 1000,
+    })
+  };
+  ```
+  Where: enemyTypesSeen is a Set/array of distinct enemy type names encountered, powerupsUsed counts power-up activations, sessionStart is Date.now() at game start. These fields are REQUIRED for gameplay depth evaluation.
 - Include basic gameplay analytics: call `navigator.sendBeacon('/api/analytics/event', new URLSearchParams({ game: '{game_name}', event: 'game_start' }))` when the game starts, and report 'game_over' with final score and 'play_time' in seconds when the game ends. This is non-blocking and should NOT impact gameplay.
 - The HTML template has `<div id="game-container"></div>`. Set `parent: 'game-container'` in your Phaser game config so the canvas is rendered inside it.
 
@@ -84,12 +100,12 @@ async def generate_game_code(
 
     project_dir.mkdir(parents=True, exist_ok=True)
 
-    _scaffold_project(project_dir)
+    _scaffold_project(project_dir, gdd)
 
     if art_assets_path:
         _copy_art_assets(art_assets_path, project_dir)
 
-    model = DEFAULT_ANALYSIS_MODEL
+    model = DEFAULT_CODE_MODEL
     max_tokens = 16384
     if not config.minimax_api_key:
         logger.error("No AI API key configured")
@@ -367,38 +383,227 @@ Do NOT return unchanged files.""",
         logger.info(f"Fix applied: {len(files)} files modified")
         return project_dir
 
-    # --- NEW GENERATION PATH ---
-    user_prompt = f"""Generate a complete Phaser 4 + TypeScript game based on this GDD:
+    # --- MULTI-ROUND GENERATION PATH ---
+    genre = gdd.get("genre", "arcade")
+    tech_arch = gdd.get("technical_architecture", {})
 
-{json.dumps(gdd, indent=2)}
+    past_lessons = await _get_past_lessons(genre)
+
+    code_path = await _generate_multi_round(
+        gdd=gdd,
+        project_dir=project_dir,
+        model=model,
+        max_tokens=max_tokens,
+        art_instruction=art_instruction,
+        past_lessons=past_lessons,
+    )
+
+    return code_path
+
+
+async def _get_past_lessons(genre: str) -> str:
+    memory = get_memory_store()
+    try:
+        lessons = await memory.search_long_term(
+            query=f"programmer {genre} success failure pattern",
+            category="lesson:programmer",
+            limit=3,
+        )
+        if not lessons:
+            return ""
+        lines = []
+        for lesson in lessons:
+            summary = lesson.get("summary", lesson.get("content", ""))[:200]
+            lines.append(f"- {summary}")
+        return "\n## Past Experience ({genre} games):\n" + "\n".join(lines)
+    except Exception as e:
+        logger.debug(f"Could not fetch past lessons: {e}")
+        return ""
+
+
+async def _generate_multi_round(
+    gdd: dict,
+    project_dir: Path,
+    model: str,
+    max_tokens: int,
+    art_instruction: str,
+    past_lessons: str,
+) -> Path:
+    game_title = gdd.get("title", "game")
+    genre = gdd.get("genre", "arcade")
+    tech_arch = gdd.get("technical_architecture", {})
+    data_files = tech_arch.get("data_driven", {})
+
+    lessons_block = past_lessons if past_lessons else ""
+
+    accumulated_files: dict[str, str] = {}
+
+    # Round 1: Core engine — scenes, config, boot, player input
+    round1_prompt = f"""You are building a Phaser 4 + TypeScript game. This is ROUND 1 of 4: Core Engine.
+
+Game: {game_title}
+Genre: {genre}
+{lessons_block}
+
+From the GDD:
+- Scenes: {json.dumps(gdd.get('scenes', []))}
+- Physics: {tech_arch.get('physics_engine', 'arcade')}
+- Pattern: {tech_arch.get('game_pattern', 'state_machine')}
+- Code Organization: {tech_arch.get('code_organization', 'scenes/entities/systems')}
 {art_instruction}
 
-Generate ALL source files as a JSON object mapping file paths to file contents.
-The game must be playable, engaging, and have depth. Implement ALL mechanics from the GDD with real gameplay logic (not stubs). Use Phaser shapes/text with polished visuals — add tween animations, color transitions, and visual feedback for every player action. Plain unstyled rectangles are NOT acceptable.
-Include the window.__TEST__ interface for automated testing.
-Include basic gameplay analytics: call `navigator.sendBeacon('/api/analytics/event', new URLSearchParams({{ game: '{game_title}', event: 'game_start' }}))` on game start, and report 'game_over' with score and 'play_time' on game end. Keep analytics non-blocking."""
+Generate the core engine files:
+1. src/main.ts - Entry point with Phaser config (parent: 'game-container')
+2. src/game/config.ts - Game configuration
+3. src/game/scenes/BootScene.ts - Asset loading (load images from assets/ if available)
+4. src/game/scenes/MenuScene.ts - Main menu with START button
+5. src/game/scenes/GameScene.ts - Main gameplay scene SKELETON with:
+   - Player input handling (keyboard + mouse/touch)
+   - Physics setup (if required)
+   - The __TEST__ interface with full state: score, level, lives, isGameOver, enemyTypesSeen (array), powerupsUsed (number), sessionTime (seconds)
+   - Basic update loop
+   - Analytics: navigator.sendBeacon on game_start and game_over
+6. src/game/scenes/GameOverScene.ts - Game over with score display and restart
+7. src/game/entities/Player.ts - Player entity class (if entity-based)
 
-    messages = [
-        {"role": "system", "content": PROGRAMMER_SYSTEM_PROMPT},
-        {"role": "user", "content": user_prompt},
-    ]
+Use `import * as Phaser from 'phaser';`
+Set parent: 'game-container' in game config.
+{lessons_block}
 
-    response = await llm.chat_completion(
+Return ONLY a JSON object mapping file paths to file contents."""
+
+    r1_response = await llm.chat_completion(
         model=model,
-        messages=messages,
+        messages=[
+            {"role": "system", "content": PROGRAMMER_SYSTEM_PROMPT},
+            {"role": "user", "content": round1_prompt},
+        ],
         temperature=0.4,
         max_tokens=max_tokens,
         agent_name="programmer",
-        project_name=gdd.get("title", "unknown"),
+        project_name=game_title,
     )
+    r1_files = _parse_code_files(r1_response[0])
+    accumulated_files.update(r1_files)
+    logger.info(f"Round 1 (Core Engine): {len(r1_files)} files")
 
-    text = response[0]
-    files = _parse_code_files(text)
+    # Round 2: Data layer — JSON data files
+    if data_files:
+        round2_prompt = f"""You are building a Phaser 4 + TypeScript game. This is ROUND 2 of 4: Data Layer.
 
+Game: {game_title}, Genre: {genre}
+
+The GDD specifies these data-driven files: {json.dumps(data_files)}
+Mechanics: {json.dumps(gdd.get('mechanics', []))}
+Balance: {json.dumps(gdd.get('balance', {}))}
+Progression: {gdd.get('progression', '10 levels with increasing difficulty')}
+
+Generate the data JSON files. Each file must contain realistic game content with enough depth for a commercial-quality game:
+- Levels: at least 10 levels with increasing difficulty, each specifying enemies, obstacles, powerups, and difficulty_multiplier
+- Enemies: at least 3-5 enemy types with distinct behavior patterns, speed, health, and attack patterns
+- Powerups: at least 4-6 powerups with meaningful effects and duration
+- Upgrades: if applicable, an upgrade tree with at least 6 upgrades at increasing costs
+
+Return ONLY a JSON object mapping file paths to file contents. Files should go in src/game/data/."""
+
+        r2_response = await llm.chat_completion(
+            model=model,
+            messages=[{"role": "user", "content": round2_prompt}],
+            temperature=0.3,
+            max_tokens=8192,
+            agent_name="programmer",
+            project_name=game_title,
+        )
+        r2_files = _parse_code_files(r2_response[0])
+        accumulated_files.update(r2_files)
+        logger.info(f"Round 2 (Data Layer): {len(r2_files)} files")
+
+    # Round 3: Core gameplay — enemies, items, game systems
+    existing_summary = _summarize_files(accumulated_files)
+    round3_prompt = f"""You are building a Phaser 4 + TypeScript game. This is ROUND 3 of 4: Core Gameplay.
+
+Game: {game_title}, Genre: {genre}
+Entities: {json.dumps(gdd.get('entities', []))}
+Core Loop: {json.dumps(gdd.get('core_loop', []))}
+
+Already implemented files:
+{existing_summary}
+
+Now implement the core gameplay systems:
+1. Enemy AI entities (src/game/entities/) — at least 3 distinct types with different behaviors
+2. Projectile/weapon system (if shooter/action)
+3. Collision/interaction handlers
+4. Item/powerup pickup system
+5. Level loading from data files (if Round 2 generated data/)
+6. Score system with combos/multipliers
+
+IMPORTANT: Update GameScene.ts to integrate ALL new entities and systems. Return the UPDATED GameScene.ts plus all new files.
+Use `import * as Phaser from 'phaser';`
+
+Return ONLY a JSON object mapping file paths to file contents. Include updated versions of any existing files that need changes."""
+
+    r3_response = await llm.chat_completion(
+        model=model,
+        messages=[
+            {"role": "system", "content": PROGRAMMER_SYSTEM_PROMPT},
+            {"role": "user", "content": round3_prompt},
+        ],
+        temperature=0.4,
+        max_tokens=max_tokens,
+        agent_name="programmer",
+        project_name=game_title,
+    )
+    r3_files = _parse_code_files(r3_response[0])
+    accumulated_files.update(r3_files)
+    logger.info(f"Round 3 (Core Gameplay): {len(r3_files)} files")
+
+    # Round 4: Progression, polish, retention mechanics
+    existing_summary = _summarize_files(accumulated_files)
+    monetization = gdd.get("monetization", {})
+    round4_prompt = f"""You are building a Phaser 4 + TypeScript game. This is ROUND 4 of 4: Progression & Polish.
+
+Game: {game_title}, Genre: {genre}
+Monetization: {json.dumps(monetization)}
+Art Style: {json.dumps(gdd.get('art_style', {}))}
+Audio: {json.dumps(gdd.get('audio', {}))}
+
+Already implemented files:
+{existing_summary}
+
+Now add progression systems and polish:
+1. Upgrade shop / skill tree (src/game/systems/UpgradeSystem.ts or similar)
+2. Achievement system (if in monetization retention_hooks)
+3. Visual polish: tween animations, particle effects, screen shake on impacts
+4. UI polish: HUD styling, level transition effects
+5. Pause menu with settings
+6. Ad placeholder integration (between levels, rewarded video on game over)
+7. Tutorial hint system (first level guidance)
+
+Update GameScene.ts and any other files that need integration.
+Use `import * as Phaser from 'phaser';`
+
+Return ONLY a JSON object mapping file paths to file contents. Include updated versions of any existing files that need changes."""
+
+    r4_response = await llm.chat_completion(
+        model=model,
+        messages=[
+            {"role": "system", "content": PROGRAMMER_SYSTEM_PROMPT},
+            {"role": "user", "content": round4_prompt},
+        ],
+        temperature=0.4,
+        max_tokens=max_tokens,
+        agent_name="programmer",
+        project_name=game_title,
+    )
+    r4_files = _parse_code_files(r4_response[0])
+    accumulated_files.update(r4_files)
+    logger.info(f"Round 4 (Progression & Polish): {len(r4_files)} files")
+
+    # Write all accumulated files
     src_dir = project_dir / "src"
     src_dir.mkdir(parents=True, exist_ok=True)
 
-    for file_path, content in files.items():
+    for file_path, content in accumulated_files.items():
         if not _validate_file_path(project_dir, file_path):
             continue
         full_path = project_dir / file_path
@@ -406,12 +611,35 @@ Include basic gameplay analytics: call `navigator.sendBeacon('/api/analytics/eve
         full_path.write_text(content, encoding="utf-8")
         logger.debug(f"Generated: {file_path}")
 
-    logger.info(f"Generated {len(files)} source files")
+    logger.info(
+        f"Multi-round generation complete: {len(accumulated_files)} total files across 4 rounds"
+    )
     return project_dir
 
 
-def _scaffold_project(project_dir: Path) -> None:
-    """Create package.json, tsconfig.json, vite.config.ts, and index.html."""
+def _summarize_files(files: dict[str, str], max_chars: int = 2000) -> str:
+    lines = []
+    total = 0
+    for path, content in sorted(files.items()):
+        line_count = content.count("\n") + 1
+        exports = []
+        for line in content.split("\n"):
+            stripped = line.strip()
+            if stripped.startswith("export class ") or stripped.startswith("export interface "):
+                exports.append(stripped.split("{")[0].replace("export ", "").strip())
+        entry = f"  {path} ({line_count} lines"
+        if exports:
+            entry += f", exports: {', '.join(exports[:5])}"
+        entry += ")"
+        lines.append(entry)
+        total += len(entry)
+        if total >= max_chars:
+            lines.append(f"  ... ({len(files)} files total)")
+            break
+    return "\n".join(lines)
+
+
+def _scaffold_project(project_dir: Path, gdd: dict | None = None) -> None:
     package_json = {
         "name": project_dir.name,
         "version": "1.0.0",
@@ -460,17 +688,40 @@ export default defineConfig({
 });
 """
 
-    index_html = """<!DOCTYPE html>
+    sdk_scripts = ""
+    platform_js_init = ""
+    target_platforms = []
+    if gdd:
+        proposal = gdd.get("proposal", {})
+        if isinstance(proposal, dict):
+            target_platforms = proposal.get("target_platforms", [])
+        if not target_platforms:
+            target_platforms = gdd.get("target_platforms", [])
+
+    from shared.constants import PLATFORM_SDK_SNIPPETS
+    for platform in target_platforms:
+        snippet = PLATFORM_SDK_SNIPPETS.get(platform)
+        if snippet:
+            sdk_scripts += f"\n  {snippet}"
+
+    if sdk_scripts:
+        platform_js_init = """
+  <script>
+    window.__PLATFORM_SDK__ = window.__PLATFORM_SDK__ || {};
+  </script>
+"""
+
+    index_html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Game</title>
   <style>
-    body { margin: 0; background: #000; display: flex; justify-content: center; align-items: center; height: 100vh; }
-    #game-container { display: flex; justify-content: center; align-items: center; }
-    canvas { display: block; }
-  </style>
+    body {{ margin: 0; background: #000; display: flex; justify-content: center; align-items: center; height: 100vh; }}
+    #game-container {{ display: flex; justify-content: center; align-items: center; }}
+    canvas {{ display: block; }}
+  </style>{platform_js_init}{sdk_scripts}
 </head>
 <body>
   <div id="game-container"></div>

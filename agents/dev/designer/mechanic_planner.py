@@ -6,6 +6,7 @@ from loguru import logger
 
 from shared.constants import DEFAULT_ANALYSIS_MODEL
 from shared.llm_client import llm
+from shared.memory import get_memory_store
 
 MECHANIC_PLANNER_SYSTEM = (
     "You are a game mechanic decomposition expert. "
@@ -21,6 +22,22 @@ async def plan_mechanics(gdd: dict) -> list[dict]:
     """
 
     model = DEFAULT_ANALYSIS_MODEL
+
+    genre = gdd.get("genre", "unknown")
+    past_lessons = ""
+    try:
+        memory = get_memory_store()
+        lessons = await memory.search_long_term(
+            query=f"mechanic patterns {genre}",
+            category="lesson:mechanic_planner",
+            limit=3,
+        )
+        if lessons:
+            past_lessons = "\n\nPast successful mechanic patterns for this genre:\n" + "\n".join(
+                f"- {l.get('summary', l.get('content', ''))[:200]}" for l in lessons
+            )
+    except Exception:
+        pass
 
     prompt = (
         "Analyze this Game Design Document and decompose it "
@@ -54,6 +71,7 @@ async def plan_mechanics(gdd: dict) -> list[dict]:
         "- At least 1 mechanic should be categorized as 'retention' (e.g., daily challenges, streak systems)\n"
         "- At least 1 mechanic should be categorized as 'engagement' (e.g., power-ups, collections, social features)\n\n"
         "Return ONLY a JSON array of mechanic objects, no other text."
+        f"{past_lessons}"
     )
 
     response, usage = await llm.chat_completion(

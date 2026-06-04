@@ -1,0 +1,1314 @@
+# =============================================================================
+# GCAgents Phaser 4 + TypeScript Knowledge Base
+# =============================================================================
+# Loaded by Designer and Programmer agents during GDD generation and code gen.
+# Ensures genre-appropriate architecture, correct Phaser 4 API usage, and
+# commercial-quality patterns.
+#
+# Last updated: 2025-06
+# Phaser version: 4.0.x (ESM, TypeScript-native)
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# PHASER 4 KEY API NOTES (for code generation)
+# -----------------------------------------------------------------------------
+# - Import: `import * as Phaser from 'phaser';` (NO default export in ESM build)
+# - Scene lifecycle: init() → preload() → create() → update(time, delta)
+# - Physics config in GameConfig: physics: { default: 'arcade' } or 'matter'
+# - Arcade: this.physics.add.sprite(), this.physics.add.collider(), .overlap()
+# - Matter: this.matter.add.sprite(), this.matter.add.rectangle(), .circle()
+# - Tweens: this.tweens.add({ targets, props, duration, ease, onComplete })
+# - Particles: this.add.particleEmitter() (no .manager needed in v4)
+# - Scale: this.scale.width, this.scale.height, Phaser.Scale.FIT / CENTER_BOTH
+# - Scene transition: this.scene.start('SceneKey', data)
+# - Registry (cross-scene data): this.registry.set(key, val), this.registry.get(key)
+# - v4 removed: Pipeline → RenderNode, FX/BitmapMask → Filters, Point → Vector2
+# - v4 new: Filters, RenderNodes, SpriteGPULayer, TilemapGPULayer, Lighting component
+# - v4 lighting: gameObject.setLighting(true) replaces v3 setPipeline('Light2D')
+# - v4 removed Mesh and Plane GameObjects; 3D support planned separately
+# -----------------------------------------------------------------------------
+
+
+# =============================================================================
+# A) GENRE ARCHITECTURE MAP
+# =============================================================================
+# For each genre, specifies recommended physics, pattern, core systems,
+# data-driven files, scenes beyond Boot/Menu/Game/GameOver, minimum
+# mechanics, and code organization.
+# =============================================================================
+
+genre_architecture_map:
+
+  platformer:
+    recommended_physics: "arcade"
+    recommended_pattern: "state_machine"
+    core_systems:
+      - "LevelManager"
+      - "PlayerController"
+      - "EnemyAI"
+      - "CollisionSystem"
+      - "CameraFollow"
+      - "CollectibleTracker"
+    data_driven:
+      - "levels"
+      - "enemies"
+      - "collectibles"
+      - "powerups"
+    typical_scenes:
+      - "LevelSelect"
+      - "UpgradeShop"
+    min_mechanics:
+      - "Horizontal movement with variable speed"
+      - "Jump with gravity and coyote time"
+      - "Multiple enemy types with distinct patrol/chase AI"
+      - "Collectible items (coins, gems) with score tracking"
+      - "Level progression with increasing difficulty"
+      - "Player health/lives system"
+      - "Power-up system (speed boost, shield, double jump)"
+    code_organization:
+      src/game/entities/: "Player.ts, Enemy.ts, Platform.ts, Collectible.ts, Powerup.ts"
+      src/game/systems/: "PlayerController.ts, EnemyAI.ts, CollisionSystem.ts, LevelManager.ts"
+      src/game/scenes/: "BootScene.ts, MenuScene.ts, GameScene.ts, LevelSelectScene.ts, GameOverScene.ts"
+      src/game/data/: "levels.json, enemies.json, collectibles.json"
+
+  puzzle-match:
+    recommended_physics: "none"
+    recommended_pattern: "grid_based"
+    core_systems:
+      - "GridManager"
+      - "MatchDetector"
+      - "CascadeSystem"
+      - "ScoreMultiplier"
+      - "LevelGoalTracker"
+      - "AnimationCoordinator"
+    data_driven:
+      - "levels"
+      - "gem_types"
+      - "special_gems"
+      - "goals"
+    typical_scenes:
+      - "LevelSelect"
+      - "Tutorial"
+    min_mechanics:
+      - "Grid-based piece selection and swap"
+      - "Match-3+ detection (horizontal and vertical)"
+      - "Cascade/gravity fill after matches clear"
+      - "Special piece creation (4-match, L-shape, T-shape)"
+      - "Score with combo multipliers for chain cascades"
+      - "Level goals (reach score, clear specific pieces, timed)"
+      - "Move limit or timer constraint"
+    code_organization:
+      src/game/entities/: "Gem.ts, SpecialGem.ts, GridCell.ts"
+      src/game/systems/: "GridManager.ts, MatchDetector.ts, CascadeSystem.ts, ScoreSystem.ts, GoalTracker.ts"
+      src/game/scenes/: "BootScene.ts, MenuScene.ts, GameScene.ts, LevelSelectScene.ts, GameOverScene.ts"
+      src/game/data/: "levels.json, gem_types.json"
+
+  tower-defense:
+    recommended_physics: "none"
+    recommended_pattern: "wave_based"
+    core_systems:
+      - "WaveManager"
+      - "PathFinder"
+      - "TowerFactory"
+      - "ProjectilePool"
+      - "EnemySpawner"
+      - "EconomyManager"
+    data_driven:
+      - "waves"
+      - "enemies"
+      - "towers"
+      - "upgrades"
+      - "paths"
+    typical_scenes:
+      - "LevelSelect"
+      - "UpgradeShop"
+      - "TowerInfo"
+    min_mechanics:
+      - "Grid-based tower placement on valid tiles"
+      - "Path-following enemies with health bars"
+      - "Multiple tower types (single-target, AOE, slow, DOT)"
+      - "Wave system with increasing enemy count/variety"
+      - "Economy: earn currency from kills, spend on towers"
+      - "Tower upgrade system (damage, range, speed)"
+      - "Player base with health; enemies reaching it deal damage"
+    code_organization:
+      src/game/entities/: "Tower.ts, Enemy.ts, Projectile.ts, Base.ts"
+      src/game/systems/: "WaveManager.ts, PathFinder.ts, TowerFactory.ts, ProjectilePool.ts, EconomyManager.ts"
+      src/game/scenes/: "BootScene.ts, MenuScene.ts, GameScene.ts, LevelSelectScene.ts, UpgradeShopScene.ts, GameOverScene.ts"
+      src/game/data/: "waves.json, enemies.json, towers.json, upgrades.json"
+
+  idle-clicker:
+    recommended_physics: "none"
+    recommended_pattern: "upgrade_tree"
+    core_systems:
+      - "ClickHandler"
+      - "AutoClicker"
+      - "UpgradeManager"
+      - "PrestigeSystem"
+      - "NumberFormatter"
+      - "OfflineEarnings"
+    data_driven:
+      - "upgrades"
+      - "achievements"
+      - "prestige_bonuses"
+      - "generators"
+    typical_scenes:
+      - "UpgradeShop"
+      - "PrestigeScene"
+      - "StatsScene"
+    min_mechanics:
+      - "Click to earn primary currency with visual feedback"
+      - "Auto-generators that produce currency per second"
+      - "Upgrade tree with escalating costs (exponential scaling)"
+      - "Multiple generator tiers unlocking progressively"
+      - "Prestige/reset system for permanent multipliers"
+      - "Achievement/milestone system with rewards"
+      - "Offline earnings calculation on return"
+    code_organization:
+      src/game/entities/: "ClickTarget.ts, Generator.ts, UpgradeButton.ts"
+      src/game/systems/: "UpgradeManager.ts, AutoClicker.ts, PrestigeSystem.ts, SaveSystem.ts, NumberFormatter.ts"
+      src/game/scenes/: "BootScene.ts, MenuScene.ts, GameScene.ts, UpgradeShopScene.ts, StatsScene.ts"
+      src/game/data/: "upgrades.json, generators.json, achievements.json"
+
+  shooter:
+    recommended_physics: "arcade"
+    recommended_pattern: "entity_component"
+    core_systems:
+      - "PlayerController"
+      - "ProjectilePool"
+      - "EnemySpawner"
+      - "WeaponSystem"
+      - "PowerupSystem"
+      - "ScreenWrap"
+    data_driven:
+      - "weapons"
+      - "enemies"
+      - "waves"
+      - "powerups"
+      - "levels"
+    typical_scenes:
+      - "UpgradeShop"
+      - "LevelSelect"
+    min_mechanics:
+      - "Player movement (8-directional or twin-stick)"
+      - "Projectile firing with cooldown/ammo management"
+      - "Multiple weapon types (spread, laser, homing)"
+      - "Enemy spawning patterns with formation variety"
+      - "Power-up drops (shield, weapon upgrade, health)"
+      - "Score with kill combo multiplier"
+      - "Progressive difficulty (more enemies, faster, tougher)"
+    code_organization:
+      src/game/entities/: "Player.ts, Enemy.ts, Projectile.ts, Powerup.ts"
+      src/game/systems/: "PlayerController.ts, WeaponSystem.ts, ProjectilePool.ts, EnemySpawner.ts, PowerupSystem.ts"
+      src/game/scenes/: "BootScene.ts, MenuScene.ts, GameScene.ts, UpgradeShopScene.ts, GameOverScene.ts"
+      src/game/data/: "weapons.json, enemies.json, waves.json"
+
+  rpg:
+    recommended_physics: "arcade"
+    recommended_pattern: "state_machine"
+    core_systems:
+      - "DialogueManager"
+      - "QuestTracker"
+      - "InventorySystem"
+      - "CombatResolver"
+      - "StatsManager"
+      - "MapTransition"
+    data_driven:
+      - "characters"
+      - "items"
+      - "enemies"
+      - "quests"
+      - "dialogues"
+      - "maps"
+    typical_scenes:
+      - "DialogueScene"
+      - "InventoryScene"
+      - "CombatScene"
+      - "ShopScene"
+      - "MapScene"
+    min_mechanics:
+      - "Overworld exploration with NPC interaction"
+      - "Dialogue system with branching choices"
+      - "Turn-based or action combat with HP/MP"
+      - "Inventory management with equippable items"
+      - "Quest tracking with objectives and rewards"
+      - "Character stat progression (level up, allocate points)"
+      - "Multiple maps/areas with transitions"
+    code_organization:
+      src/game/entities/: "Player.ts, NPC.ts, Enemy.ts, Item.ts, Projectile.ts"
+      src/game/systems/: "DialogueManager.ts, QuestTracker.ts, InventorySystem.ts, CombatResolver.ts, StatsManager.ts"
+      src/game/scenes/: "BootScene.ts, MenuScene.ts, MapScene.ts, CombatScene.ts, DialogueScene.ts, InventoryScene.ts, ShopScene.ts, GameOverScene.ts"
+      src/game/data/: "characters.json, items.json, enemies.json, quests.json, dialogues.json"
+
+  card-game:
+    recommended_physics: "none"
+    recommended_pattern: "state_machine"
+    core_systems:
+      - "DeckManager"
+      - "CardFactory"
+      - "TurnManager"
+      - "RuleEngine"
+      - "AIController"
+      - "EffectResolver"
+    data_driven:
+      - "cards"
+      - "decks"
+      - "effects"
+      - "enemies"
+      - "rules"
+    typical_scenes:
+      - "DeckBuilder"
+      - "CardReward"
+      - "MapScene"
+    min_mechanics:
+      - "Card drawing from deck with shuffle"
+      - "Hand management (play, discard, hold)"
+      - "Card effects (attack, defend, heal, special)"
+      - "Turn-based play with mana/energy cost"
+      - "Enemy AI with distinct behavior patterns"
+      - "Deck building between runs or card rewards"
+      - "Card synergy and combo effects"
+    code_organization:
+      src/game/entities/: "Card.ts, Deck.ts, Hand.ts, Enemy.ts"
+      src/game/systems/: "DeckManager.ts, CardFactory.ts, TurnManager.ts, RuleEngine.ts, EffectResolver.ts, AIController.ts"
+      src/game/scenes/: "BootScene.ts, MenuScene.ts, GameScene.ts, DeckBuilderScene.ts, CardRewardScene.ts, MapScene.ts, GameOverScene.ts"
+      src/game/data/: "cards.json, decks.json, enemies.json, effects.json"
+
+  racing:
+    recommended_physics: "arcade"
+    recommended_pattern: "entity_component"
+    core_systems:
+      - "VehicleController"
+      - "TrackManager"
+      - "LapTracker"
+      - "AICompetitor"
+      - "PositionTracker"
+      - "BoostSystem"
+    data_driven:
+      - "tracks"
+      - "vehicles"
+      - "powerups"
+      - "ai_profiles"
+    typical_scenes:
+      - "VehicleSelect"
+      - "TrackSelect"
+      - "ResultsScene"
+    min_mechanics:
+      - "Vehicle acceleration, braking, and steering"
+      - "Track following with boundaries and checkpoints"
+      - "Lap counting and position tracking"
+      - "AI opponents with rubber-banding difficulty"
+      - "Boost/pickup items on track"
+      - "Speed-based camera zoom or FOV shift"
+      - "Position-based ranking with results screen"
+    code_organization:
+      src/game/entities/: "Vehicle.ts, TrackSegment.ts, Powerup.ts, AICompetitor.ts"
+      src/game/systems/: "VehicleController.ts, TrackManager.ts, LapTracker.ts, PositionTracker.ts, BoostSystem.ts"
+      src/game/scenes/: "BootScene.ts, MenuScene.ts, GameScene.ts, TrackSelectScene.ts, VehicleSelectScene.ts, ResultsScene.ts, GameOverScene.ts"
+      src/game/data/: "tracks.json, vehicles.json, powerups.json"
+
+  runner:
+    recommended_physics: "arcade"
+    recommended_pattern: "state_machine"
+    core_systems:
+      - "LaneManager"
+      - "ObstacleSpawner"
+      - "CollectibleSpawner"
+      - "SpeedManager"
+      - "ScoreTracker"
+      - "PowerupSystem"
+    data_driven:
+      - "obstacles"
+      - "powerups"
+      - "milestones"
+    typical_scenes:
+      - "UpgradeShop"
+      - "StatsScene"
+    min_mechanics:
+      - "Auto-scrolling world with increasing speed"
+      - "Lane switching or jump/duck evasion"
+      - "Obstacle spawning with pattern variety"
+      - "Collectible coins/gems with score tracking"
+      - "Power-ups (magnet, shield, score multiplier)"
+      - "Distance-based scoring with milestones"
+      - "Run summary with high score comparison"
+    code_organization:
+      src/game/entities/: "Player.ts, Obstacle.ts, Collectible.ts, Powerup.ts"
+      src/game/systems/: "LaneManager.ts, ObstacleSpawner.ts, CollectibleSpawner.ts, SpeedManager.ts, ScoreTracker.ts"
+      src/game/scenes/: "BootScene.ts, MenuScene.ts, GameScene.ts, UpgradeShopScene.ts, StatsScene.ts, GameOverScene.ts"
+      src/game/data/: "obstacles.json, powerups.json, milestones.json"
+
+  arena:
+    recommended_physics: "arcade"
+    recommended_pattern: "wave_based"
+    core_systems:
+      - "WaveManager"
+      - "EnemySpawner"
+      - "ProjectilePool"
+      - "WeaponSystem"
+      - "PickupManager"
+      - "ArenaBounds"
+    data_driven:
+      - "waves"
+      - "enemies"
+      - "weapons"
+      - "pickups"
+    typical_scenes:
+      - "UpgradeShop"
+      - "LoadoutScene"
+    min_mechanics:
+      - "Free-roaming player in bounded arena"
+      - "Wave-based enemy spawning with escalating difficulty"
+      - "Multiple weapon pickups scattered in arena"
+      - "Health/shield pickups"
+      - "Kill streak/combo scoring"
+      - "Arena hazard zones (fire, poison, electric)"
+      - "Boss waves every N rounds"
+    code_organization:
+      src/game/entities/: "Player.ts, Enemy.ts, Projectile.ts, Pickup.ts, Hazard.ts"
+      src/game/systems/: "WaveManager.ts, EnemySpawner.ts, ProjectilePool.ts, WeaponSystem.ts, PickupManager.ts"
+      src/game/scenes/: "BootScene.ts, MenuScene.ts, GameScene.ts, LoadoutScene.ts, UpgradeShopScene.ts, GameOverScene.ts"
+      src/game/data/: "waves.json, enemies.json, weapons.json, pickups.json"
+
+  strategy:
+    recommended_physics: "none"
+    recommended_pattern: "grid_based"
+    core_systems:
+      - "GridManager"
+      - "UnitController"
+      - "TurnManager"
+      - "AIController"
+      - "ResourceSystem"
+      - "FogOfWar"
+    data_driven:
+      - "units"
+      - "buildings"
+      - "maps"
+      - "technologies"
+      - "factions"
+    typical_scenes:
+      - "MapScene"
+      - "TechTree"
+      - "BuildScene"
+    min_mechanics:
+      - "Grid-based unit placement and movement"
+      - "Turn-based or real-time decision making"
+      - "Resource gathering and spending"
+      - "Unit production and building construction"
+      - "Combat resolution (attack, defend, retreat)"
+      - "Technology research tree"
+      - "Win/loss conditions (destroy base, control territory, timed)"
+    code_organization:
+      src/game/entities/: "Unit.ts, Building.ts, Tile.ts, Resource.ts"
+      src/game/systems/: "GridManager.ts, UnitController.ts, TurnManager.ts, AIController.ts, ResourceSystem.ts"
+      src/game/scenes/: "BootScene.ts, MenuScene.ts, MapScene.ts, TechTreeScene.ts, GameOverScene.ts"
+      src/game/data/: "units.json, buildings.json, maps.json, technologies.json"
+
+  arcade:
+    recommended_physics: "arcade"
+    recommended_pattern: "state_machine"
+    core_systems:
+      - "GameLoopManager"
+      - "ScoreSystem"
+      - "DifficultyCurve"
+      - "InputHandler"
+      - "FeedbackSystem"
+      - "HighScoreTracker"
+    data_driven:
+      - "difficulty_curve"
+      - "scoring"
+      - "achievements"
+    typical_scenes:
+      - "HighScoreScene"
+      - "Tutorial"
+    min_mechanics:
+      - "Simple responsive controls (single button, directional)"
+      - "Fast-paced core loop with immediate feedback"
+      - "Progressive difficulty (speed, density, complexity)"
+      - "Scoring with multipliers and combos"
+      - "Life/continue system"
+      - "Visual/audio feedback for every action"
+      - "High score tracking and display"
+    code_organization:
+      src/game/entities/: "Player.ts, Obstacle.ts, Collectible.ts"
+      src/game/systems/: "GameLoopManager.ts, ScoreSystem.ts, DifficultyCurve.ts, InputHandler.ts"
+      src/game/scenes/: "BootScene.ts, MenuScene.ts, GameScene.ts, TutorialScene.ts, HighScoreScene.ts, GameOverScene.ts"
+      src/game/data/: "difficulty.json, scoring.json"
+
+
+# =============================================================================
+# B) PHASER CAPABILITIES
+# =============================================================================
+
+phaser_capabilities:
+
+  # ---------------------------------------------------------------------------
+  # Physics Engines
+  # ---------------------------------------------------------------------------
+  physics_engines:
+    arcade:
+      description: "Lightweight AABB physics for most 2D games"
+      best_for: ["platformers", "shooters", "runners", "arcade", "arena games"]
+      features:
+        - "AABB collision detection (axis-aligned bounding boxes)"
+        - "Velocity-based movement with acceleration and drag"
+        - "Gravity simulation"
+        - "Collider and overlap detection with callbacks"
+        - "Static and dynamic bodies"
+        - "Sprite.body.setBounce(), setCollideWorldBounds(), setImmovable()"
+        - "Physics groups for batch collision rules"
+      limitations:
+        - "No rotational physics"
+        - "No polygon/shape-based collision (only rectangles/circles)"
+        - "No joints or constraints"
+        - "No realistic physics simulation"
+      api_patterns:
+        enable: "physics: { default: 'arcade', arcade: { gravity: { y: 300 }, debug: false } }"
+        create_sprite: "this.physics.add.sprite(x, y, texture)"
+        create_static: "this.physics.add.staticImage(x, y, texture)"
+        collider: "this.physics.add.collider(objA, objB, callback)"
+        overlap: "this.physics.add.overlap(player, group, callback)"
+        group: "this.physics.add.group({ key: 'bullet', repeat: 10, setXY: { x: 12, y: 0, stepX: 70 } })"
+
+    matter:
+      description: "Full rigid-body physics via Matter.js for complex simulations"
+      best_for: ["physics puzzles", "ragdoll", "vehicle games", "stacking games", "complex collision shapes"]
+      features:
+        - "Rigid body physics with realistic collision"
+        - "Polygon, circle, and compound body shapes"
+        - "Constraints, springs, and joints"
+        - "Rotational physics with torque"
+        - "Sensor bodies (overlap without collision)"
+        - "Sleeping bodies for performance"
+        - "Collision events with contact data (normal, tangent, vertices)"
+        - "Composite bodies"
+      limitations:
+        - "Higher CPU cost than Arcade"
+        - "More complex API, harder to debug"
+        - "Overkill for most simple 2D games"
+        - "Tilemap collision setup requires extra work"
+      api_patterns:
+        enable: "physics: { default: 'matter', matter: { gravity: { y: 1 }, debug: false } }"
+        create_sprite: "this.matter.add.sprite(x, y, texture)"
+        create_body: "this.matter.add.rectangle(x, y, width, height, options)"
+        create_circle: "this.matter.add.circle(x, y, radius, options)"
+        inject: "this.matter.add.gameObject(existingSprite, options)"
+        world_bounds: "this.matter.world.setBounds(0, 0, width, height)"
+        collision: "this.matter.world.on('collisionstart', (event) => { ... })"
+
+    none:
+      description: "No physics engine — manual positioning for grid/puzzle games"
+      best_for: ["puzzle-match", "card games", "strategy", "tower defense", "idle games"]
+      notes: "Use tweens for smooth movement. Manual collision via grid coordinate checks or distance calculations."
+
+  # ---------------------------------------------------------------------------
+  # Input Systems
+  # ---------------------------------------------------------------------------
+  input_systems:
+    keyboard:
+      description: "Keyboard input via cursor keys or custom key bindings"
+      api: |
+        const cursors = this.input.keyboard!.createCursorKeys();
+        if (cursors.left.isDown) { ... }
+        const keyW = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.W);
+        if (Phaser.Input.Keyboard.JustDown(keyW)) { ... }
+      notes: "Use JustDown/JustUp for single-press detection. isDown is for continuous hold."
+
+    mouse_pointer:
+      description: "Mouse and single-pointer (touch) input"
+      api: |
+        this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
+          const { x, y } = pointer;
+        });
+        this.input.on('pointermove', (pointer) => { ... });
+        this.input.on('pointerup', (pointer) => { ... });
+      notes: "pointer also works for touch. Use pointer.rightButtonDown() for right-click."
+
+    touch_multi:
+      description: "Multi-touch support for mobile games"
+      api: |
+        this.input.addPointer(2); // support 3 total pointers
+        this.input.on('pointerdown', (pointer) => {
+          const touchId = pointer.id;
+        });
+      notes: "Default is 1 pointer. Call addPointer() in create() for multi-touch."
+
+    gamepad:
+      description: "Gamepad/controller support via the Gamepad API"
+      api: |
+        this.input.gamepad!.on('connected', (pad: Phaser.Input.Gamepad) => { ... });
+        this.input.gamepad!.on('down', (pad, button, value) => { ... });
+        if (this.input.gamepad!.total > 0) {
+          const pad = this.input.gamepad!.pad1;
+          if (pad.left) { ... }
+        }
+      notes: "Requires user gesture before gamepad API is available. Always provide keyboard fallback."
+
+  # ---------------------------------------------------------------------------
+  # Rendering
+  # ---------------------------------------------------------------------------
+  rendering:
+    sprites:
+      description: "Texture-based game objects"
+      api: |
+        this.add.sprite(x, y, 'texture_key');
+        this.add.image(x, y, 'texture_key'); // no animation, lighter weight
+      notes: "Sprites support animation (play()). Images do not. Use images for static elements."
+
+    shapes:
+      description: "Built-in shape rendering for placeholder/prototype visuals"
+      api: |
+        this.add.rectangle(x, y, width, height, color, alpha);
+        this.add.circle(x, y, radius, color, alpha);
+        this.add.triangle(x, y, x1, y1, x2, y2, x3, y3, color, alpha);
+        this.add.polygon(x, y, points, color, alpha);
+        // Styling:
+        rect.setStrokeStyle(2, 0xffffff);
+        rect.setFillStyle(0xff0000, 0.8);
+      notes: "Always add visual polish: strokes, gradients, glows. Plain unstyled rectangles fail QA."
+
+    text:
+      description: "Bitmap and TrueType text rendering"
+      api: |
+        this.add.text(x, y, 'Hello', {
+          fontSize: '24px',
+          color: '#ffffff',
+          fontFamily: 'monospace',
+          backgroundColor: '#333333',
+          padding: { x: 10, y: 5 },
+          align: 'center',
+        }).setOrigin(0.5);
+        text.setText('New text');
+        text.setStyle({ color: '#ff0000' });
+      notes: "Always setOrigin(0.5) for center-aligned text. Use setInteractive() for text buttons."
+
+    graphics:
+      description: "Programmatic drawing for progress bars, health bars, debug overlays"
+      api: |
+        const gfx = this.add.graphics();
+        gfx.fillStyle(0x00ff88, 1);
+        gfx.fillRect(x, y, width, height);
+        gfx.lineStyle(2, 0xffffff);
+        gfx.strokeRect(x, y, width, height);
+        gfx.clear(); // redraw each frame in update()
+      notes: "Graphics objects must be manually redrawn. Use for dynamic shapes like progress bars."
+
+    tilemaps:
+      description: "Tile-based level rendering from Tiled editor or programmatically"
+      api: |
+        // From Tiled JSON:
+        const map = this.make.tilemap({ key: 'level1' });
+        const tileset = map.addTilesetImage('tiles', 'tiles_key');
+        const layer = map.createLayer('Ground', tileset, 0, 0);
+        layer.setCollisionByProperty({ collides: true });
+        this.physics.add.collider(player, layer);
+        // Programmatic:
+        const map = this.make.tilemap({ tileWidth: 32, tileHeight: 32, width: 25, height: 19 });
+      notes: "TilemapGPULayer is new in v4 for GPU-accelerated rendering of large maps."
+
+    particles:
+      description: "Particle emitter system for visual effects"
+      api: |
+        // v4 API:
+        const emitter = this.add.particleEmitter(x, y, 'particle_texture', {
+          speed: { min: 50, max: 200 },
+          lifespan: 800,
+          quantity: 10,
+          scale: { start: 1, end: 0 },
+          alpha: { start: 1, end: 0 },
+          blendMode: 'ADD',
+        });
+        emitter.explode(20);
+        emitter.start();
+        emitter.stop();
+      notes: "v4 changed particle API significantly. No more ParticleEmitterManager. Direct this.add.particleEmitter()."
+
+    tweens:
+      description: "Animation system for smooth property transitions"
+      api: |
+        this.tweens.add({
+          targets: sprite,
+          x: 400,
+          y: 300,
+          alpha: 1,
+          duration: 500,
+          ease: 'Power2',
+          yoyo: false,
+          repeat: 0,
+          delay: 100,
+          onComplete: (tween, targets) => { targets[0].destroy(); },
+        });
+        // Easing functions: 'Linear', 'Power2', 'Power3', 'Quad.easeIn',
+        // 'Quad.easeOut', 'Cubic.easeInOut', 'Elastic.easeOut', 'Bounce.easeOut'
+      notes: "Use tweens for ALL smooth animations. Avoid manual lerp in update() when a tween works."
+
+    cameras:
+      description: "Camera system for scrolling, following, shaking, fading"
+      api: |
+        const cam = this.cameras.main;
+        cam.startFollow(player, true, 0.08, 0.08);
+        cam.setBounds(0, 0, mapWidth, mapHeight);
+        cam.setZoom(1.5);
+        cam.shake(200, 0.01);
+        cam.fadeIn(500);
+        cam.fadeOut(500, 0, 0, 0);
+        cam.flash(500, 255, 255, 255);
+      notes: "Use lerp values (0.05-0.1) for smooth follow. setBounds prevents showing outside world."
+
+    containers:
+      description: "Group game objects for combined positioning and interaction"
+      api: |
+        const container = this.add.container(x, y, [child1, child2]);
+        container.setSize(100, 100);
+        container.setInteractive();
+        container.add(child3);
+        container.remove(child1);
+        container.setPosition(x, y); // moves all children
+      notes: "Containers are the Phaser way to create composite UI elements. Set size for interactive area."
+
+    filters:
+      description: "v4 replaces FX pipeline with Filter system for visual effects"
+      api: |
+        // v4 Filters replace v3 FX pipeline
+        // Specific filter API varies by filter type
+        // Use for: blur, glow, color matrix, displacement
+      notes: "v4 BREAKING: old .setPipeline() and FX methods are replaced by Filters system. Do NOT use v3 pipeline code."
+
+  # ---------------------------------------------------------------------------
+  # Audio
+  # ---------------------------------------------------------------------------
+  audio:
+    description: "Web Audio API integration for sound effects and music"
+    loading: |
+      this.load.audio('bgm', ['assets/audio/bgm.mp3', 'assets/audio/bgm.ogg']);
+      this.load.audio('sfx_jump', 'assets/audio/jump.mp3');
+    playback: |
+      this.sound.play('sfx_jump');
+      const bgm = this.sound.add('bgm', { loop: true, volume: 0.5 });
+      bgm.play();
+      bgm.stop();
+      this.sound.setVolume(0.3); // global
+    notes: |
+      - Always provide multiple formats (mp3 + ogg) for browser compatibility
+      - Audio context requires user interaction to start (handle in MenuScene)
+      - Use navigator.sendBeacon for analytics, NOT synchronous XHR
+      - Consider programmatic Web Audio for BGM (no file needed)
+
+  # ---------------------------------------------------------------------------
+  # Scene Management
+  # ---------------------------------------------------------------------------
+  scene_management:
+    lifecycle_hooks:
+      init: "Called when scene starts. Receives data from scene.start(). Use for scene-specific initialization."
+      preload: "Load assets here (images, audio, data). Called once per scene lifecycle."
+      create: "Called after preload completes. Create game objects, set up physics, bind input."
+      update: "Called every frame. Parameters: (time: number, delta: number). delta is ms since last frame."
+
+    transitions:
+      start: "this.scene.start('SceneKey', { level: 3 }) — stops current, starts target"
+      launch: "this.scene.launch('HUDScene') — launches in parallel (overlay)"
+      pause: "this.scene.pause('GameScene')"
+      resume: "this.scene.resume('GameScene')"
+      sleep: "this.scene.sleep('GameScene') — keeps in memory but stops update"
+      wake: "this.scene.wake('GameScene')"
+      stop: "this.scene.stop('GameScene')"
+      switch: "this.scene.switch('GameScene', 'PauseScene') — pause one, wake other"
+
+    passing_data: "this.scene.start('GameOverScene', { score: 100, time: 60 }); received in init(data)"
+
+    cross_scene_data:
+      registry: "this.registry.set('highScore', 500); this.registry.get('highScore'); — persists across scenes"
+      events: "this.scene.get('GameScene').events.emit('scoreChanged', score); — cross-scene communication"
+
+  # ---------------------------------------------------------------------------
+  # Known Limitations
+  # ---------------------------------------------------------------------------
+  known_limitations:
+    - "No native 3D support — Mesh and Plane removed in v4"
+    - "Tilemap collision with Matter physics requires manual body setup per tile"
+    - "Particle system does not support GPU compute shaders"
+    - "Text rendering is CPU-based; massive text counts hurt performance"
+    - "Container nesting beyond 3-4 levels degrades performance"
+    - "Arcade physics does not support polygon or rotated body collision"
+    - "WebGL context loss can occur on some mobile browsers under memory pressure"
+    - "Audio autoplay blocked by browsers until user interaction"
+    - "Sprite sheets must have consistent frame sizes; texture atlas (JSON) is more flexible"
+    - "No built-in pathfinding — implement A* or use a library for grid-based games"
+    - "No built-in state machine — implement manually or use a pattern"
+    - "Scene data passing is one-shot (init only); use registry for persistent cross-scene state"
+
+
+# =============================================================================
+# C) CODE PATTERNS
+# =============================================================================
+# Reusable TypeScript patterns with Phaser 4 API. Each under 40 lines.
+# All use `import * as Phaser from 'phaser';`
+# =============================================================================
+
+code_patterns:
+
+  # ---------------------------------------------------------------------------
+  # Scene Base Template
+  # ---------------------------------------------------------------------------
+  scene_base_template:
+    description: "Base template for any Phaser 4 scene with standard lifecycle"
+    code: |
+      import * as Phaser from 'phaser';
+
+      export class MyScene extends Phaser.Scene {
+          constructor() {
+              super({ key: 'MyScene' });
+          }
+
+          init(data: Record<string, unknown>): void {
+              // Receive data from scene.start('MyScene', { key: value })
+          }
+
+          preload(): void {
+              // Load assets: this.load.image('key', 'path')
+          }
+
+          create(): void {
+              const { width, height } = this.scale;
+              // Create game objects, bind input, set up physics
+          }
+
+          update(_time: number, delta: number): void {
+              // Game loop: delta is ms since last frame
+          }
+      }
+
+  # ---------------------------------------------------------------------------
+  # Entity Base Template
+  # ---------------------------------------------------------------------------
+  entity_base_template:
+    description: "Base class for game entities with physics and state"
+    code: |
+      import * as Phaser from 'phaser';
+
+      export abstract class Entity extends Phaser.Physics.Arcade.Sprite {
+          protected hp: number;
+          protected maxHp: number;
+          protected speed: number;
+
+          constructor(scene: Phaser.Scene, x: number, y: number, texture: string, hp: number = 100) {
+              super(scene, x, y, texture);
+              scene.add.existing(this);
+              scene.physics.add.existing(this);
+              this.hp = hp;
+              this.maxHp = hp;
+              this.speed = 150;
+              this.setCollideWorldBounds(true);
+          }
+
+          takeDamage(amount: number): void {
+              this.hp = Math.max(0, this.hp - amount);
+              if (this.hp <= 0) this.die();
+          }
+
+          abstract die(): void;
+      }
+
+  # ---------------------------------------------------------------------------
+  # Data Loader Pattern
+  # ---------------------------------------------------------------------------
+  data_loader_pattern:
+    description: "Load JSON game data files and parse them into typed configs"
+    code: |
+      import * as Phaser from 'phaser';
+
+      export interface LevelConfig {
+          id: number; name: string; difficulty: number;
+          enemies: { type: string; count: number; spawnDelay: number }[];
+      }
+
+      export class DataLoader {
+          static cacheLevels(scene: Phaser.Scene): LevelConfig[] {
+              const raw = scene.cache.json.get('levels');
+              return raw as LevelConfig[];
+          }
+      }
+
+      // In BootScene.preload():
+      //   this.load.json('levels', 'assets/data/levels.json');
+      //   this.load.json('enemies', 'assets/data/enemies.json');
+      // In GameScene.create():
+      //   const levels = DataLoader.cacheLevels(this);
+
+  # ---------------------------------------------------------------------------
+  # Object Pool Pattern
+  # ---------------------------------------------------------------------------
+  object_pool_pattern:
+    description: "Reusable object pool for projectiles, particles, enemies"
+    code: |
+      import * as Phaser from 'phaser';
+
+      export class ProjectilePool {
+          private pool: Phaser.Physics.Arcade.Image[] = [];
+          private group: Phaser.Physics.Arcade.Group;
+
+          constructor(scene: Phaser.Scene, texture: string, maxSize: number = 30) {
+              this.group = scene.physics.add.group({ maxSize });
+              for (let i = 0; i < maxSize; i++) {
+                  const obj = scene.physics.add.image(0, 0, texture)
+                      .setActive(false).setVisible(false);
+                  this.group.add(obj);
+                  this.pool.push(obj);
+              }
+          }
+
+          fire(x: number, y: number, vx: number, vy: number): void {
+              const obj = this.group.getFirstDead(false) as Phaser.Physics.Arcade.Image;
+              if (obj) {
+                  obj.setPosition(x, y).setActive(true).setVisible(true);
+                  obj.setVelocity(vx, vy);
+              }
+          }
+
+          getGroup(): Phaser.Physics.Arcade.Group { return this.group; }
+      }
+
+  # ---------------------------------------------------------------------------
+  # Upgrade System Pattern
+  # ---------------------------------------------------------------------------
+  upgrade_system_pattern:
+    description: "Upgrade shop with exponential cost scaling for idle/upgrade games"
+    code: |
+      import * as Phaser from 'phaser';
+
+      export interface UpgradeConfig {
+          id: string; name: string; baseCost: number; costMultiplier: number;
+          effect: (level: number) => number;
+      }
+
+      export class UpgradeSystem {
+          private upgrades = new Map<string, { config: UpgradeConfig; level: number }>();
+
+          addUpgrade(config: UpgradeConfig): void {
+              this.upgrades.set(config.id, { config, level: 0 });
+          }
+
+          getCost(id: string): number {
+              const u = this.upgrades.get(id)!;
+              return Math.floor(u.config.baseCost * Math.pow(u.config.costMultiplier, u.level));
+          }
+
+          purchase(id: string, currentFunds: number): boolean {
+              const cost = this.getCost(id);
+              if (currentFunds >= cost) {
+                  const u = this.upgrades.get(id)!;
+                  u.level++;
+                  return true;
+              }
+              return false;
+          }
+
+          getEffect(id: string): number {
+              const u = this.upgrades.get(id)!;
+              return u.config.effect(u.level);
+          }
+      }
+
+  # ---------------------------------------------------------------------------
+  # Wave System Pattern
+  # ---------------------------------------------------------------------------
+  wave_system_pattern:
+    description: "Wave-based enemy spawning for tower defense and arena shooters"
+    code: |
+      import * as Phaser from 'phaser';
+
+      export interface WaveConfig { enemies: { type: string; count: number; delay: number }[]; }
+
+      export class WaveManager {
+          private currentWave = 0;
+          private waves: WaveConfig[] = [];
+          private timer?: Phaser.Time.TimerEvent;
+
+          loadWaves(data: WaveConfig[]): void { this.waves = data; }
+
+          startNextWave(scene: Phaser.Scene, spawnFn: (type: string) => void): void {
+              if (this.currentWave >= this.waves.length) return;
+              const wave = this.waves[this.currentWave];
+              let spawned = 0;
+              this.timer = scene.time.addEvent({
+                  delay: wave.enemies[0]?.delay ?? 1000,
+                  callback: () => {
+                      if (spawned < wave.enemies.length) {
+                          spawnFn(wave.enemies[spawned].type);
+                          spawned++;
+                      }
+                  }, loop: true,
+              });
+              this.currentWave++;
+          }
+
+          getWaveNumber(): number { return this.currentWave; }
+          isComplete(): boolean { return this.currentWave >= this.waves.length; }
+      }
+
+  # ---------------------------------------------------------------------------
+  # Save System Pattern
+  # ---------------------------------------------------------------------------
+  save_system_pattern:
+    description: "localStorage persistence for game state, high scores, and settings"
+    code: |
+      const SAVE_KEY = 'mygame_save';
+
+      export interface SaveData {
+          highScore: number; level: number; upgrades: Record<string, number>;
+          lastPlayed: number; settings: { sfxVolume: number; bgmVolume: number };
+      }
+
+      export class SaveSystem {
+          static save(data: SaveData): void {
+              try {
+                  data.lastPlayed = Date.now();
+                  localStorage.setItem(SAVE_KEY, JSON.stringify(data));
+              } catch { /* localStorage full or unavailable */ }
+          }
+
+          static load(): SaveData | null {
+              try {
+                  const raw = localStorage.getItem(SAVE_KEY);
+                  return raw ? JSON.parse(raw) : null;
+              } catch { return null; }
+          }
+
+          static clear(): void { localStorage.removeItem(SAVE_KEY); }
+      }
+
+
+# =============================================================================
+# D) COMMON PITFALLS
+# =============================================================================
+# Phaser-specific issues that LLMs frequently get wrong when generating code.
+# =============================================================================
+
+common_pitfalls:
+
+  wrong_import_syntax:
+    title: "Wrong import syntax"
+    problem: "Using `import Phaser from 'phaser'` — Phaser ESM has NO default export."
+    fix: "Always use `import * as Phaser from 'phaser';`"
+    frequency: "VERY HIGH — the most common Phaser code generation error"
+
+  phaser3_api_in_v4:
+    title: "Using Phaser 3 API patterns in Phaser 4"
+    problem: |
+      LLMs often generate Phaser 3 code because training data is Phaser 3-heavy.
+      Common Phaser 3 mistakes in v4:
+      - Using .setPipeline('Light2D') instead of .setLighting(true)
+      - Using .setFX() / FX pipeline methods instead of Filters
+      - Using Phaser.Geom.Point instead of Phaser.Math.Vector2
+      - Using ParticleEmitterManager (removed in v4)
+      - Using Mesh or Plane GameObjects (removed in v4)
+      - Using old BitmapMask or GeometryMask patterns
+    fix: "Use v4 API: Filters, RenderNodes, Vector2, direct particleEmitter(), Lighting component."
+
+  scene_key_mismatch:
+    title: "Scene key mismatch"
+    problem: "Scene class uses super({ key: 'GameScene' }) but code calls this.scene.start('game-scene')."
+    fix: "Define scene keys as constants. Ensure constructor super() key matches scene.start() calls exactly."
+
+  physics_not_enabled:
+    title: "Physics not enabled in game config"
+    problem: "Using this.physics.add.sprite() but forgot to add physics config to GameConfig."
+    fix: |
+      const config = {
+          physics: { default: 'arcade', arcade: { gravity: { y: 300 }, debug: false } }
+      };
+
+  physics_body_undefined:
+    title: "Accessing .body on non-physics object"
+    problem: "Created sprite with this.add.sprite() instead of this.physics.add.sprite(), then tried to access .body."
+    fix: "Use this.physics.add.sprite() for physics objects. Or call this.physics.add.existing(sprite)."
+
+  preload_not_called:
+    title: "Assets loaded outside preload"
+    problem: "Calling this.load.image() in create() instead of preload(). Loader not automatically started."
+    fix: "Load assets in preload(). If loading in create(), call this.load.start() afterward."
+
+  missing_setinteractive:
+    title: "GameObject not interactive"
+    problem: "Adding pointerdown listener to a text or sprite without calling setInteractive() first."
+    fix: "Always call .setInteractive({ useHandCursor: true }) before adding pointer events."
+
+  container_size_zero:
+    title: "Container with zero interactive area"
+    problem: "Container has children but no size set, so interactive area is 0x0 and clicks don't register."
+    fix: "Call container.setSize(width, height) before setInteractive()."
+
+  wrong_origin:
+    title: "Wrong origin for text and sprites"
+    problem: "Text or sprites offset because default origin is (0, 0) top-left, not center."
+    fix: "Call .setOrigin(0.5) for center positioning. Common for text labels and centered UI."
+
+  tween_target_destroyed:
+    title: "Tween targeting destroyed object"
+    problem: "Tween continues running after its target is destroyed, causing runtime errors."
+    fix: "Always set onComplete callback to clean up. Use tween.stop() before destroying targets."
+
+  delta_units:
+    title: "Delta is milliseconds, not seconds"
+    problem: "update(time, delta) — delta is in milliseconds. Multiplying speed by delta directly gives wrong scale."
+    fix: "Convert: const dt = delta / 1000; then multiply speeds by dt for frame-rate-independent movement."
+
+  memory_leak_events:
+    title: "Event listener memory leak"
+    problem: "Adding input/physics events in update() or without cleanup, causing duplicate listeners."
+    fix: "Register events once in create(). Use this.events.off() or this.input.off() for cleanup."
+
+  arcade_immovable:
+    title: "Pushable platform bug"
+    problem: "Player pushes static platforms because they weren't set immovable."
+    fix: "For static bodies: platform.setImmovable(true) or use this.physics.add.staticGroup()."
+
+  arcade_overlap_vs_collider:
+    title: "Overlap vs Collider confusion"
+    problem: "Using collider() when overlap() is needed (collectibles), or vice versa (walls)."
+    fix: |
+      collider(): objects physically push apart + callback. Use for walls, floors.
+      overlap(): objects pass through each other + callback. Use for collectibles, triggers.
+
+  scale_before_create:
+    title: "this.scale not available in constructor"
+    problem: "Accessing this.scale.width in the scene constructor before Phaser initialized it."
+    fix: "Access this.scale in create() or later, NOT in the constructor."
+
+  particle_api_v3:
+    title: "Phaser 3 particle API used in v4"
+    problem: "Creating Phaser.GameObjects.Particles.ParticleEmitterManager and attaching emitters to it."
+    fix: "In v4, use this.add.particleEmitter(x, y, texture, config) directly. No manager needed."
+
+
+# =============================================================================
+# E) COMMERCIAL PATTERNS
+# =============================================================================
+# Patterns for monetization-ready games: ads, retention, progression, engagement.
+# =============================================================================
+
+commercial_patterns:
+
+  ad_integration_points:
+    description: "Where to place ads without disrupting gameplay"
+    points:
+      interstitial_between_levels:
+        timing: "After level completion, before next level starts"
+        implementation: |
+          // In level complete handler:
+          this.time.delayedCall(500, () => {
+              if (typeof (window as any).showAd === 'function') {
+                  (window as any).showAd('interstitial', () => {
+                      this.scene.start('GameScene', { level: nextLevel });
+                  });
+              } else {
+                  this.scene.start('GameScene', { level: nextLevel });
+              }
+          });
+        ux_rules:
+          - "Never show ads during active gameplay"
+          - "Always provide a 'Continue' or 'Skip Ad' fallback"
+          - "Limit to 1 interstitial per 2-3 minutes"
+
+      rewarded_video_game_over:
+        timing: "On game over screen, offer extra life/continue in exchange for watching ad"
+        implementation: |
+          const rewardBtn = this.add.text(x, y, 'Watch Ad for Extra Life', style)
+              .setInteractive({ useHandCursor: true });
+          rewardBtn.on('pointerdown', () => {
+              if (typeof (window as any).showAd === 'function') {
+                  (window as any).showAd('rewarded', () => {
+                      this.registry.set('lives', (this.registry.get('lives') ?? 0) + 1);
+                      this.scene.start('GameScene');
+                  });
+              }
+          });
+        ux_rules:
+          - "Always make rewarded ads optional"
+          - "Clearly state the reward before watching"
+          - "Deliver reward immediately after ad completion"
+
+      banner_game_over:
+        timing: "Static banner on game over screen"
+        implementation: |
+          // Placeholder banner area in game over screen
+          const banner = this.add.rectangle(width / 2, height - 30, 320, 50, 0x333333);
+          this.add.text(width / 2, height - 30, '[ Ad Banner ]', {
+              fontSize: '12px', color: '#888888',
+          }).setOrigin(0.5);
+        ux_rules:
+          - "Only on static screens (game over, settings)"
+          - "Never on active gameplay screen"
+
+  retention_mechanics:
+    description: "Systems that bring players back daily"
+    patterns:
+      daily_challenge:
+        description: "Seeded random daily level that's the same for all players"
+        implementation: |
+          const today = new Date().toISOString().slice(0, 10);
+          const seed = today.split('-').reduce((a, b) => a + parseInt(b), 0);
+          // Use seed to generate consistent daily challenge
+          const isCompleted = this.registry.get(`daily_${today}`);
+          if (!isCompleted) { /* show daily challenge button */ }
+        retention_impact: "High — gives players a reason to return daily"
+
+      streak_bonus:
+        description: "Track consecutive days played, grant escalating rewards"
+        implementation: |
+          const lastPlay = SaveSystem.load()?.lastPlayed ?? 0;
+          const daysSince = Math.floor((Date.now() - lastPlay) / 86400000);
+          if (daysSince === 1) {
+              const streak = (this.registry.get('streak') ?? 0) + 1;
+              this.registry.set('streak', streak);
+              const bonus = Math.min(streak * 10, 100);
+              // Award bonus coins/currency
+          } else if (daysSince > 1) {
+              this.registry.set('streak', 0); // reset streak
+          }
+        retention_impact: "Very High — loss aversion drives daily return"
+
+      unlock_progression:
+        description: "Unlock new content (levels, characters, skins) at milestones"
+        implementation: |
+          const unlockThresholds = [
+              { score: 0, unlock: 'base' },
+              { score: 500, unlock: 'character_b' },
+              { score: 2000, unlock: 'level_pack_2' },
+              { score: 5000, unlock: 'skin_gold' },
+          ];
+          const highScore = this.registry.get('highScore') ?? 0;
+          const newUnlocks = unlockThresholds.filter(t => t.score <= highScore);
+        retention_impact: "High — visible progress toward next unlock"
+
+      achievement_notifications:
+        description: "Pop-up notifications for achievements and milestones"
+        implementation: |
+          // Toast-style notification
+          const toast = this.add.container(width / 2, -50, [
+              this.add.rectangle(0, 0, 300, 40, 0x333333, 0.9),
+              this.add.text(0, 0, 'Achievement: First Win!', { fontSize: '14px', color: '#ffcc00' })
+                  .setOrigin(0.5),
+          ]);
+          this.tweens.add({
+              targets: toast, y: 30, duration: 300, ease: 'Back.easeOut',
+              hold: 2000, yoyo: true, onComplete: () => toast.destroy(),
+          });
+        retention_impact: "Medium — social proof and completionism"
+
+  progression_systems:
+    description: "Visible progression that gives players long-term goals"
+    systems:
+      level_unlock:
+        description: "Sequential level unlocking with star ratings"
+        implementation: |
+          // Level select with stars
+          const levels = SaveSystem.load()?.levels ?? {};
+          for (let i = 0; i < totalLevels; i++) {
+              const unlocked = i === 0 || levels[i - 1]?.stars > 0;
+              const stars = levels[i]?.stars ?? 0;
+              // Render level button with lock/star state
+          }
+        best_for: ["platformer", "puzzle-match", "tower-defense", "rpg"]
+
+      score_milestones:
+        description: "Rewards at score thresholds that persist across sessions"
+        implementation: |
+          const milestones = [100, 500, 1000, 2500, 5000, 10000];
+          const highScore = this.registry.get('highScore') ?? 0;
+          milestones.forEach((m, i) => {
+              if (highScore >= m && !this.registry.get(`milestone_${m}`)) {
+                  this.registry.set(`milestone_${m}`, true);
+                  // Award reward
+              }
+          });
+        best_for: ["arcade", "shooter", "runner", "arena"]
+
+      collectible_unlocks:
+        description: "Collect items across runs to unlock new content"
+        implementation: |
+          const collectibles = SaveSystem.load()?.collectibles ?? [];
+          const totalCollected = collectibles.length;
+          const unlockAt = [5, 10, 20, 50]; // unlock new content at these counts
+          unlockAt.forEach(n => {
+              if (totalCollected >= n && !collectibles.includes(`unlock_${n}`)) {
+                  collectibles.push(`unlock_${n}`);
+                  // Show unlock notification
+              }
+          });
+        best_for: ["platformer", "runner", "rpg", "card-game"]
+
+      upgrade_tree:
+        description: "Persistent upgrades that carry across runs"
+        implementation: |
+          // Uses UpgradeSystem pattern from code_patterns
+          const saveData = SaveSystem.load();
+          if (saveData?.upgrades) {
+              Object.entries(saveData.upgrades).forEach(([id, level]) => {
+                  // Restore upgrade levels
+              });
+          }
+          // On purchase, save immediately
+          SaveSystem.save({ ...currentData, upgrades: currentUpgrades });
+        best_for: ["idle-clicker", "arena", "shooter", "tower-defense"]
+
+  engagement_hooks:
+    description: "Mechanics that keep players in-session longer"
+    hooks:
+      combo_system:
+        description: "Chain actions for score multiplier with visual feedback"
+        implementation: |
+          let comboCount = 0;
+          let comboTimer: Phaser.Time.TimerEvent;
+
+          function onKill(): void {
+              comboCount++;
+              const multiplier = 1 + Math.floor(comboCount / 3) * 0.5;
+              this.time.removeEvent(comboTimer);
+              comboTimer = this.time.delayedCall(2000, () => { comboCount = 0; });
+              // Visual: scale text, change color, flash background
+              this.tweens.add({ targets: comboText, scaleX: 1.3, scaleY: 1.3, duration: 100, yoyo: true });
+          }
+
+      power_up_variety:
+        description: "Diverse power-ups that change gameplay temporarily"
+        types:
+          shield: "Temporary invincibility with glow effect"
+          magnet: "Attract nearby collectibles"
+          multiplier: "Double score for duration"
+          speed_boost: "Increased movement speed"
+          weapon_upgrade: "Enhanced weapon for duration"
+        implementation: |
+          function applyPowerup(type: string, duration: number): void {
+              const effect = { active: true, remaining: duration };
+              this.tweens.addCounter({ from: duration, to: 0, duration: duration * 1000,
+                  onUpdate: (tween) => { effect.remaining = tween.getValue(); },
+                  onComplete: () => { effect.active = false; /* revert effect */ },
+              });
+          }
+
+      social_share:
+        description: "Share score button on game over screen"
+        implementation: |
+          const shareBtn = this.add.text(x, y, 'Share Score', style)
+              .setInteractive({ useHandCursor: true });
+          shareBtn.on('pointerdown', () => {
+              const text = `I scored ${score} in ${gameName}! Can you beat me?`;
+              if (navigator.share) {
+                  navigator.share({ title: gameName, text });
+              } else {
+                  navigator.clipboard.writeText(text);
+                  // Show 'Copied!' feedback
+              }
+          });
+
+      near_miss_feedback:
+        description: "Reward players for close calls with visual celebration"
+        implementation: |
+          // In collision check:
+          const dist = Phaser.Math.Distance.Between(player.x, player.y, obstacle.x, obstacle.y);
+          if (dist < nearMissThreshold && dist > collisionThreshold) {
+              score += nearMissBonus;
+              this.cameras.main.shake(50, 0.005);
+              this.tweens.add({ targets: nearMissText, alpha: 1, y: '-=20', duration: 300, yoyo: true });
+          }

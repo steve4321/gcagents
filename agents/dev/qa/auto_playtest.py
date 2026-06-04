@@ -12,6 +12,7 @@ from .playtest_checks import (
     check_canvas_exists,
     check_canvas_renders,
     check_click_start,
+    check_gameplay_depth,
     check_interactive_elements,
     check_no_white_screen,
     check_page_loads,
@@ -57,6 +58,7 @@ async def run_auto_playtest(game_dist_path: str | Path, game_dir: str | Path | N
                 ("interactive_elements", lambda: check_interactive_elements(page)),
                 ("click_start", lambda: check_click_start(page)),
                 ("score_system", lambda: check_score_system(page)),
+                ("gameplay_depth", lambda: check_gameplay_depth(page)),
             ]
 
             for name, check_fn in checks:
