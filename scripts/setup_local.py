@@ -1,4 +1,5 @@
 """One-time setup: create SQLite database, directories, and verify dependencies."""
+
 from __future__ import annotations
 
 import asyncio
@@ -62,8 +63,8 @@ async def setup() -> None:
 
 
 async def _init_db(db_path: Path) -> None:
-    from sqlalchemy.ext.asyncio import create_async_engine
     from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import create_async_engine
 
     engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}")
 

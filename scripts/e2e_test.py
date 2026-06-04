@@ -8,6 +8,7 @@ Usage:
     python scripts/e2e_test.py --mock       # mock all external API calls
     python scripts/e2e_test.py --scan-only  # only test market scanning
 """
+
 from __future__ import annotations
 
 import argparse
@@ -22,7 +23,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from shared.config import load_config, AppConfig
+from shared.config import AppConfig, load_config
 from shared.models import GameProposal
 
 console = Console()
@@ -149,7 +150,13 @@ async def test_build(project_dir: Path) -> bool:
     try:
         if not (project_dir / "node_modules").exists():
             console.print("Running npm install...")
-            subprocess.run(["npm", "install"], cwd=str(project_dir), capture_output=True, timeout=120, check=True)
+            subprocess.run(
+                ["npm", "install"],
+                cwd=str(project_dir),
+                capture_output=True,
+                timeout=120,
+                check=True,
+            )
 
         result = subprocess.run(
             ["npm", "run", "build"],
@@ -181,11 +188,13 @@ async def run_full_pipeline(mock: bool = False) -> None:
     config = load_config()
     config.games_output_dir.mkdir(parents=True, exist_ok=True)
 
-    console.print(Panel.fit(
-        "[bold]GCAgents End-to-End Integration Test[/bold]\n"
-        f"Mode: {'MOCK' if mock else 'LIVE'}",
-        border_style="green",
-    ))
+    console.print(
+        Panel.fit(
+            "[bold]GCAgents End-to-End Integration Test[/bold]\n"
+            f"Mode: {'MOCK' if mock else 'LIVE'}",
+            border_style="green",
+        )
+    )
 
     # Phase 1: Scan
     opportunities = await test_market_scan(config, mock)
@@ -219,15 +228,17 @@ async def run_full_pipeline(mock: bool = False) -> None:
 
     # Summary
     console.print("\n" + "═" * 60)
-    console.print(Panel.fit(
-        f"[bold]Pipeline Result[/bold]\n\n"
-        f"  Game: [cyan]{gdd.get('title', 'N/A')}[/cyan]\n"
-        f"  Genre: {gdd.get('genre', 'N/A')}\n"
-        f"  QA: {'[green]PASS[/green]' if qa_result['passed'] else '[red]FAIL[/red]'}\n"
-        f"  Build: {'[green]PASS[/green]' if build_ok else '[red]FAIL[/red]'}\n"
-        f"  Project: {project_dir}",
-        border_style="green" if build_ok else "red",
-    ))
+    console.print(
+        Panel.fit(
+            f"[bold]Pipeline Result[/bold]\n\n"
+            f"  Game: [cyan]{gdd.get('title', 'N/A')}[/cyan]\n"
+            f"  Genre: {gdd.get('genre', 'N/A')}\n"
+            f"  QA: {'[green]PASS[/green]' if qa_result['passed'] else '[red]FAIL[/red]'}\n"
+            f"  Build: {'[green]PASS[/green]' if build_ok else '[red]FAIL[/red]'}\n"
+            f"  Project: {project_dir}",
+            border_style="green" if build_ok else "red",
+        )
+    )
 
 
 def _print_opportunities(opportunities: list[dict]) -> None:
@@ -270,7 +281,11 @@ def _mock_gdd(name: str, genre: str) -> dict:
         "mechanics": {"click": "Click to earn points", "upgrade": "Spend points to earn faster"},
         "progression": "Unlock upgrades over time",
         "win_condition": "Reach highest score",
-        "art_style": {"theme": "pixel-art", "color_palette": ["#1a1a2e", "#00ff88", "#ffaa00"], "reference": "retro arcade"},
+        "art_style": {
+            "theme": "pixel-art",
+            "color_palette": ["#1a1a2e", "#00ff88", "#ffaa00"],
+            "reference": "retro arcade",
+        },
         "audio": {"bgm_mood": "upbeat chiptune", "sfx_list": ["click", "upgrade", "level_up"]},
         "scenes": [
             {"name": "Boot", "description": "Loading"},
@@ -290,6 +305,7 @@ def _mock_gdd(name: str, genre: str) -> dict:
 
 def _mock_game_code(project_dir: Path) -> Path:
     import shutil
+
     template_dir = Path(__file__).resolve().parent.parent / "game-templates" / "idle-clicker"
     if project_dir.exists():
         shutil.rmtree(project_dir)
