@@ -1,0 +1,53 @@
+itch.io:
+  adapter: itch
+  deploy_method: butler_cli
+  credentials:
+    api_key_env: BUTLER_API_KEY
+    username_env: BUTLER_USERNAME
+  url_template: "https://{username}.itch.io/{slug}"
+  channel: html
+
+crazygames:
+  adapter: crazygames
+  deploy_method: api_upload
+  credentials:
+    api_key_env: CRAZYGAMES_API_KEY
+  url_template: "https://www.crazygames.com/game/{slug}"
+  sdk_url: "https://sdk.crazygames.com/crazygames-sdk-v1.js"
+  ad_types:
+    - midgame
+    - rewarded
+    - banner
+  game_requirements:
+    max_size_mb: 50
+    dimensions:
+      - "800x600"
+      - "960x540"
+      - "1024x768"
+
+poki:
+  adapter: poki
+  deploy_method: api_upload
+  credentials:
+    api_key_env: POKI_API_KEY
+  url_template: "https://poki.com/en/g/{slug}"
+  sdk_url: "https://game-cdn.poki.com/sdk/v4/poki-sdk.js"
+  ad_types:
+    - commercialBreak
+    - rewardedBreak
+  game_requirements:
+    max_size_mb: 30
+    dimensions:
+      - "800x600"
+      - "960x540"
+
+newgrounds:
+  adapter: newgrounds
+  deploy_method: manual
+  url_template: "https://www.newgrounds.com/portal/view/{id}"
+  game_requirements:
+    max_size_mb: 100
+    dimensions:
+      - "800x600"
+      - "1024x768"
+  note: "Manual upload via browser; no public API for automated deploy"
