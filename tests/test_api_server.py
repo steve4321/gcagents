@@ -1,4 +1,5 @@
 """Basic tests for the FastAPI dashboard API."""
+
 from __future__ import annotations
 
 from unittest.mock import patch
@@ -14,8 +15,10 @@ async def client():
     """Create an async test client for the FastAPI app with in-memory SQLite."""
     test_engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
 
-    with patch("orchestrator.persistence._get_engine", return_value=test_engine), \
-         patch("orchestrator.persistence._engine_cache", None):
+    with (
+        patch("orchestrator.persistence._get_engine", return_value=test_engine),
+        patch("orchestrator.persistence._engine_cache", None),
+    ):
         from dashboard.web.api_server import app
         from orchestrator.persistence import ensure_tables
 
@@ -74,8 +77,11 @@ async def test_get_events(client):
 @pytest.mark.asyncio
 async def test_post_analytics_event(client):
     """POST /api/analytics/event accepts telemetry without auth."""
-    response = await client.post("/api/analytics/event", params={
-        "game": "test-game",
-        "event": "game_start",
-    })
+    response = await client.post(
+        "/api/analytics/event",
+        params={
+            "game": "test-game",
+            "event": "game_start",
+        },
+    )
     assert response.status_code == 200

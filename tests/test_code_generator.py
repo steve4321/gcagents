@@ -1,9 +1,9 @@
 """Tests for game code generation with mocked LLM responses."""
+
 from __future__ import annotations
 
 import json
-from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -61,13 +61,17 @@ class TestGenerateGameCode:
     @pytest.mark.asyncio
     async def test_generates_files_from_gdd(self, tmp_path):
         """Test that generate_game_code creates source files from a GDD."""
-        mock_response = json.dumps({
-            "src/main.ts": "import * as Phaser from 'phaser';",
-            "src/game/scenes/GameScene.ts": "export class GameScene extends Phaser.Scene {}",
-        })
+        mock_response = json.dumps(
+            {
+                "src/main.ts": "import * as Phaser from 'phaser';",
+                "src/game/scenes/GameScene.ts": "export class GameScene extends Phaser.Scene {}",
+            }
+        )
 
-        with patch("agents.dev.programmer.code_generator._install_and_build"), \
-             patch("shared.llm_client.llm.chat_completion", new_callable=AsyncMock) as mock_llm:
+        with (
+            patch("agents.dev.programmer.code_generator._install_and_build"),
+            patch("shared.llm_client.llm.chat_completion", new_callable=AsyncMock) as mock_llm,
+        ):
             mock_llm.return_value = (mock_response, {"total_tokens": 1000})
 
             from agents.dev.programmer.code_generator import generate_game_code

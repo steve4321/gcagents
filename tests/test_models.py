@@ -1,9 +1,15 @@
 """Tests for shared/data models."""
+
 from __future__ import annotations
 
 from shared.models import (
-    ProjectPhase, ProjectState, DecisionType, DecisionStatus, DecisionPoint,
-    TaskStatus, TaskRecord,
+    DecisionPoint,
+    DecisionStatus,
+    DecisionType,
+    ProjectPhase,
+    ProjectState,
+    TaskRecord,
+    TaskStatus,
 )
 
 

@@ -1,17 +1,32 @@
 """Tests for domain-specific exceptions."""
+
 from __future__ import annotations
 
 import pytest
+
 from shared.exceptions import (
-    GCAgentsError, SchedulerError, TaskExecutionError, GameBuildError,
-    MarketScanError, LLMApiError, DecisionError, PersistenceError,
+    DecisionError,
+    GameBuildError,
+    GCAgentsError,
+    LLMApiError,
+    MarketScanError,
+    PersistenceError,
+    SchedulerError,
+    TaskExecutionError,
 )
 
 
 class TestExceptionHierarchy:
     def test_all_inherit_from_base(self):
-        for exc_cls in [SchedulerError, TaskExecutionError, GameBuildError,
-                        MarketScanError, LLMApiError, DecisionError, PersistenceError]:
+        for exc_cls in [
+            SchedulerError,
+            TaskExecutionError,
+            GameBuildError,
+            MarketScanError,
+            LLMApiError,
+            DecisionError,
+            PersistenceError,
+        ]:
             assert issubclass(exc_cls, GCAgentsError)
 
     def test_task_execution_error_attributes(self):

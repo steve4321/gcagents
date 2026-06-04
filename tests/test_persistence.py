@@ -9,7 +9,14 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import orchestrator.persistence as persist
-from shared.models import DecisionPoint, DecisionStatus, DecisionType, ProjectPhase, ProjectState, TaskRecord
+from shared.models import (
+    DecisionPoint,
+    DecisionStatus,
+    DecisionType,
+    ProjectPhase,
+    ProjectState,
+    TaskRecord,
+)
 
 
 @pytest.mark.asyncio
@@ -43,9 +50,7 @@ async def test_ensure_tables_idempotent(tmp_db):
     await persist.ensure_tables()
 
     async with AsyncSession(tmp_db) as db:
-        result = await db.execute(
-            text("SELECT COUNT(*) FROM sqlite_master WHERE type='table'")
-        )
+        result = await db.execute(text("SELECT COUNT(*) FROM sqlite_master WHERE type='table'"))
         assert result.scalar() > 0
 
 
@@ -61,7 +66,9 @@ async def test_get_project_returns_none_for_missing(tmp_db):
 async def test_save_project_and_get(tmp_db):
     await persist.ensure_tables()
 
-    project = ProjectState(id="proj-001", name="Test Game", genre="puzzle", phase=ProjectPhase.SCANNING)
+    project = ProjectState(
+        id="proj-001", name="Test Game", genre="puzzle", phase=ProjectPhase.SCANNING
+    )
     await persist.save_project(project)
 
     fetched = await persist.get_project("proj-001")
@@ -129,14 +136,18 @@ async def test_get_pending_decisions(tmp_db):
     await persist.ensure_tables()
 
     d1 = DecisionPoint(
-        id="d1", project_id="p1",
+        id="d1",
+        project_id="p1",
         decision_type=DecisionType.NEW_PROJECT,
-        question="Q1?", status=DecisionStatus.PENDING,
+        question="Q1?",
+        status=DecisionStatus.PENDING,
     )
     d2 = DecisionPoint(
-        id="d2", project_id="p2",
+        id="d2",
+        project_id="p2",
         decision_type=DecisionType.PUBLISH,
-        question="Q2?", status=DecisionStatus.APPROVED,
+        question="Q2?",
+        status=DecisionStatus.APPROVED,
     )
     await persist.save_decision(d1)
     await persist.save_decision(d2)
@@ -150,7 +161,9 @@ async def test_get_pending_decisions(tmp_db):
 async def test_save_task_and_get(tmp_db):
     await persist.ensure_tables()
 
-    project = ProjectState(id="proj-001", name="Test", genre="puzzle", phase=ProjectPhase.DEVELOPING)
+    project = ProjectState(
+        id="proj-001", name="Test", genre="puzzle", phase=ProjectPhase.DEVELOPING
+    )
     await persist.save_project(project)
 
     task = TaskRecord(id="task-001", project_id="proj-001", task_type="code")
@@ -165,7 +178,9 @@ async def test_save_task_and_get(tmp_db):
 async def test_update_task_status(tmp_db):
     await persist.ensure_tables()
 
-    project = ProjectState(id="proj-001", name="Test", genre="puzzle", phase=ProjectPhase.DEVELOPING)
+    project = ProjectState(
+        id="proj-001", name="Test", genre="puzzle", phase=ProjectPhase.DEVELOPING
+    )
     await persist.save_project(project)
 
     task = TaskRecord(id="task-002", project_id="proj-001", task_type="qa")
@@ -185,7 +200,9 @@ async def test_log_event(tmp_db):
     assert event_id > 0
 
     async with AsyncSession(tmp_db) as db:
-        result = await db.execute(text("SELECT event_type, severity, title FROM event_logs LIMIT 1"))
+        result = await db.execute(
+            text("SELECT event_type, severity, title FROM event_logs LIMIT 1")
+        )
         row = result.fetchone()
         assert row is not None
         assert row[0] == "pipeline"
@@ -222,7 +239,9 @@ async def test_log_api_usage(tmp_db):
     )
 
     async with AsyncSession(tmp_db) as db:
-        result = await db.execute(text("SELECT model, agent_name, prompt_tokens FROM api_usage_logs LIMIT 1"))
+        result = await db.execute(
+            text("SELECT model, agent_name, prompt_tokens FROM api_usage_logs LIMIT 1")
+        )
         row = result.fetchone()
         assert row is not None
         assert row[0] == "deepseek"
@@ -242,8 +261,12 @@ async def test_get_pending_instructions_empty(tmp_db):
 async def test_get_api_usage_summary(tmp_db):
     await persist.ensure_tables()
 
-    await persist.log_api_usage(model="deepseek", agent_name="c1", total_tokens=100, estimated_cost_usd=0.001)
-    await persist.log_api_usage(model="zhipu", agent_name="c2", total_tokens=200, estimated_cost_usd=0.002)
+    await persist.log_api_usage(
+        model="deepseek", agent_name="c1", total_tokens=100, estimated_cost_usd=0.001
+    )
+    await persist.log_api_usage(
+        model="zhipu", agent_name="c2", total_tokens=200, estimated_cost_usd=0.002
+    )
 
     summary = await persist.get_api_usage_summary()
     assert summary["calls"] == 2
@@ -254,7 +277,9 @@ async def test_get_api_usage_summary(tmp_db):
 async def test_count_completed_tasks(tmp_db):
     await persist.ensure_tables()
 
-    project = ProjectState(id="proj-001", name="Test", genre="puzzle", phase=ProjectPhase.DEVELOPING)
+    project = ProjectState(
+        id="proj-001", name="Test", genre="puzzle", phase=ProjectPhase.DEVELOPING
+    )
     await persist.save_project(project)
 
     t1 = TaskRecord(id="t1", project_id="proj-001", task_type="code")
@@ -305,7 +330,9 @@ async def test_update_project_phase(tmp_db):
 async def test_update_project_gdd(tmp_db):
     await persist.ensure_tables()
 
-    project = ProjectState(id="proj-001", name="Test", genre="puzzle", phase=ProjectPhase.DEVELOPING)
+    project = ProjectState(
+        id="proj-001", name="Test", genre="puzzle", phase=ProjectPhase.DEVELOPING
+    )
     await persist.save_project(project)
     gdd = {"title": "Test Game", "mechanics": ["tap", "swipe"]}
     await persist.update_project_gdd("proj-001", gdd)
@@ -405,7 +432,9 @@ async def test_save_project_updates_existing(tmp_db):
 async def test_update_project_code_path(tmp_db):
     await persist.ensure_tables()
 
-    project = ProjectState(id="proj-001", name="Test", genre="puzzle", phase=ProjectPhase.DEVELOPING)
+    project = ProjectState(
+        id="proj-001", name="Test", genre="puzzle", phase=ProjectPhase.DEVELOPING
+    )
     await persist.save_project(project)
     await persist.update_project_code_path("proj-001", "/path/to/code")
 
@@ -417,7 +446,9 @@ async def test_update_project_code_path(tmp_db):
 async def test_update_project_art_status(tmp_db):
     await persist.ensure_tables()
 
-    project = ProjectState(id="proj-001", name="Test", genre="puzzle", phase=ProjectPhase.DEVELOPING)
+    project = ProjectState(
+        id="proj-001", name="Test", genre="puzzle", phase=ProjectPhase.DEVELOPING
+    )
     await persist.save_project(project)
     await persist.update_project_art_status("proj-001", "completed")
 
@@ -429,7 +460,9 @@ async def test_update_project_art_status(tmp_db):
 async def test_update_project_music_status(tmp_db):
     await persist.ensure_tables()
 
-    project = ProjectState(id="proj-001", name="Test", genre="puzzle", phase=ProjectPhase.DEVELOPING)
+    project = ProjectState(
+        id="proj-001", name="Test", genre="puzzle", phase=ProjectPhase.DEVELOPING
+    )
     await persist.save_project(project)
     await persist.update_project_music_status("proj-001", "completed")
 
@@ -441,7 +474,9 @@ async def test_update_project_music_status(tmp_db):
 async def test_update_project_qa_result(tmp_db):
     await persist.ensure_tables()
 
-    project = ProjectState(id="proj-001", name="Test", genre="puzzle", phase=ProjectPhase.DEVELOPING)
+    project = ProjectState(
+        id="proj-001", name="Test", genre="puzzle", phase=ProjectPhase.DEVELOPING
+    )
     await persist.save_project(project)
     qa = {"score": 85, "checks_passed": 7}
     await persist.update_project_qa_result("proj-001", qa)
@@ -468,7 +503,9 @@ async def test_set_project_live(tmp_db):
 async def test_update_project_awaiting_decision(tmp_db):
     await persist.ensure_tables()
 
-    project = ProjectState(id="proj-001", name="Test", genre="puzzle", phase=ProjectPhase.DEVELOPING)
+    project = ProjectState(
+        id="proj-001", name="Test", genre="puzzle", phase=ProjectPhase.DEVELOPING
+    )
     await persist.save_project(project)
     await persist.update_project_awaiting_decision("proj-001", "publish")
 
@@ -551,7 +588,9 @@ async def test_resolve_decision_rejected(tmp_db):
 async def test_update_task_status_running(tmp_db):
     await persist.ensure_tables()
 
-    project = ProjectState(id="proj-001", name="Test", genre="puzzle", phase=ProjectPhase.DEVELOPING)
+    project = ProjectState(
+        id="proj-001", name="Test", genre="puzzle", phase=ProjectPhase.DEVELOPING
+    )
     await persist.save_project(project)
 
     task = TaskRecord(id="task-run-001", project_id="proj-001", task_type="code")
@@ -568,7 +607,9 @@ async def test_update_task_status_running(tmp_db):
 async def test_update_task_status_failed(tmp_db):
     await persist.ensure_tables()
 
-    project = ProjectState(id="proj-001", name="Test", genre="puzzle", phase=ProjectPhase.DEVELOPING)
+    project = ProjectState(
+        id="proj-001", name="Test", genre="puzzle", phase=ProjectPhase.DEVELOPING
+    )
     await persist.save_project(project)
 
     task = TaskRecord(id="task-fail-001", project_id="proj-001", task_type="qa")
@@ -585,7 +626,9 @@ async def test_update_task_status_failed(tmp_db):
 async def test_update_task_status_with_result(tmp_db):
     await persist.ensure_tables()
 
-    project = ProjectState(id="proj-001", name="Test", genre="puzzle", phase=ProjectPhase.DEVELOPING)
+    project = ProjectState(
+        id="proj-001", name="Test", genre="puzzle", phase=ProjectPhase.DEVELOPING
+    )
     await persist.save_project(project)
 
     task = TaskRecord(id="task-res-001", project_id="proj-001", task_type="code")
@@ -619,7 +662,9 @@ async def test_find_project_to_update_none(tmp_db):
 async def test_save_chat_message_with_metadata(tmp_db):
     await persist.ensure_tables()
 
-    await persist.save_chat_message("user", "Hello", agent_name="ceo", metadata={"type": "instruction"})
+    await persist.save_chat_message(
+        "user", "Hello", agent_name="ceo", metadata={"type": "instruction"}
+    )
 
     async with AsyncSession(tmp_db) as db:
         result = await db.execute(text("SELECT metadata_json FROM chat_messages LIMIT 1"))
@@ -692,7 +737,9 @@ async def test_record_spend(tmp_db):
 async def test_get_usage_summary(tmp_db):
     await persist.ensure_tables()
 
-    await persist.log_api_usage(model="deepseek", agent_name="c1", total_tokens=100, estimated_cost_usd=0.001)
+    await persist.log_api_usage(
+        model="deepseek", agent_name="c1", total_tokens=100, estimated_cost_usd=0.001
+    )
     summary = await persist.get_usage_summary(days=30)
     assert "total_cost" in summary
     assert "total_tokens" in summary
@@ -703,7 +750,9 @@ async def test_get_usage_summary(tmp_db):
 async def test_get_project_cost(tmp_db):
     await persist.ensure_tables()
 
-    await persist.log_api_usage(model="deepseek", agent_name="c1", project_name="proj-001", estimated_cost_usd=0.05)
+    await persist.log_api_usage(
+        model="deepseek", agent_name="c1", project_name="proj-001", estimated_cost_usd=0.05
+    )
     cost = await persist.get_project_cost("proj-001")
     assert "total_cost" in cost
     assert cost["total_cost"] >= 0.05
@@ -713,10 +762,14 @@ async def test_get_project_cost(tmp_db):
 async def test_save_agent_log(tmp_db):
     await persist.ensure_tables()
 
-    await persist.save_agent_log("coder", "completed", "developing", project_name="Test", duration_ms=1500)
+    await persist.save_agent_log(
+        "coder", "completed", "developing", project_name="Test", duration_ms=1500
+    )
 
     async with AsyncSession(tmp_db) as db:
-        result = await db.execute(text("SELECT node_name, status, duration_ms FROM agent_logs LIMIT 1"))
+        result = await db.execute(
+            text("SELECT node_name, status, duration_ms FROM agent_logs LIMIT 1")
+        )
         row = result.fetchone()
         assert row is not None
         assert row[0] == "coder"
@@ -729,7 +782,13 @@ async def test_save_market_signals(tmp_db):
     await persist.ensure_tables()
 
     signals = [
-        {"source": "itch", "signal_type": "trending", "genre": "puzzle", "title": "Test", "score": 0.9},
+        {
+            "source": "itch",
+            "signal_type": "trending",
+            "genre": "puzzle",
+            "title": "Test",
+            "score": 0.9,
+        },
     ]
     await persist.save_market_signals(signals)
 
@@ -765,7 +824,9 @@ async def test_save_game_metric(tmp_db):
 
     async with AsyncSession(tmp_db) as db:
         await db.execute(
-            text("INSERT INTO game_projects (name, genre, status) VALUES ('Test', 'puzzle', 'live')")
+            text(
+                "INSERT INTO game_projects (name, genre, status) VALUES ('Test', 'puzzle', 'live')"
+            )
         )
         await db.commit()
         result = await db.execute(text("SELECT id FROM game_projects LIMIT 1"))
@@ -820,7 +881,9 @@ async def test_save_feedback(tmp_db):
 
     async with AsyncSession(tmp_db) as db:
         await db.execute(
-            text("INSERT INTO game_projects (name, genre, status) VALUES ('Test', 'puzzle', 'live')")
+            text(
+                "INSERT INTO game_projects (name, genre, status) VALUES ('Test', 'puzzle', 'live')"
+            )
         )
         await db.commit()
         result = await db.execute(text("SELECT id FROM game_projects LIMIT 1"))
@@ -835,13 +898,17 @@ async def test_save_feedback(tmp_db):
 async def test_get_project_decisions(tmp_db):
     await persist.ensure_tables()
 
-    project = ProjectState(id="proj-001", name="Test", genre="puzzle", phase=ProjectPhase.DEVELOPING)
+    project = ProjectState(
+        id="proj-001", name="Test", genre="puzzle", phase=ProjectPhase.DEVELOPING
+    )
     await persist.save_project(project)
 
     d1 = DecisionPoint(
-        id="d-proj-001", project_id="proj-001",
+        id="d-proj-001",
+        project_id="proj-001",
         decision_type=DecisionType.NEW_PROJECT,
-        question="Q1?", status=DecisionStatus.PENDING,
+        question="Q1?",
+        status=DecisionStatus.PENDING,
     )
     await persist.save_decision(d1)
 

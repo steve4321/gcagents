@@ -1,7 +1,8 @@
 """Tests for configuration loading."""
+
 from __future__ import annotations
 
-from shared.config import load_config, AppConfig, SourceConfig
+from shared.config import AppConfig, SourceConfig, load_config
 
 
 class TestAppConfig:
@@ -17,6 +18,7 @@ class TestAppConfig:
 
     def test_games_output_dir_is_path(self):
         from pathlib import Path
+
         config = load_config()
         assert isinstance(config.games_output_dir, Path)
 

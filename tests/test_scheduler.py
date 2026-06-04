@@ -97,12 +97,10 @@ async def test_layer3_creates_decision(tmp_db):
         },
     )
 
-    with patch(
-        "orchestrator.scheduler.enqueue", new_callable=AsyncMock
-    ) as mock_enqueue, patch(
-        "orchestrator.scheduler.emit", new_callable=AsyncMock
-    ), patch(
-        "orchestrator.scheduler.save_chat_message", new_callable=AsyncMock
+    with (
+        patch("orchestrator.scheduler.enqueue", new_callable=AsyncMock) as mock_enqueue,
+        patch("orchestrator.scheduler.emit", new_callable=AsyncMock),
+        patch("orchestrator.scheduler.save_chat_message", new_callable=AsyncMock),
     ):
         result = await _escalate_layer3(task, "fatal error")
 
@@ -118,7 +116,9 @@ async def test_get_phase_ticks(tmp_db):
 
     await ensure_tables()
 
-    project = ProjectState(id="proj-001", name="Test", genre="puzzle", phase=ProjectPhase.DEVELOPING)
+    project = ProjectState(
+        id="proj-001", name="Test", genre="puzzle", phase=ProjectPhase.DEVELOPING
+    )
     await save_project(project)
 
     t1 = TaskRecord(id="t1", project_id="proj-001", task_type="develop", description="t1")

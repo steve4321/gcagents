@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from openai import APIStatusError
 
-from shared.llm_client import LLMClient, MODEL_PRICING
+from shared.llm_client import MODEL_PRICING, LLMClient
 
 
 def test_estimate_cost_deepseek():
@@ -57,9 +57,11 @@ async def test_client_retries_on_429(tmp_db):
     mock_chat = MagicMock(completions=mock_completions)
     mock_client_instance = MagicMock(chat=mock_chat)
 
-    with patch.object(LLMClient, "_get_client", return_value=mock_client_instance), \
-         patch("shared.llm_client.load_config"), \
-         patch("asyncio.sleep", new_callable=AsyncMock):
+    with (
+        patch.object(LLMClient, "_get_client", return_value=mock_client_instance),
+        patch("shared.llm_client.load_config"),
+        patch("asyncio.sleep", new_callable=AsyncMock),
+    ):
         client = LLMClient()
         client._config = MagicMock()
         text_result, usage = await client.chat_completion(

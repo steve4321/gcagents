@@ -26,14 +26,18 @@ async def test_store_short_term(memory_store):
 
 @pytest.mark.asyncio
 async def test_store_short_term_with_metadata(memory_store):
-    await memory_store.store_short_term("tick_result", "Phase: develop", "proj-001", tick_id="5", importance=0.8)
+    await memory_store.store_short_term(
+        "tick_result", "Phase: develop", "proj-001", tick_id="5", importance=0.8
+    )
     results = await memory_store.get_recent("proj-001")
     assert len(results) > 0
 
 
 @pytest.mark.asyncio
 async def test_store_long_term(memory_store):
-    await memory_store.store_long_term("lesson", "Always test code", summary="test lesson", importance=0.9)
+    await memory_store.store_long_term(
+        "lesson", "Always test code", summary="test lesson", importance=0.9
+    )
     results = await memory_store.search_long_term("test")
     assert len(results) > 0
 
@@ -84,7 +88,9 @@ def test_get_memory_store_singleton():
 
 @pytest.mark.asyncio
 async def test_get_all_lessons(memory_store):
-    await memory_store.store_long_term("lesson", "lesson content", summary="summary", importance=0.9)
+    await memory_store.store_long_term(
+        "lesson", "lesson content", summary="summary", importance=0.9
+    )
     lessons = await memory_store.get_all_lessons()
     assert len(lessons) > 0
 

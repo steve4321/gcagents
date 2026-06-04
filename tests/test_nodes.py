@@ -63,7 +63,9 @@ async def test_cfo_budget_check_passes(tmp_db):
 
     await ensure_tables()
 
-    with patch("orchestrator.persistence.check_budget_available", new_callable=AsyncMock, return_value=True):
+    with patch(
+        "orchestrator.persistence.check_budget_available", new_callable=AsyncMock, return_value=True
+    ):
         state = _make_state()
         result = await cfo_budget_check(state)
         assert result == {}
