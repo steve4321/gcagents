@@ -1,15 +1,16 @@
 """Layered memory system for persistent learning across game projects."""
+
 from __future__ import annotations
 
 import asyncio
 import hashlib
 import sqlite3
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from loguru import logger
 
-DB_PATH = Path("data/gcagents.db")
+DB_PATH = Path(__file__).resolve().parent.parent / "data" / "gcagents.db"
 
 
 class MemoryStore:
@@ -45,7 +46,9 @@ class MemoryStore:
             """)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_category ON memories(category)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_project ON memories(project_id)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_importance ON memories(importance)")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_memories_importance ON memories(importance)"
+            )
 
     # ── Short-term memory ────────────────────────────────────────────────────
 
@@ -58,18 +61,16 @@ class MemoryStore:
         importance: float = 0.5,
     ) -> str:
         mem_id = hashlib.md5(
-            f"{category}:{content}:{datetime.now(timezone.utc).isoformat()}"
-            .encode()
+            f"{category}:{content}:{datetime.now(UTC).isoformat()}".encode()
         ).hexdigest()[:12]
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         with self._connect() as conn:
             conn.execute(
                 "INSERT OR REPLACE INTO memories "
                 "(id, category, content, project_id, "
                 "tick_id, importance, created_at, accessed_at) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (mem_id, category, content,
-                 project_id, tick_id, importance, now, now),
+                (mem_id, category, content, project_id, tick_id, importance, now, now),
             )
         return mem_id
 
@@ -100,8 +101,7 @@ class MemoryStore:
                 ).fetchall()
             else:
                 rows = conn.execute(
-                    "SELECT * FROM memories WHERE project_id = ? "
-                    "ORDER BY created_at DESC LIMIT ?",
+                    "SELECT * FROM memories WHERE project_id = ? ORDER BY created_at DESC LIMIT ?",
                     (project_id, limit),
                 ).fetchall()
             return [dict(r) for r in rows]
@@ -124,7 +124,7 @@ class MemoryStore:
         importance: float = 0.7,
     ) -> str:
         mem_id = hashlib.md5(f"lt:{category}:{summary}".encode()).hexdigest()[:12]
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         with self._connect() as conn:
             conn.execute(
                 "INSERT OR REPLACE INTO memories "
@@ -161,8 +161,7 @@ class MemoryStore:
                     "OR LOWER(summary) LIKE ?) "
                     "ORDER BY importance DESC, "
                     "created_at DESC LIMIT ?",
-                    (category, f"%{query_lower}%",
-                     f"%{query_lower}%", limit),
+                    (category, f"%{query_lower}%", f"%{query_lower}%", limit),
                 ).fetchall()
             else:
                 rows = conn.execute(
@@ -172,11 +171,10 @@ class MemoryStore:
                     "AND project_id = '' "
                     "ORDER BY importance DESC, "
                     "created_at DESC LIMIT ?",
-                    (f"%{query_lower}%",
-                     f"%{query_lower}%", limit),
+                    (f"%{query_lower}%", f"%{query_lower}%", limit),
                 ).fetchall()
             results = [dict(r) for r in rows]
-            now = datetime.now(timezone.utc).isoformat()
+            now = datetime.now(UTC).isoformat()
             for r in results:
                 conn.execute(
                     "UPDATE memories SET access_count = access_count + 1, accessed_at = ? WHERE id = ?",
@@ -219,7 +217,9 @@ class MemoryStore:
             )
             lessons.append(summary)
 
-        logger.info(f"Consolidated {len(recent)} memories into {len(lessons)} lessons for project {project_id}")
+        logger.info(
+            f"Consolidated {len(recent)} memories into {len(lessons)} lessons for project {project_id}"
+        )
         return lessons
 
     async def consolidate(self, project_id: str) -> list[str]:
@@ -241,9 +241,7 @@ class MemoryStore:
             if lessons:
                 parts.append("\n## Relevant Past Lessons")
             for lesson in lessons:
-                parts.append(
-                    f"- {lesson.get('summary', lesson.get('content', ''))}"
-                )
+                parts.append(f"- {lesson.get('summary', lesson.get('content', ''))}")
 
         return "\n".join(parts) if parts else ""
 
@@ -264,9 +262,7 @@ class MemoryStore:
 
     def _delete_project_memories_sync(self, project_id: str) -> int:
         with self._connect() as conn:
-            cursor = conn.execute(
-                "DELETE FROM memories WHERE project_id = ?", (project_id,)
-            )
+            cursor = conn.execute("DELETE FROM memories WHERE project_id = ?", (project_id,))
             return cursor.rowcount
 
     async def delete_project_memories(self, project_id: str) -> int:

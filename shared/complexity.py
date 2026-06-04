@@ -1,4 +1,5 @@
 """Game complexity scoring — rejects trivially simple games at QA stage."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -38,13 +39,15 @@ def score_gdd(gdd: dict) -> tuple[float, list[str]]:
         retention_count = len(monetization.get("retention_hooks", []))
         engagement_count = len(monetization.get("engagement_mechanics", []))
 
-        commercial_signals = sum([
-            has_model,
-            ad_count >= 2,
-            iap_count >= 1,
-            retention_count >= 2,
-            engagement_count >= 2,
-        ])
+        commercial_signals = sum(
+            [
+                has_model,
+                ad_count >= 2,
+                iap_count >= 1,
+                retention_count >= 2,
+                engagement_count >= 2,
+            ]
+        )
         commercial_score = commercial_signals / 5
         if commercial_signals < 2:
             issues.append(
@@ -82,7 +85,9 @@ def score_gdd(gdd: dict) -> tuple[float, list[str]]:
     depth_signals = sum([has_progression, has_balance, has_win_condition, hud_count >= 3])
     depth_score = depth_signals / 4
     if depth_signals < 2:
-        issues.append(f"Only {depth_signals}/4 depth signals (progression, balance, win_condition, HUD)")
+        issues.append(
+            f"Only {depth_signals}/4 depth signals (progression, balance, win_condition, HUD)"
+        )
 
     # Core loop (weight 0.15): min 3 steps, target 5+
     core_loop = gdd.get("core_loop", [])
@@ -90,8 +95,14 @@ def score_gdd(gdd: dict) -> tuple[float, list[str]]:
     if len(core_loop) < 3:
         issues.append(f"Core loop has only {len(core_loop)} steps, minimum 3")
 
-    total = (mech_score * 0.25 + scene_score * 0.05 + entity_score * 0.15 +
-             depth_score * 0.20 + loop_score * 0.15 + commercial_score * 0.20)
+    total = (
+        mech_score * 0.25
+        + scene_score * 0.05
+        + entity_score * 0.15
+        + depth_score * 0.20
+        + loop_score * 0.15
+        + commercial_score * 0.20
+    )
 
     if total < MIN_PASSING_SCORE:
         issues.append(f"Complexity score {total:.2f} below minimum {MIN_PASSING_SCORE}")
@@ -113,7 +124,11 @@ def score_code(game_dir: Path) -> tuple[float, dict]:
 
     # Read GameScene for detailed analysis
     game_scene_path = src_dir / "game" / "scenes" / "GameScene.ts"
-    game_code = game_scene_path.read_text(encoding="utf-8", errors="replace") if game_scene_path.exists() else ""
+    game_code = (
+        game_scene_path.read_text(encoding="utf-8", errors="replace")
+        if game_scene_path.exists()
+        else ""
+    )
 
     metrics = {
         "total_files": len(ts_files),
@@ -123,13 +138,21 @@ def score_code(game_dir: Path) -> tuple[float, dict]:
         "has_collision": "collider" in game_code or "overlap" in game_code,
         "has_tween": "this.tweens" in game_code,
         "has_timer": "this.time.addEvent" in game_code or "setInterval" in game_code,
-        "input_types": sum([
-            "keyboard" in game_code.lower() or "cursors" in game_code.lower() or "wasd" in game_code.lower(),
-            "pointerdown" in game_code or "pointermove" in game_code,
-            "keydown" in game_code.lower() or "keyup" in game_code.lower(),
-        ]),
-        "scene_count": len(list((src_dir / "game" / "scenes").glob("*.ts"))) if (src_dir / "game" / "scenes").exists() else 0,
-        "entity_count": len(list((src_dir / "game" / "entities").glob("*.ts"))) if (src_dir / "game" / "entities").exists() else 0,
+        "input_types": sum(
+            [
+                "keyboard" in game_code.lower()
+                or "cursors" in game_code.lower()
+                or "wasd" in game_code.lower(),
+                "pointerdown" in game_code or "pointermove" in game_code,
+                "keydown" in game_code.lower() or "keyup" in game_code.lower(),
+            ]
+        ),
+        "scene_count": len(list((src_dir / "game" / "scenes").glob("*.ts")))
+        if (src_dir / "game" / "scenes").exists()
+        else 0,
+        "entity_count": len(list((src_dir / "game" / "entities").glob("*.ts")))
+        if (src_dir / "game" / "entities").exists()
+        else 0,
         "has_update_loop": "update(" in game_code,
         "has_score_system": "score" in game_code.lower(),
         "has_level_system": "level" in game_code.lower(),
@@ -138,17 +161,28 @@ def score_code(game_dir: Path) -> tuple[float, dict]:
     # Scoring
     file_score = min(metrics["total_files"] / 10, 1.0)
     line_score = min(total_lines / 1500, 1.0)
-    feature_signals = sum([
-        metrics["has_physics"], metrics["has_collision"], metrics["has_tween"],
-        metrics["has_timer"], metrics["has_update_loop"], metrics["has_score_system"],
-        metrics["has_level_system"],
-    ])
+    feature_signals = sum(
+        [
+            metrics["has_physics"],
+            metrics["has_collision"],
+            metrics["has_tween"],
+            metrics["has_timer"],
+            metrics["has_update_loop"],
+            metrics["has_score_system"],
+            metrics["has_level_system"],
+        ]
+    )
     feature_score = feature_signals / 7
     input_score = min(metrics["input_types"] / 2, 1.0)
     scene_score = min(metrics["scene_count"] / 5, 1.0)
 
-    total = (file_score * 0.15 + line_score * 0.20 + feature_score * 0.30 +
-             input_score * 0.15 + scene_score * 0.20)
+    total = (
+        file_score * 0.15
+        + line_score * 0.20
+        + feature_score * 0.30
+        + input_score * 0.15
+        + scene_score * 0.20
+    )
 
     metrics["complexity_score"] = round(total, 2)
     return round(total, 2), metrics

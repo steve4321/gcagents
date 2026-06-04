@@ -50,9 +50,7 @@ class LLMClient:
             raise ValueError(f"Unknown model: {model}")
         api_key = getattr(self._config, provider["key_attr"])
         if not api_key:
-            raise ValueError(
-                f"No API key for model {model} (missing {provider['key_attr']})"
-            )
+            raise ValueError(f"No API key for model {model} (missing {provider['key_attr']})")
         client = AsyncOpenAI(api_key=api_key, base_url=provider["base_url"])
         self._clients[model] = client
         return client
@@ -85,7 +83,7 @@ class LLMClient:
             except APIStatusError as e:
                 if e.status_code not in _RETRYABLE_CODES or attempt == LLM_MAX_RETRIES - 1:
                     raise LLMApiError(model=model, status_code=e.status_code, detail=str(e)) from e
-                delay = min(2 ** attempt, LLM_BACKOFF_MAX_SECONDS)
+                delay = min(2**attempt, LLM_BACKOFF_MAX_SECONDS)
                 logger.warning(
                     f"LLM retry {attempt + 1}/3 for model={model}: "
                     f"status={e.status_code}, waiting {delay}s"

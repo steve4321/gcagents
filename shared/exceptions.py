@@ -1,4 +1,5 @@
 """Domain-specific exceptions for GCAgents."""
+
 from __future__ import annotations
 
 
