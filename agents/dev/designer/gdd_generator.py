@@ -166,6 +166,36 @@ TECHNICAL ARCHITECTURE (MANDATORY):
 - reusable_components MUST list at least 2 components that should be shared across scenes
 - code_organization MUST specify the directory structure: scenes/, entities/, systems/, data/
 
+HYBRID VISUAL NOVEL EXTENSION (apply ONLY if your design is a story-driven game
+with player choices, character relationships, and branching outcomes — a hybrid
+Visual Novel with light stat-based/branching mechanics). If you decide this is a
+VN, you MUST add these fields to the JSON object. The GDD will be rejected by the
+schema validator if any are missing or malformed. Do NOT include these fields for
+non-VN games.
+
+- "narrative_premise": str — a 2-3 sentence logline of the story hook.
+- "player_protagonist": {"name": str, "pronouns": str, "portrait_key": str}.
+- "character_roster": list of >=2 entries, each:
+    {"name": str, "role": "protagonist"|"heroine"|"antagonist"|"npc",
+     "sprite_set": str (path under public/assets/characters/),
+     "expression_variants": list of >=3 of "neutral"|"happy"|"sad"|"surprised"|"angry",
+     "personality": str, "stat_affinities": list of stat names}.
+- "route_structure": {"common_route_chapters": int (>=1),
+     "character_routes": list of {"key": str, "name": str, "chapters": int, "unlock": str}}.
+- "stat_system": {"stats": list of >=5 entries, each:
+     {"name": str, "range": [min: number, max: number] where min < max,
+      "decay": number, "branching_thresholds": list of {"op": str, "value": number, "route": str}}}.
+- "branching_tree": {"root": str (must be a key in nodes),
+     "nodes": dict of >=8 entries, each {"scene_key": str, "dialogue": list, "choices": list of {"label": str, "next_node": str, "stat_delta": optional {"stat_name": number}, "flag_set": optional [str]}}}.
+     ALL nodes MUST be reachable from root via BFS through the choices. NO cycles.
+- "ending_conditions": list of >=3 entries, each:
+     {"name": str, "trigger": dict (e.g. {"stat:empathy": {">=": 5}}),
+      "epilogue_key": str, "is_good_ending": 0|1}.
+     Each trigger dict MUST be unique across the list (no two endings with identical triggers).
+- "cg_milestones": list of >=1 entries, each {"scene_id": str, "cg_key": str, "condition": str}.
+- "save_points": list of {"scene_id": str, "save_key": str}.
+- "vn_schema_version": "1.0"
+
 Return ONLY the JSON object, no other text."""
 
 

@@ -1,0 +1,16 @@
+{
+  "branching_tree": {
+    "root": "n00",
+    "nodes": {
+      "n00": { "scene_key": "intro_01", "dialogue": ["line_01", "line_02"], "choices": [{ "label": "Approach Alice", "next_node": "n01" }, { "label": "Approach Bob", "next_node": "n02" }] },
+      "n01": { "scene_key": "intro_02_alice", "dialogue": ["line_03"], "choices": [{ "label": "Go with Alice", "next_node": "n03" }, { "label": "Stay polite", "next_node": "n04" }] },
+      "n02": { "scene_key": "intro_02_bob", "dialogue": ["line_04"], "choices": [{ "label": "Visit library", "next_node": "n05" }, { "label": "Wave goodbye", "next_node": "n06" }] },
+      "n03": { "scene_key": "lighthouse_path", "dialogue": [], "choices": [{ "label": "Climb up", "next_node": "n07" }] },
+      "n04": { "scene_key": "polite_path", "dialogue": [], "choices": [{ "label": "Continue", "next_node": "n07" }] },
+      "n05": { "scene_key": "library_path", "dialogue": [], "choices": [{ "label": "Continue", "next_node": "n07" }] },
+      "n06": { "scene_key": "goodbye_path", "dialogue": [], "choices": [{ "label": "Continue", "next_node": "n07" }] },
+      "n07": { "scene_key": "carol_encounter", "dialogue": ["line_05"], "choices": [] }
+    },
+    "edges": []
+  }
+}

@@ -205,6 +205,31 @@ visual-novel/
 **Copied from puzzle-match:** package.json, tsconfig.json, vite.config.ts, BootScene skeleton (5%).
 **NEW:** Everything else (95%).
 
+### 4.1 Template Generation Strategy (D5/D9)
+
+**The first VN template is hand-written by an engineer, not LLM-generated.** Rationale:
+- LLM generating 1500+ LOC of TypeScript from scratch has high failure rate (verified by 30-min timeouts observed in plan-agent + momus-agent calls).
+- A skeleton with deterministic structure provides a known-good baseline that LLM can extend.
+
+**Workflow:**
+1. **First template (one-time, ~1 day)**: Engineer writes `game-templates/visual-novel/` skeleton with all 4 scenes + DialogueSystem + 5 sample data files. **Phase 1.5 deliverable — already complete.**
+2. **Subsequent VN games**: `_generate_visual_novel()` reads this template, sends 2-round prompts to LLM, LLM returns updated `*.ts` and `data/*.json` files **on top of the skeleton**. The skeleton scenes are not regenerated — only extended/replaced.
+3. **Template evolution**: When a new feature is needed (e.g., CG gallery in Phase 3), engineer adds the relevant scene/system to the template. LLM uses the updated template in subsequent runs.
+
+**What the LLM may modify in each round:**
+- Round 1: Replaces `data/characters.json`, `data/dialogue.json`; may extend `MainScene` placeholder.
+- Round 2: Adds `BranchingEngine`, `StatSystem`, `ChoiceSystem` files; updates `NovelScene` to integrate them; adds `data/branching.json`, `data/stats.json`, `data/endings.json`.
+- Round 3+ (Phase 3+): Add `SaveLoadSystem`, `CGGallerySystem`, etc.
+
+**What the LLM MUST NOT modify:**
+- `package.json` (scaffolded)
+- `tsconfig.json` (scaffolded)
+- `vite.config.ts` (scaffolded)
+- `index.html` (scaffolded, may be extended for ad SDK in Phase 3+)
+- `main.ts` __TEST__ contract fields (can add commands, must not remove existing)
+
+**Tests for template integrity:** `tests/test_vn_template_invariants.py` — assert that after a generation run, the skeleton files still parse, the `__TEST__` interface is present, and the data JSON files validate against the schema.
+
 ---
 
 ## 5. Code Generator Changes
@@ -573,6 +598,34 @@ File: `orchestrator/scheduler.py` + `planner.py` + `persistence.py`
 
 **Per-game cost cap:** $5 default, configurable. Enforced via `check_budget_available()` in `shared/llm_client.py` — already exists per existing plan's H8 fix.
 
+**Cost realism analysis (C8 — verified for ComfyUI local + DeepSeek API baseline):**
+
+| Component | Per-game cost | Notes |
+|---|---|---|
+| GDD generation (1 LLM call) | $0.05 | MiniMax-M3 / GLM-4-flash |
+| Mechanic planning (1 call) | $0.03 | Same model |
+| VN code gen (2 rounds × retry buffer) | $0.60 | DeepSeek Coder; 4 calls nominal, 6 with retries |
+| ComfyUI art (15 character + 10 background = 25 images) | $0.50 | Local GPU; $0.02/image amortized electricity + maintenance |
+| BGM mood tracks (7, cached) | $0.10 | One-time $5 for 7 tracks, amortized over 50 games |
+| SFX (5 procedural) | $0.00 | Web Audio tones, no API |
+| Localization (5 locales × 1 call) | $0.50 | DeepSeek Coder; per-locale context |
+| QA + retry overhead | $0.20 | ~3% retry rate × above total |
+| **Total per game (main path)** | **~$2.04** | Comfortable margin |
+| **Total per game (cold start, 2x retries)** | **~$3.50** | Still within $5 cap |
+| **Total per game (cloud ComfyUI @ $0.05/image)** | $2.79 | ComfyUI Replicate backup; still within cap |
+| **Total per game (full retry storm, 5 attempts)** | **~$5.20** | Triggers the $5 hard veto — **acceptable failure mode** |
+
+**Three-tier cost enforcement:**
+1. **$3 warning line** — when cumulative cost exceeds $3, log a WARNING to dashboard and queue a CEO review decision (does NOT block generation).
+2. **$5 hard veto** — when cumulative cost exceeds $5, abort generation, mark project as `over_budget`, surface to CEO for cancel/continue decision.
+3. **$10 absolute ceiling** — at request layer, `check_budget_available()` in `shared/llm_client.py` rejects new LLM calls outright (per existing plan's H8 fix).
+
+**Cost optimization levers (in priority order):**
+1. Use local ComfyUI (saves ~$1/game vs cloud)
+2. Reuse cached BGM tracks (saves ~$0.05/game)
+3. Skip localization for languages with <1% expected market share (saves $0.10/locale)
+4. Reduce LLM retries by improving prompts (reduces variance, not average cost)
+
 ---
 
 ## 14. Phased Roadmap
@@ -582,12 +635,14 @@ File: `orchestrator/scheduler.py` + `planner.py` + `persistence.py`
 | **1 (1w)** | GDD schema + validator + VN template skeleton + 1 manual E2E | `shared/vn_schema.py` (NEW); `gdd_generator.py` (extend prompt); `game-templates/visual-novel/` (NEW) | `tests/test_vn_schema.py`; `tests/test_gdd_vn.py` | 1 game playable end-to-end manually | Revert gdd_generator prompt extension |
 | **2 (1-2w)** | Code gen VN path + mechanic planner + __TEST__ contract | `code_generator.py` (add `_generate_visual_novel`); `mechanic_planner.py` (extend prompt) | `tests/test_vn_code_gen.py`; `tests/test_vn_mechanic.py` | 3 themes build, 3 routes generated, 8 mechanics present | `ENABLE_VN_PIPELINE=false` (feature flag) |
 | **3 (1w)** | 7 new QA checks + VN complexity score + hard veto | `playtest_checks.py` (extend); `complexity.py` (extend); `auto_playtest.py` (extend) | `tests/test_vn_qa.py` | 5/5 hard veto checks pass on sample | Feature flag per check |
-| **4 (1-2w)** | Multi-route parent/child + shared assets | `scheduler.py` (add VN expansion); `planner.py` (add route DAG); `persistence.py` (add tables) | `tests/test_vn_routes.py` | 1 common + 3 char routes playable, $3 total cost | Drop `parent_id` column (nullable) |
-| **5 (1-2w)** | Artist (consistency + expressions) + Music (mood BGM + SFX) | `agents/dev/artist/character_consistency.py` (NEW); `sprite_generator.py` (extend); `music_generator.py` (extend) | `tests/test_vn_art.py`; `tests/test_vn_music.py` | 3 chars × 5 expressions = 15 images, 7 BGM tracks, 5 SFX | Revert sprite_generator extension |
+| **4 (1-2w)** | Multi-route parent/child + shared assets — **MUST precede Phase 5** (coupling: shared_assets_path column must exist before artist writes to it) | `scheduler.py` (add VN expansion); `planner.py` (add route DAG); `persistence.py` (add tables + `parent_id`/`shared_assets_path`/`route_id` columns on `projects`) | `tests/test_vn_routes.py` | 1 common + 3 char routes playable, $3 total cost | Drop `parent_id` column (nullable) |
+| **5 (1-2w)** | Artist (consistency + expressions) + Music (mood BGM + SFX) — **sequential after Phase 4** (writes into `public/assets/...` referenced by Phase 4 `shared_assets_path`) | `agents/dev/artist/character_consistency.py` (NEW); `sprite_generator.py` (extend); `music_generator.py` (extend) | `tests/test_vn_art.py`; `tests/test_vn_music.py` | 3 chars × 5 expressions = 15 images, 7 BGM tracks, 5 SFX | Revert sprite_generator extension |
 | **6 (1w)** | Deep localization (TS parser + char names + CJK/RTL) | `string_extractor.py` (extend); `translator.py` (extend) | `tests/test_vn_localize.py` | 5 locales render clean (no overflow) | Revert string_extractor addition |
 | **7 (1-2w)** | Production validation (5 themes end-to-end) | All | `tests/test_e2e_vn_pipeline.py` | 5 themes pass all hard vetoes, median cost ≤$5 | `ENABLE_VN_PIPELINE=false` |
 
 **Total: 7-11 weeks. Existing plan: 6-10 weeks. Overlap: ~2-3 weeks (Phase 1+3 of existing = Phase 1+2 of this). Net additional: 4-8 weeks for VN-specific work.**
+
+**Sequencing correction (vs. original plan):** Phase 4 and Phase 5 were originally marked "parallel" but have a write-after-read coupling — `shared_assets_path` (Phase 4 schema) must exist before Phase 5 writes character/bgm files into it. Sequential ordering adds no wall-clock time (Phase 4 = 1-2w, Phase 5 = 1-2w, sequential = 2-4w total = parallel estimate).
 
 ---
 
@@ -648,8 +703,12 @@ Default `false` in prod; CI sets `true` for new tests.
 | Risk | Severity | Mitigation |
 |---|---|---|
 | LLM regression (prompt changes break working code) | HIGH | Feature flag `ENABLE_VN_PIPELINE`; 2-week A/B compare pass rate |
-| Cost overrun (5 routes × 5 prompts = 25 LLM calls) | HIGH | Per-route budget $2/$1; hard cap $5; dry-run mode for testing |
+| Cost overrun (5 routes × 5 prompts = 25 LLM calls) | HIGH | Per-route budget $2/$1; hard cap $5; **$3 warning line triggers CEO review**; dry-run mode for testing |
 | Schema drift (LLM produces invalid GDD despite prompt) | HIGH | `validate_gdd()` as gate; retry-once-with-errors pattern in `gdd_generator._parse_gdd` |
+| **LLM context overflow on long branching trees** (>8K tokens, exceeds prompt limit on small models) | HIGH | **Chunked generation: Round 1 passes root + 3 nodes only; subsequent rounds append nodes incrementally. Hard cap 8 nodes per round prompt.** |
+| **Race condition in multi-route shared assets** (two character routes writing to parent assets) | MEDIUM | Shared assets are **read-only symlinks** (never modified by child routes); child route writes limited to its own `public/assets/routes/<key>/` |
+| **ComfyUI server unavailable for hours** (Phase 5 critical dependency) | MEDIUM | Health-check before generation; auto-fallback to Phaser shape placeholder (existing behavior); `art_status` flag in `projects` table; `soft_warn` if published with placeholder art |
+| **localStorage save data privacy** (player choice history in browser) | LOW | Local-only (never uploaded); XOR-encrypt with game-version key to deter casual tampering; document "no PII collected" in compliance notes |
 | Art consistency (SD 1.5 character variations) | MEDIUM | Cap 5 expressions/char; first expression as anchor; fallback to Phaser shapes |
 | Branching DAG cycle (LLM creates loops) | MEDIUM | `validate_branching_tree` checks acyclic; code rejects cycles at runtime |
 | Save/load state mismatch (data drift) | MEDIUM | State hash check; freeze state schema per game version |

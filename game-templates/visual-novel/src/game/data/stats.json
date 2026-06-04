@@ -1,0 +1,9 @@
+{
+  "stats": [
+    { "name": "empathy", "range": [0, 10], "decay": 0.0, "branching_thresholds": [{ "op": ">=", "value": 7, "route": "alice_true_end" }] },
+    { "name": "wit", "range": [0, 10], "decay": 0.0, "branching_thresholds": [] },
+    { "name": "courage", "range": [0, 10], "decay": 0.0, "branching_thresholds": [] },
+    { "name": "patience", "range": [0, 10], "decay": 0.0, "branching_thresholds": [] },
+    { "name": "luck", "range": [0, 10], "decay": 0.0, "branching_thresholds": [] }
+  ]
+}

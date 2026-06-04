@@ -23,9 +23,8 @@ def tmp_db(tmp_path):
     db_url = f"sqlite+aiosqlite:///{db_file}"
     test_engine = create_async_engine(db_url, echo=False)
 
-    # Monkeypatch the module-level engine cache so every persistence function
-    # uses our test engine instead of the production one.
-    with patch("orchestrator.persistence._get_engine", return_value=test_engine):
+    with patch("orchestrator.persistence._get_engine", return_value=test_engine), \
+         patch("orchestrator.vn_persistence._get_engine", return_value=test_engine):
         yield test_engine
 
 

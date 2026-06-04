@@ -15,6 +15,55 @@ MECHANIC_PLANNER_SYSTEM = (
 )
 
 
+VN_MANDATORY_MECHANICS: tuple[dict, ...] = (
+    {"name": "dialogue_rendering", "category": "core_gameplay", "complexity": "high",   "code_anchor": "class DialogueSystem"},
+    {"name": "choice_presentation", "category": "core_gameplay", "complexity": "medium", "code_anchor": "class ChoiceSystem"},
+    {"name": "stat_tracking", "category": "core_gameplay", "complexity": "medium", "code_anchor": "class StatSystem"},
+    {"name": "branch_resolution", "category": "core_gameplay", "complexity": "high",   "code_anchor": "class BranchingEngine"},
+    {"name": "save_load", "category": "polish", "complexity": "medium", "code_anchor": "class SaveLoadSystem"},
+    {"name": "cg_unlock", "category": "engagement", "complexity": "medium", "code_anchor": "class CGGallerySystem"},
+    {"name": "route_unlock", "category": "engagement", "complexity": "low", "code_anchor": "route_locked"},
+    {"name": "bgm_layering", "category": "polish", "complexity": "low", "code_anchor": "class BGMController"},
+)
+
+
+def is_vn_gdd(gdd: dict) -> bool:
+    premise = gdd.get("narrative_premise")
+    return isinstance(premise, str) and bool(premise.strip())
+
+
+def build_vn_mechanic_instructions() -> str:
+    lines = [
+        "",
+        "## VISUAL NOVEL — MANDATORY MECHANICS",
+        "",
+        f"Because this is a hybrid Visual Novel, the following {len(VN_MANDATORY_MECHANICS)} mechanics "
+        "are MANDATORY and MUST appear in your returned list, in this dependency order. Each "
+        "MUST include a 'code_anchor' field for downstream verification. If you cannot plan "
+        "all of them, return an error rather than a partial list.",
+        "",
+    ]
+    for i, m in enumerate(VN_MANDATORY_MECHANICS):
+        lines.append(
+            f"{i+1}. name={m['name']!r} category={m['category']!r} "
+            f"complexity={m['complexity']!r} code_anchor={m['code_anchor']!r}"
+        )
+    lines.append("")
+    lines.append(
+        f"The {len(VN_MANDATORY_MECHANICS)} required code_anchors, in order: "
+        + ", ".join(m["code_anchor"] for m in VN_MANDATORY_MECHANICS)
+        + "."
+    )
+    return "\n".join(lines)
+
+
+def validate_vn_mechanic_anchors(mechanics: list[dict]) -> list[str]:
+    expected = {m["code_anchor"] for m in VN_MANDATORY_MECHANICS}
+    actual = {m.get("code_anchor", "") for m in mechanics if isinstance(m, dict)}
+    missing = expected - actual
+    return [f"VN GDD: missing mandatory mechanic code_anchor: {a}" for a in sorted(missing)]
+
+
 async def plan_mechanics(gdd: dict) -> list[dict]:
     """Decompose a GDD into ordered mechanic specifications.
 
@@ -58,7 +107,8 @@ async def plan_mechanics(gdd: dict) -> list[dict]:
         "- implementation_order: integer (0=first, must be sequential)\n"
         '- complexity: "low" | "medium" | "high"\n'
         '- category: "core_gameplay" | "monetization" | "retention" | '
-        '"engagement" | "polish"\n\n'
+        '"engagement" | "polish"\n'
+        '- code_anchor: a unique string that MUST appear verbatim in the generated code (e.g., "class DialogueSystem")\n\n'
         "Order mechanics by dependency: core systems first "
         "(movement, rendering), gameplay next (scoring, enemies), "
         "polish last (effects, sound).\n\n"
@@ -73,6 +123,8 @@ async def plan_mechanics(gdd: dict) -> list[dict]:
         "Return ONLY a JSON array of mechanic objects, no other text."
         f"{past_lessons}"
     )
+    if is_vn_gdd(gdd):
+        prompt += build_vn_mechanic_instructions()
 
     response, usage = await llm.chat_completion(
         model=model,
@@ -88,6 +140,11 @@ async def plan_mechanics(gdd: dict) -> list[dict]:
 
     mechanics = _parse_mechanics(response)
     mechanics.sort(key=lambda m: m.get("implementation_order", 99))
+
+    if is_vn_gdd(gdd):
+        anchor_errors = validate_vn_mechanic_anchors(mechanics)
+        for err in anchor_errors:
+            logger.warning(err)
 
     logger.info(f"Planned {len(mechanics)} mechanics for '{gdd.get('title', 'unknown')}'")
     for m in mechanics:

@@ -1,0 +1,7 @@
+{
+  "endings": [
+    { "name": "good_alice", "trigger": { "stat:empathy": { ">=": 7 }, "flag:chose_alice": true }, "epilogue_key": "epilogue.good_alice", "is_good_ending": 1 },
+    { "name": "normal", "trigger": { "stat:empathy": { ">=": 3 } }, "epilogue_key": "epilogue.normal", "is_good_ending": 0 },
+    { "name": "bad", "trigger": { "stat:empathy": { "<": 3 } }, "epilogue_key": "epilogue.bad", "is_good_ending": 0 }
+  ]
+}

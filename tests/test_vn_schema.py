@@ -61,8 +61,11 @@ def _valid_vn_gdd() -> dict:
     nodes["n00"]["choices"] = [{"label": "A", "next_node": "n01"}, {"label": "B", "next_node": "n02"}]
     nodes["n01"]["choices"] = [{"label": "go", "next_node": "n03"}]
     nodes["n02"]["choices"] = [{"label": "go", "next_node": "n04"}]
-    for i in range(3, MIN_BRANCHING_NODES):
-        nodes[f"n{i:02d}"]["choices"] = []
+    nodes["n03"]["choices"] = [{"label": "go", "next_node": "n05"}]
+    nodes["n04"]["choices"] = [{"label": "go", "next_node": "n06"}]
+    nodes["n05"]["choices"] = [{"label": "go", "next_node": "n07"}]
+    nodes["n06"]["choices"] = [{"label": "go", "next_node": "n07"}]
+    nodes["n07"]["choices"] = []
     return {
         "title": "Test VN",
         "genre": "visual_novel",
@@ -139,10 +142,10 @@ def test_validate_gdd_missing_required_fields():
     gdd["narrative_premise"] = "test"
     gdd["branching_tree"] = {"root": "n00", "nodes": {}}
     errors = validate_gdd(gdd)
-    missing = {"player_protagonist", "character_roster", "route_structure",
-               "stat_system", "ending_conditions", "cg_milestones", "save_points"}
-    error_fields = {e for e in errors for f in missing if f in e}
-    assert error_fields == missing
+    expected_missing = {"player_protagonist", "character_roster", "route_structure",
+                        "stat_system", "ending_conditions", "cg_milestones", "save_points"}
+    for field in expected_missing:
+        assert any(field in e for e in errors), f"Expected error mentioning missing field {field!r}, got {errors}"
 
 
 def test_validate_character_roster_empty():

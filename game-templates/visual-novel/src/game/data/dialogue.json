@@ -1,0 +1,9 @@
+{
+  "lines": [
+    { "id": "line_01", "scene_id": "intro_01", "speaker": "Narrator", "text": "The coastal town of Vellmouth wakes to fog and gulls." },
+    { "id": "line_02", "scene_id": "intro_01", "speaker": "Yu", "text": "Another year at the harbour school. Maybe this time will be different." },
+    { "id": "line_03", "scene_id": "intro_02", "speaker": "Alice", "text": "Hey, you're the new transfer, right? I'm Alice. Want to see the lighthouse with me?" },
+    { "id": "line_04", "scene_id": "intro_02", "speaker": "Bob", "text": "Don't forget the assignment due tomorrow. I'll be at the library, if you need help." },
+    { "id": "line_05", "scene_id": "intro_03", "speaker": "Carol", "text": "Two paths, one dawn. Choose carefully, kid." }
+  ]
+}

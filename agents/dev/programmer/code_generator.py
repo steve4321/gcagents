@@ -12,6 +12,7 @@ from shared.config import AppConfig
 from shared.constants import DEFAULT_ANALYSIS_MODEL, DEFAULT_CODE_MODEL, TRUNC_LLM_PROMPT_ERROR
 from shared.llm_client import llm
 from shared.memory import get_memory_store
+from shared.vn_schema import is_visual_novel, validate_gdd
 
 MAX_SELF_VERIFY_RETRIES = 2
 MAX_SOURCE_CHARS_IN_PROMPT = 12000
@@ -87,15 +88,29 @@ async def generate_game_code(
         logger.error("No AI API key configured")
         return project_dir
 
-    mechanics = gdd.get("mechanics")
-    if mechanics and not build_error:
-        code_path = await _generate_by_mechanics(
+    if is_visual_novel(gdd):
+        vn_errors = validate_gdd(gdd)
+        if vn_errors:
+            logger.error(
+                f"VN GDD validation failed ({len(vn_errors)} errors): {vn_errors[:3]}"
+            )
+            return project_dir
+        code_path = await _generate_visual_novel(
             gdd, project_dir, config, model, max_tokens, art_assets_path
         )
+        vn_verify_err = _vn_post_gen_verify(code_path)
+        if vn_verify_err:
+            logger.warning(f"VN post-gen verify failed: {vn_verify_err[:300]}")
     else:
-        code_path = await _generate_all_at_once(
-            gdd, project_dir, config, model, max_tokens, build_error, art_assets_path
-        )
+        mechanics = gdd.get("mechanics")
+        if mechanics and not build_error:
+            code_path = await _generate_by_mechanics(
+                gdd, project_dir, config, model, max_tokens, art_assets_path
+            )
+        else:
+            code_path = await _generate_all_at_once(
+                gdd, project_dir, config, model, max_tokens, build_error, art_assets_path
+            )
 
     build_err = _install_and_build(code_path)
     self_verify_attempt = 0
@@ -810,6 +825,173 @@ def _runtime_verify(project_dir: Path) -> str:
         return asyncio.run(_check())
     except Exception as e:
         return f"Runtime verify error: {e}"
+
+
+def _vn_post_gen_verify(project_dir: Path) -> str:
+    """Run VN-specific schema checks on the generated code. Returns '' on success.
+
+    Validates:
+        * ``src/game/data/branching.json`` against ``validate_branching_tree``
+        * ``src/game/data/endings.json`` against ``validate_ending_conditions``
+    """
+    from shared.vn_schema import validate_branching_tree, validate_ending_conditions
+
+    errors: list[str] = []
+
+    branching_path = project_dir / "src" / "game" / "data" / "branching.json"
+    if branching_path.exists():
+        try:
+            with open(branching_path, encoding="utf-8") as f:
+                data = json.load(f)
+            errs = validate_branching_tree(data.get("branching_tree", {}))
+            if errs:
+                errors.extend([f"branching.json: {e}" for e in errs])
+        except (json.JSONDecodeError, OSError) as e:
+            errors.append(f"branching.json: parse/read error: {e}")
+
+    endings_path = project_dir / "src" / "game" / "data" / "endings.json"
+    if endings_path.exists():
+        try:
+            with open(endings_path, encoding="utf-8") as f:
+                data = json.load(f)
+            errs = validate_ending_conditions(data.get("endings", []))
+            if errs:
+                errors.extend([f"endings.json: {e}" for e in errs])
+        except (json.JSONDecodeError, OSError) as e:
+            errors.append(f"endings.json: parse/read error: {e}")
+
+    return "; ".join(errors)
+
+
+async def _generate_visual_novel(
+    gdd: dict,
+    project_dir: Path,
+    config: AppConfig,
+    model: str,
+    max_tokens: int,
+    art_assets_path: str = "",
+) -> Path:
+    """Generate a hybrid Visual Novel in 2 rounds.
+
+    Round 1: dialogue + characters + base scenes (Title, Menu, Novel stub) + DialogueSystem.
+    Round 2: branching + stats + endings + BranchingEngine + StatSystem + ChoiceSystem + NovelScene integration.
+    """
+    game_title = gdd.get("title", "visual_novel")
+    logger.info(f"VN code gen in 2 rounds: {game_title}")
+
+    art_instruction = ""
+    if art_assets_path:
+        art_instruction = (
+            f"\nArt assets available at: {art_assets_path}\n"
+            "Load images via this.load.image() in BootScene. Reference as 'assets/<filename>'.\n"
+        )
+
+    accumulated: dict[str, str] = {}
+
+    char_summary = json.dumps(gdd.get("character_roster", []), indent=2)[:2000]
+    round1_prompt = f"""You are building a hybrid Visual Novel with Phaser 4 + TypeScript. ROUND 1 of 2.
+
+Game: {game_title}
+Narrative Premise: {gdd.get('narrative_premise', '')}
+Player Protagonist: {json.dumps(gdd.get('player_protagonist', {}))}
+Character Roster (truncated): {char_summary}
+
+Generate these files (return a JSON object mapping file paths to file contents):
+1. src/game/data/characters.json — full character roster (name, role, sprite_set, expression_variants, personality, stat_affinities)
+2. src/game/data/dialogue.json — 8-15 dialogue lines, each with id, scene_id, speaker, text (and optional expression)
+3. src/main.ts — Phaser entry, scene list [BootScene, TitleScene, MenuScene, NovelScene], window.__TEST__ interface with state() returning {{ currentScene, currentRoute, stats, flags, cgsUnlocked, routeProgress, endingReached, saveDataValid, visitedScenes, endingsReached }}
+4. src/game/scenes/BootScene.ts — load data/*.json, transition to TitleScene
+5. src/game/scenes/TitleScene.ts — title screen with game name
+6. src/game/scenes/MenuScene.ts — NEW GAME / CONTINUE / GALLERY menu
+7. src/game/scenes/NovelScene.ts — basic dialogue display using DialogueSystem
+8. src/game/systems/DialogueSystem.ts — typewriter-style dialogue renderer
+
+Rules:
+- `import * as Phaser from 'phaser';` (NOT `import Phaser from 'phaser'`)
+- parent: 'game-container' in Phaser config
+- TypeScript strict mode
+- Real implementation, no TODOs or 'for simplicity' placeholders
+{art_instruction}
+
+Return ONLY a JSON object mapping file paths to file contents."""
+
+    r1_response = await llm.chat_completion(
+        model=model,
+        messages=[
+            {"role": "system", "content": PROGRAMMER_SYSTEM_PROMPT},
+            {"role": "user", "content": round1_prompt},
+        ],
+        temperature=0.4,
+        max_tokens=max_tokens,
+        agent_name="programmer",
+        project_name=game_title,
+    )
+    r1_files = _parse_code_files(r1_response[0])
+    accumulated.update(r1_files)
+    logger.info(f"VN Round 1: {len(r1_files)} files")
+
+    existing_summary = _summarize_files(accumulated)
+    branch_summary = json.dumps(
+        gdd.get("branching_tree", {}).get("nodes", {}), indent=2
+    )[:1500]
+    stats_summary = json.dumps(gdd.get("stat_system", {}), indent=2)[:1000]
+    endings_summary = json.dumps(gdd.get("ending_conditions", []), indent=2)[:1000]
+
+    round2_prompt = f"""You are building a hybrid Visual Novel with Phaser 4 + TypeScript. ROUND 2 of 2.
+
+Game: {game_title}
+Branching Tree (nodes): {branch_summary}
+Stat System: {stats_summary}
+Ending Conditions: {endings_summary}
+
+Already implemented (Round 1 file summary):
+{existing_summary}
+
+Now generate (return JSON mapping path -> content):
+1. src/game/data/branching.json — full branching tree with root, nodes (each with scene_key, dialogue refs, choices array), edges
+2. src/game/data/stats.json — stat definitions with name, range, decay, branching_thresholds
+3. src/game/data/endings.json — ending conditions with name, trigger dict, epilogue_key, is_good_ending
+4. src/game/systems/BranchingEngine.ts — DAG traversal + condition evaluation + scene progression
+5. src/game/systems/StatSystem.ts — stat tracking with branching threshold evaluation
+6. src/game/systems/ChoiceSystem.ts — choice UI panel that applies stat_delta and triggers BranchingEngine advance
+7. src/game/scenes/NovelScene.ts — UPDATE to integrate BranchingEngine, StatSystem, ChoiceSystem (replaces Round 1 stub)
+
+__TEST__ contract (MUST be present in main.ts, expose full state):
+state: () => ({{ currentScene, currentRoute, stats, flags, cgsUnlocked, routeProgress, endingReached, saveDataValid, visitedScenes, endingsReached }})
+
+Generated data/*.json files MUST validate:
+- branching.json: >=8 nodes, root must exist, all nodes reachable via BFS through choices, no cycles
+- stats.json: >=5 stats, each with name and range [min, max] where min < max
+- endings.json: >=3 endings, each with name and unique trigger dict (no two endings with identical triggers)
+
+Return ONLY a JSON object mapping file paths to file contents."""
+
+    r2_response = await llm.chat_completion(
+        model=model,
+        messages=[
+            {"role": "system", "content": PROGRAMMER_SYSTEM_PROMPT},
+            {"role": "user", "content": round2_prompt},
+        ],
+        temperature=0.3,
+        max_tokens=max_tokens,
+        agent_name="programmer",
+        project_name=game_title,
+    )
+    r2_files = _parse_code_files(r2_response[0])
+    accumulated.update(r2_files)
+    logger.info(f"VN Round 2: {len(r2_files)} files")
+
+    src_dir = project_dir / "src"
+    src_dir.mkdir(parents=True, exist_ok=True)
+    for file_path, content in accumulated.items():
+        if not _validate_file_path(project_dir, file_path):
+            continue
+        full_path = project_dir / file_path
+        full_path.parent.mkdir(parents=True, exist_ok=True)
+        full_path.write_text(content, encoding="utf-8")
+
+    logger.info(f"VN generation complete: {len(accumulated)} files across 2 rounds")
+    return project_dir
 
 
 def _validate_file_path(project_dir: Path, rel_path: str) -> bool:

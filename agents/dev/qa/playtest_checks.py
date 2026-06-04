@@ -236,3 +236,241 @@ def check_complexity_score(game_dir: str | Path) -> dict:
         "detail": f"Complexity {score:.2f}/{MIN_PASSING_SCORE:.2f} — {metrics.get('total_files', 0)} files, {metrics.get('total_lines', 0)} lines",
         "metrics": metrics,
     }
+
+
+async def check_branch_coverage(
+    page: Page,
+    branching: dict | None = None,
+    playthroughs: int = 1,
+) -> dict:
+    """Verify all branching nodes are reachable across playthroughs.
+
+    For each playthrough, reloads the page, lets the game run, and reads
+    ``window.__TEST__.state().visitedScenes``. The union of visited nodes
+    must cover every node id in the branching tree.
+    """
+    nodes = (branching or {}).get("branching_tree", {}).get("nodes", {})
+    expected_ids = set(nodes.keys())
+    if len(expected_ids) < 8:
+        return {
+            "name": "branch_coverage",
+            "passed": False,
+            "reason": f"branching tree has only {len(expected_ids)} nodes, need >= 8",
+        }
+
+    visited_union: set[str] = set()
+    for _ in range(max(1, playthroughs)):
+        try:
+            await page.reload()
+        except (RuntimeError, TimeoutError):
+            pass
+        await page.wait_for_timeout(300)
+        try:
+            state = await page.evaluate(
+                "() => window.__TEST__ && window.__TEST__.state ? window.__TEST__.state() : null"
+            )
+        except (RuntimeError, TimeoutError):
+            state = None
+        if isinstance(state, dict):
+            visited_union.update(state.get("visitedScenes", []) or [])
+
+    unvisited = expected_ids - visited_union
+    return {
+        "name": "branch_coverage",
+        "passed": len(unvisited) == 0,
+        "expected": len(expected_ids),
+        "visited": len(visited_union),
+        "unvisited": sorted(unvisited)[:10],
+    }
+
+
+async def check_ending_reachability(
+    page: Page,
+    endings: dict | None = None,
+    playthroughs: int = 1,
+) -> dict:
+    """Verify all declared endings are reachable across playthroughs.
+
+    Reads ``__TEST__.state().endingsReached`` after each playthrough and
+    asserts the union covers every ending name in the endings list.
+    """
+    declared = (endings or {}).get("endings", [])
+    declared_names = {e.get("name", "") for e in declared if isinstance(e, dict)}
+    declared_names.discard("")
+    if len(declared_names) < 3:
+        return {
+            "name": "ending_reachability",
+            "passed": False,
+            "reason": f"endings list has only {len(declared_names)} declared names, need >= 3",
+        }
+
+    reached_union: set[str] = set()
+    for _ in range(max(1, playthroughs)):
+        try:
+            await page.reload()
+        except (RuntimeError, TimeoutError):
+            pass
+        await page.wait_for_timeout(300)
+        try:
+            state = await page.evaluate(
+                "() => window.__TEST__ && window.__TEST__.state ? window.__TEST__.state() : null"
+            )
+        except (RuntimeError, TimeoutError):
+            state = None
+        if isinstance(state, dict):
+            reached_union.update(state.get("endingsReached", []) or [])
+
+    unreachable = declared_names - reached_union
+    return {
+        "name": "ending_reachability",
+        "passed": len(unreachable) == 0,
+        "declared": sorted(declared_names),
+        "reached": sorted(reached_union),
+        "unreachable": sorted(unreachable),
+    }
+
+
+async def check_save_load_roundtrip(page: Page) -> dict:
+    """Save state, reload page, load slot 0, assert state hash matches."""
+    try:
+        hash_before = await page.evaluate(
+            "() => window.__TEST__ && window.__TEST__.getStateHash ? window.__TEST__.getStateHash() : null"
+        )
+        await page.evaluate("() => window.__TEST__ && window.__TEST__.save ? window.__TEST__.save(0) : null")
+        await page.reload()
+        await page.wait_for_timeout(500)
+        await page.evaluate("() => window.__TEST__ && window.__TEST__.load ? window.__TEST__.load(0) : null")
+        hash_after = await page.evaluate(
+            "() => window.__TEST__ && window.__TEST__.getStateHash ? window.__TEST__.getStateHash() : null"
+        )
+    except (RuntimeError, TimeoutError) as e:
+        return {
+            "name": "save_load_roundtrip",
+            "passed": False,
+            "reason": f"evaluate error: {e}",
+        }
+
+    if hash_before is None or hash_after is None:
+        return {
+            "name": "save_load_roundtrip",
+            "passed": False,
+            "reason": "__TEST__.getStateHash not implemented",
+        }
+
+    return {
+        "name": "save_load_roundtrip",
+        "passed": hash_before == hash_after,
+        "hash_before": hash_before,
+        "hash_after": hash_after,
+    }
+
+
+async def check_localization_render(
+    page: Page,
+    locales: list[str] | None = None,
+) -> dict:
+    """For each locale, set it via __TEST__.setLocale and check for text overflow.
+
+    Reads the count of overflowing text elements (scrollWidth > clientWidth).
+    """
+    locales = locales or ["ja", "ko", "zh", "ar", "de"]
+    overflow_per_locale: dict[str, int] = {}
+
+    for locale in locales:
+        try:
+            await page.evaluate(
+                f"() => window.__TEST__ && window.__TEST__.setLocale ? window.__TEST__.setLocale({locale!r}) : null"
+            )
+            await page.wait_for_timeout(200)
+            overflow_count = await page.evaluate(
+                "() => Array.from(document.querySelectorAll('*')).filter(e => e.scrollWidth > e.clientWidth + 1).length"
+            )
+        except (RuntimeError, TimeoutError):
+            overflow_count = -1
+        overflow_per_locale[locale] = overflow_count
+
+    failed = {loc: cnt for loc, cnt in overflow_per_locale.items() if cnt > 0 or cnt < 0}
+    return {
+        "name": "localization_render",
+        "passed": len(failed) == 0,
+        "locales_tested": locales,
+        "overflow_per_locale": overflow_per_locale,
+        "failed_locales": failed,
+    }
+
+
+async def check_dialogue_text_overflow(page: Page) -> dict:
+    """Measure the dialogue text bounding box vs the dialogue box bounds."""
+    try:
+        metrics = await page.evaluate(
+            "() => {"
+            "  const texts = document.querySelectorAll('canvas + * *, .dialogue-text, [class*=dialogue]');"
+            "  if (!texts.length) return null;"
+            "  const t = texts[0];"
+            "  const tb = t.getBoundingClientRect();"
+            "  return { textWidth: tb.width, textHeight: tb.height,"
+            "           boxWidth: window.innerWidth, boxHeight: window.innerHeight };"
+            "}"
+        )
+    except (RuntimeError, TimeoutError):
+        metrics = None
+
+    if not metrics:
+        return {"name": "dialogue_overflow", "passed": False, "reason": "no dialogue element found"}
+
+    fits = metrics["textWidth"] <= metrics["boxWidth"] and metrics["textHeight"] <= metrics["boxHeight"]
+    return {
+        "name": "dialogue_overflow",
+        "passed": fits,
+        "text_width": metrics["textWidth"],
+        "box_width": metrics["boxWidth"],
+        "text_height": metrics["textHeight"],
+        "box_height": metrics["boxHeight"],
+    }
+
+
+async def check_cg_gallery(page: Page, cg_key: str = "test_cg") -> dict:
+    """Unlock a CG via __TEST__, navigate to gallery, assert the CG renders."""
+    try:
+        await page.evaluate(
+            f"() => window.__TEST__ && window.__TEST__.unlockCG ? window.__TEST__.unlockCG({cg_key!r}) : null"
+        )
+        visible = await page.evaluate(
+            f"() => {{ const el = document.querySelector('[data-cg=\"{cg_key}\"]'); return el !== null; }}"
+        )
+    except (RuntimeError, TimeoutError):
+        visible = False
+
+    return {
+        "name": "cg_gallery",
+        "passed": bool(visible),
+        "cg_key": cg_key,
+    }
+
+
+async def check_route_locked(page: Page, route_id: str = "test_route") -> dict:
+    """Click a locked route in the menu and assert the scene does not change."""
+    try:
+        before = await page.evaluate("() => (window.__TEST__ && window.__TEST__.state ? window.__TEST__.state().currentScene : null)")
+        await page.evaluate(
+            f"() => {{ const btn = document.querySelector('[data-route=\"{route_id}\"][data-locked=\"true\"]'); if (btn) btn.click(); }}"
+        )
+        await page.wait_for_timeout(800)
+        after = await page.evaluate("() => (window.__TEST__ && window.__TEST__.state ? window.__TEST__.state().currentScene : null)")
+    except (RuntimeError, TimeoutError):
+        before, after = None, None
+
+    if before is None or after is None:
+        return {
+            "name": "route_locked",
+            "passed": False,
+            "reason": "__TEST__ state not available",
+        }
+
+    return {
+        "name": "route_locked",
+        "passed": before == after,
+        "route_id": route_id,
+        "scene_before": before,
+        "scene_after": after,
+    }

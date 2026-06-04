@@ -1,0 +1,28 @@
+{
+  "characters": [
+    {
+      "name": "Alice",
+      "role": "heroine",
+      "sprite_set": "characters/alice",
+      "expression_variants": ["neutral", "happy", "sad", "surprised", "angry"],
+      "personality": "Cheerful, curious, secretly writes poetry.",
+      "stat_affinities": ["empathy", "wit"]
+    },
+    {
+      "name": "Bob",
+      "role": "heroine",
+      "sprite_set": "characters/bob",
+      "expression_variants": ["neutral", "happy", "sad", "surprised", "angry"],
+      "personality": "Reserved, observant, hidden talent for cooking.",
+      "stat_affinities": ["patience", "courage"]
+    },
+    {
+      "name": "Carol",
+      "role": "npc",
+      "sprite_set": "characters/carol",
+      "expression_variants": ["neutral", "happy", "sad", "surprised", "angry"],
+      "personality": "Sarcastic shopkeeper, knows everyone's secrets.",
+      "stat_affinities": ["luck"]
+    }
+  ]
+}

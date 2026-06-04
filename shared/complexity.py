@@ -122,11 +122,12 @@ def score_code(game_dir: Path) -> tuple[float, dict]:
 
     total_lines = sum(f.read_text(encoding="utf-8", errors="replace").count("\n") for f in ts_files)
 
-    # Read GameScene for detailed analysis
     game_scene_path = src_dir / "game" / "scenes" / "GameScene.ts"
+    novel_scene_path = src_dir / "game" / "scenes" / "NovelScene.ts"
+    primary_scene = game_scene_path if game_scene_path.exists() else novel_scene_path
     game_code = (
-        game_scene_path.read_text(encoding="utf-8", errors="replace")
-        if game_scene_path.exists()
+        primary_scene.read_text(encoding="utf-8", errors="replace")
+        if primary_scene.exists()
         else ""
     )
 
@@ -158,7 +159,6 @@ def score_code(game_dir: Path) -> tuple[float, dict]:
         "has_level_system": "level" in game_code.lower(),
     }
 
-    # Scoring
     file_score = min(metrics["total_files"] / 10, 1.0)
     line_score = min(total_lines / 1500, 1.0)
     feature_signals = sum(
@@ -176,7 +176,7 @@ def score_code(game_dir: Path) -> tuple[float, dict]:
     input_score = min(metrics["input_types"] / 2, 1.0)
     scene_score = min(metrics["scene_count"] / 5, 1.0)
 
-    total = (
+    base_total = (
         file_score * 0.15
         + line_score * 0.20
         + feature_score * 0.30
@@ -184,5 +184,92 @@ def score_code(game_dir: Path) -> tuple[float, dict]:
         + scene_score * 0.20
     )
 
+    vn_metrics = _score_vn_signals(src_dir, game_code)
+    vn_signals = vn_metrics.pop("vn_signals_detected", False)
+    vn_total = sum(vn_metrics.values()) if vn_signals else 0.0
+    vn_cap = 0.20
+
+    total = base_total + min(vn_total, vn_cap)
+
+    metrics["vn_signals_detected"] = vn_signals
+    for k, v in vn_metrics.items():
+        metrics[k] = v
+
     metrics["complexity_score"] = round(total, 2)
     return round(total, 2), metrics
+
+
+def _score_vn_signals(src_dir: Path, game_code: str) -> dict:
+    """Read VN data files and game code, return per-signal bonus values.
+
+    Keys are per-signal bonus values (0.0-0.10 each), plus a boolean
+    ``vn_signals_detected`` indicating whether any VN data file was present.
+    The total bonus is capped at 0.20 in the caller.
+    """
+    import json as _json
+
+    data_dir = src_dir / "game" / "data"
+    out: dict = {"vn_signals_detected": False}
+
+    if not data_dir.exists():
+        return out
+
+    stat_count = 0
+    character_count = 0
+    min_expr_per_char = 99
+    ending_count = 0
+    branch_count = 0
+    has_save_load = "SaveLoadSystem" in game_code
+    has_localization = "LocalizationManager" in game_code
+
+    stats_path = data_dir / "stats.json"
+    if stats_path.exists():
+        try:
+            stats = _json.loads(stats_path.read_text(encoding="utf-8", errors="replace"))
+            stat_count = len(stats.get("stats", []))
+            out["vn_signals_detected"] = True
+        except (ValueError, OSError):
+            pass
+
+    chars_path = data_dir / "characters.json"
+    if chars_path.exists():
+        try:
+            chars = _json.loads(chars_path.read_text(encoding="utf-8", errors="replace"))
+            char_list = chars.get("characters", [])
+            character_count = len(char_list)
+            for c in char_list:
+                ev = c.get("expression_variants", []) if isinstance(c, dict) else []
+                if isinstance(ev, list) and ev:
+                    min_expr_per_char = min(min_expr_per_char, len(ev))
+            if character_count > 0:
+                out["vn_signals_detected"] = True
+        except (ValueError, OSError):
+            pass
+
+    endings_path = data_dir / "endings.json"
+    if endings_path.exists():
+        try:
+            endings = _json.loads(endings_path.read_text(encoding="utf-8", errors="replace"))
+            ending_count = len(endings.get("endings", []))
+            out["vn_signals_detected"] = True
+        except (ValueError, OSError):
+            pass
+
+    branching_path = data_dir / "branching.json"
+    if branching_path.exists():
+        try:
+            br = _json.loads(branching_path.read_text(encoding="utf-8", errors="replace"))
+            branch_count = len(br.get("branching_tree", {}).get("nodes", {}))
+            out["vn_signals_detected"] = True
+        except (ValueError, OSError):
+            pass
+
+    out["vn_stat_count"] = 0.05 if stat_count >= 5 else 0.0
+    out["vn_ending_count"] = 0.05 if ending_count >= 3 else 0.0
+    out["vn_branch_count"] = 0.10 if branch_count >= 8 else 0.0
+    out["vn_expression_per_char"] = 0.05 if min_expr_per_char >= 3 else 0.0
+    out["vn_character_count"] = 0.05 if character_count >= 2 else 0.0
+    out["vn_has_save_load"] = 0.05 if has_save_load else 0.0
+    out["vn_has_localization"] = 0.05 if has_localization else 0.0
+
+    return out
