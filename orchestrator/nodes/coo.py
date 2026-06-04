@@ -1,4 +1,5 @@
 """COO Agent — Operations oversight and pipeline health."""
+
 from __future__ import annotations
 
 from loguru import logger

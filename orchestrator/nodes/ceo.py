@@ -1,29 +1,33 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from loguru import logger
 
-from shared.models import GameProposal
-
 from orchestrator.state import CompanyState, PipelinePhase
+from shared.models import GameProposal
 
 
 async def _get_completed_genres() -> set[str]:
     from orchestrator.persistence import get_completed_genres
+
     return await get_completed_genres()
 
 
 async def _find_project_to_update() -> dict | None:
     from orchestrator.persistence import find_project_to_update
+
     return await find_project_to_update()
 
 
 async def _process_ceo_instructions(state: CompanyState) -> dict:
+    from orchestrator.persistence import (
+        get_pending_instructions,
+        log_event,
+        mark_instruction_processed,
+    )
     from shared.llm_client import llm
-
-    from orchestrator.persistence import get_pending_instructions, log_event, mark_instruction_processed
 
     instructions = await get_pending_instructions("ceo")
     if not instructions:
@@ -41,14 +45,17 @@ async def _process_ceo_instructions(state: CompanyState) -> dict:
             response, usage = await llm.chat_completion(
                 model="MiniMax-M3",
                 messages=[
-                    {"role": "system", "content": (
-                        "You are processing user instructions for an autonomous game company CEO. "
-                        "Classify the user's intent and extract key information. "
-                        "Respond in JSON format:\n"
-                        '{"intent": "direction" | "question" | "feedback" | "stop", '
-                        '"genre": "extracted_genre_or_null", '
-                        '"summary": "brief_summary"}'
-                    )},
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are processing user instructions for an autonomous game company CEO. "
+                            "Classify the user's intent and extract key information. "
+                            "Respond in JSON format:\n"
+                            '{"intent": "start_project" | "direction" | "question" | "feedback" | "stop", '
+                            '"genre": "extracted_genre_or_null", '
+                            '"summary": "brief_summary"}'
+                        ),
+                    },
                     {"role": "user", "content": content},
                 ],
                 max_tokens=200,
@@ -71,22 +78,30 @@ async def _process_ceo_instructions(state: CompanyState) -> dict:
             genre = None
             summary = content[:100]
 
+        if intent == "start_project" and genre:
+            logger.info(f"CEO: start_project intent detected for genre '{genre}'")
+
         if intent == "direction" and genre:
             from orchestrator.persistence import save_user_genre_directive
-            await save_user_genre_directive(genre, content, datetime.now(timezone.utc).isoformat())
+
+            await save_user_genre_directive(genre, content, datetime.now(UTC).isoformat())
 
             forced_genre = genre
             await log_event(
-                "pipeline", "info",
+                "pipeline",
+                "info",
                 f"CEO received user directive: make {genre} game",
-                detail=content[:200], source_agent="ceo",
+                detail=content[:200],
+                source_agent="ceo",
             )
 
         elif intent == "stop":
             await log_event(
-                "pipeline", "warning",
+                "pipeline",
+                "warning",
                 "CEO received stop instruction from user",
-                detail=content[:200], source_agent="ceo",
+                detail=content[:200],
+                source_agent="ceo",
             )
             updates["phase"] = PipelinePhase.IDLE
 
@@ -157,9 +172,13 @@ async def ceo_evaluate(state: CompanyState) -> dict:
         forced_matches = [o for o in novel if o.get("genre", "").lower() == forced_genre.lower()]
         if forced_matches:
             novel = forced_matches
-            logger.info(f"CEO: User directed genre '{forced_genre}', filtering to {len(forced_matches)} matches")
+            logger.info(
+                f"CEO: User directed genre '{forced_genre}', filtering to {len(forced_matches)} matches"
+            )
         else:
-            logger.info(f"CEO: User directed genre '{forced_genre}', but no matching opportunities found")
+            logger.info(
+                f"CEO: User directed genre '{forced_genre}', but no matching opportunities found"
+            )
 
     top_opportunity = max(novel, key=lambda x: x.get("market_opportunity_score", x.get("score", 0)))
     threshold = 0.2
@@ -174,13 +193,16 @@ async def ceo_evaluate(state: CompanyState) -> dict:
         genre=top_opportunity["genre"],
         description=top_opportunity["description"],
         target_platforms=["itch.io", "web"],
-        estimated_dev_hours=top_opportunity.get("estimated_dev_hours") or top_opportunity.get("estimated_hours", 8),
+        estimated_dev_hours=top_opportunity.get("estimated_dev_hours")
+        or top_opportunity.get("estimated_hours", 8),
         market_opportunity_score=score,
         differentiation=top_opportunity.get("differentiation", ""),
         reference_games=top_opportunity.get("reference_games", []),
     )
 
-    logger.info(f"CEO: Greenlit project '{proposal.name}' ({proposal.genre}), score={proposal.market_opportunity_score}")
+    logger.info(
+        f"CEO: Greenlit project '{proposal.name}' ({proposal.genre}), score={proposal.market_opportunity_score}"
+    )
     return {"phase": PipelinePhase.DESIGNING, "current_proposal": proposal}
 
 

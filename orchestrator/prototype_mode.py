@@ -29,7 +29,7 @@ Required fields:
 
 Output ONLY valid JSON, no markdown fences."""
 
-_GAME_TEMPLATE = '''<!DOCTYPE html>
+_GAME_TEMPLATE = """<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -229,7 +229,7 @@ _GAME_TEMPLATE = '''<!DOCTYPE html>
 }})();
 </script>
 </body>
-</html>'''
+</html>"""
 
 
 def _pick_model() -> str:

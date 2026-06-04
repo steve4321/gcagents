@@ -9,7 +9,6 @@ from orchestrator.graph.pipeline import create_company_app
 from orchestrator.state import CompanyState, PipelinePhase
 from shared.config import load_config
 
-
 console = Console()
 
 
@@ -24,7 +23,9 @@ async def run_single_cycle() -> dict | None:
 
     initial_state = CompanyState(phase=PipelinePhase.IDLE)
 
-    console.print("[bold cyan]Running full cycle: Scan → Evaluate → Design → Dev → QA → Build → Deploy[/bold cyan]\n")
+    console.print(
+        "[bold cyan]Running full cycle: Scan → Evaluate → Design → Dev → QA → Build → Deploy[/bold cyan]\n"
+    )
 
     try:
         result = await app.ainvoke(initial_state.model_dump())
@@ -68,7 +69,9 @@ async def run_forever(interval_seconds: int = 3600) -> None:
         if result is None:
             console.print(f"[red]Cycle {cycle} failed, continuing...[/red]")
 
-        console.print(f"\n[dim]Sleeping {interval_seconds}s before next cycle (Ctrl+C to stop)...[/dim]\n")
+        console.print(
+            f"\n[dim]Sleeping {interval_seconds}s before next cycle (Ctrl+C to stop)...[/dim]\n"
+        )
         try:
             await asyncio.sleep(interval_seconds)
         except asyncio.CancelledError:
@@ -77,8 +80,8 @@ async def run_forever(interval_seconds: int = 3600) -> None:
 
 
 async def run_scheduler_tick() -> dict | None:
-    from orchestrator.scheduler import scheduler_tick
     from orchestrator.persistence import ensure_tables
+    from orchestrator.scheduler import scheduler_tick
 
     await ensure_tables()
     return await scheduler_tick()
@@ -97,7 +100,9 @@ async def run_scheduler_forever(interval_seconds: int = 300) -> None:
         tick_num = result.get("tick", "?") if result else "?"
         console.print(f"[dim]Tick #{tick_num} complete[/dim]")
 
-        console.print(f"[dim]Sleeping {interval_seconds}s until next tick (Ctrl+C to stop)...[/dim]\n")
+        console.print(
+            f"[dim]Sleeping {interval_seconds}s until next tick (Ctrl+C to stop)...[/dim]\n"
+        )
         try:
             await asyncio.sleep(interval_seconds)
         except asyncio.CancelledError:
@@ -156,14 +161,20 @@ def _build_arg_parser():
     )
     sub = parser.add_subparsers(dest="command")
     sub.add_parser("run", help="Run a full cycle (scan → design → dev → deploy)")
-    forever_parser = sub.add_parser("run-forever", help="Run in 24/7 mode — loop forever with interval")
-    forever_parser.add_argument("--interval", type=int, default=3600,
-                                help="Seconds between cycles (default: 3600)")
+    forever_parser = sub.add_parser(
+        "run-forever", help="Run in 24/7 mode — loop forever with interval"
+    )
+    forever_parser.add_argument(
+        "--interval", type=int, default=3600, help="Seconds between cycles (default: 3600)"
+    )
     sub.add_parser("scan", help="Run market scan only")
     sched_parser = sub.add_parser("run-scheduler", help="Run tick-based multi-project scheduler")
-    sched_parser.add_argument("--interval", type=int, default=300,
-                              help="Seconds between ticks (default: 300)")
-    proto_parser = sub.add_parser("run-prototype", help="Generate a quick playable prototype (~5 min)")
+    sched_parser.add_argument(
+        "--interval", type=int, default=300, help="Seconds between ticks (default: 300)"
+    )
+    proto_parser = sub.add_parser(
+        "run-prototype", help="Generate a quick playable prototype (~5 min)"
+    )
     proto_parser.add_argument("concept", help='Game concept, e.g. "space shooter with powerups"')
     return parser
 

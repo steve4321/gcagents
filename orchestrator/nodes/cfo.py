@@ -1,4 +1,5 @@
 """CFO Agent — Financial oversight and budget control."""
+
 from __future__ import annotations
 
 from loguru import logger
@@ -99,8 +100,7 @@ async def cfo_financial_report(state: CompanyState) -> dict:
                 {
                     "role": "user",
                     "content": (
-                        "Analyze this financial data and provide "
-                        f"recommendations:\n{report_text}"
+                        f"Analyze this financial data and provide recommendations:\n{report_text}"
                     ),
                 },
             ],
