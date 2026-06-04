@@ -3,15 +3,24 @@
 Tasks are enqueued per project, dequeued FIFO, and tracked
 with status/progress/result/error fields.
 """
+
 from __future__ import annotations
 
 import uuid
 
-from orchestrator.persistence import save_task, claim_next_task, update_task_status
+from loguru import logger
+
+from orchestrator.persistence import claim_next_task, save_task, update_task_status
+from shared.events import ActionType, Event
 from shared.models import TaskParams, TaskRecord
 
 
-async def enqueue(project_id: str, task_type: str, params: TaskParams | dict | None = None) -> TaskRecord:
+async def enqueue(
+    project_id: str,
+    task_type: str,
+    params: TaskParams | dict | None = None,
+    tick_id: int = 0,
+) -> TaskRecord:
     """Create and persist a new task record."""
     task = TaskRecord(
         id=str(uuid.uuid4()),
@@ -20,25 +29,79 @@ async def enqueue(project_id: str, task_type: str, params: TaskParams | dict | N
         params=params or {},
     )
     await save_task(task)
+    try:
+        from orchestrator.event_store import get_event_store
+
+        await get_event_store().append(
+            Event.new(
+                event_type=ActionType.TASK_ENQUEUED,
+                tick_id=tick_id,
+                project_id=project_id if project_id != "__system__" else None,
+                agent_name=task_type,
+                payload={"task_id": task.id, "task_type": task_type},
+            )
+        )
+    except Exception as e:
+        logger.debug(f"Event emission skipped for enqueue: {e}")
     return task
 
 
-async def dequeue() -> TaskRecord | None:
+async def dequeue(tick_id: int = 0) -> TaskRecord | None:
     """Atomically claim and return the oldest pending task, or None if queue is empty."""
-    return await claim_next_task()
+    task = await claim_next_task()
+    if task:
+        try:
+            from orchestrator.event_store import get_event_store
+
+            await get_event_store().append(
+                Event.new(
+                    event_type=ActionType.TASK_DEQUEUED,
+                    tick_id=tick_id,
+                    project_id=task.project_id if task.project_id != "__system__" else None,
+                    agent_name=task.task_type,
+                    payload={"task_id": task.id, "task_type": task.task_type},
+                )
+            )
+        except Exception as e:
+            logger.debug(f"Event emission skipped for dequeue: {e}")
+    return task
 
 
-async def complete_task(task_id: str, result: dict | None = None) -> None:
+async def complete_task(task_id: str, result: dict | None = None, tick_id: int = 0) -> None:
     await update_task_status(
         task_id,
         status="completed",
         progress=1.0,
         result=result,
     )
+    try:
+        from orchestrator.event_store import get_event_store
+
+        await get_event_store().append(
+            Event.new(
+                event_type=ActionType.TASK_COMPLETED,
+                tick_id=tick_id,
+                payload={"task_id": task_id},
+            )
+        )
+    except Exception as e:
+        logger.debug(f"Event emission skipped for complete: {e}")
 
 
-async def fail_task(task_id: str, error: str) -> None:
+async def fail_task(task_id: str, error: str, tick_id: int = 0) -> None:
     await update_task_status(task_id, status="failed", error=error)
+    try:
+        from orchestrator.event_store import get_event_store
+
+        await get_event_store().append(
+            Event.new(
+                event_type=ActionType.TASK_FAILED,
+                tick_id=tick_id,
+                payload={"task_id": task_id, "error": error[:200]},
+            )
+        )
+    except Exception as e:
+        logger.debug(f"Event emission skipped for fail: {e}")
 
 
 async def update_progress(task_id: str, progress: float) -> None:

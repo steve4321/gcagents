@@ -4,9 +4,10 @@ Each tick processes human instructions, checks decision gates,
 advances active projects through their lifecycle phases, executes
 one task from the queue, and generates periodic reports.
 """
+
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from loguru import logger
@@ -27,9 +28,9 @@ from orchestrator.persistence import (
     has_active_task,
     resolve_decision,
     save_agent_log,
+    save_chat_message,
     save_game_version,
     save_project,
-    save_chat_message,
     set_project_live,
     update_project_art_assets_path,
     update_project_art_status,
@@ -43,18 +44,42 @@ from orchestrator.persistence import (
     update_project_qa_result,
 )
 from orchestrator.state import CompanyState, PipelinePhase
-from orchestrator.task_queue import enqueue, dequeue, complete_task, fail_task, update_progress, enqueue_retry
+from orchestrator.task_queue import (
+    complete_task,
+    dequeue,
+    enqueue,
+    enqueue_retry,
+    fail_task,
+    update_progress,
+)
 from shared.constants import LAYER1_MAX_RETRIES, MAX_INSTRUCTIONS_PER_TICK, QA_CANCEL_THRESHOLD
 from shared.memory import get_memory_store
 from shared.models import DecisionPoint, ProjectPhase, ProjectState, TaskRecord
 
 _TICK_COUNT = 0
+_PAUSE_FLAG_PATH = str(Path("data") / ".scheduler_paused")
+
+
+def is_paused() -> bool:
+    """Check if the scheduler is paused via file flag."""
+    return Path(_PAUSE_FLAG_PATH).exists()
+
+
+def set_paused(paused: bool) -> None:
+    """Set or clear the scheduler pause flag."""
+    flag = Path(_PAUSE_FLAG_PATH)
+    if paused:
+        flag.parent.mkdir(parents=True, exist_ok=True)
+        flag.touch()
+    else:
+        flag.unlink(missing_ok=True)
 
 
 def _load_scheduler_config() -> dict:
     """Load scheduler config from agents.yaml, with fallback to defaults."""
     try:
         from shared.config import load_agents_config
+
         cfg = load_agents_config()
         return cfg.get("scheduler", {})
     except Exception as e:
@@ -63,7 +88,14 @@ def _load_scheduler_config() -> dict:
 
 
 _SCHED_CFG = _load_scheduler_config()
-_default_phase_ticks = {"scanning": 3, "designing": 2, "developing": 10, "testing": 6, "building": 3, "publishing": 5}
+_default_phase_ticks = {
+    "scanning": 3,
+    "designing": 2,
+    "developing": 10,
+    "testing": 6,
+    "building": 3,
+    "publishing": 5,
+}
 PHASE_MAX_TICKS: dict[str, int] = _SCHED_CFG.get("phase_max_ticks", _default_phase_ticks)
 MARKET_SCAN_INTERVAL = _SCHED_CFG.get("market_scan_interval", 10)
 CEO_EVALUATE_INTERVAL = _SCHED_CFG.get("ceo_evaluate_interval", 1)
@@ -72,10 +104,18 @@ MAX_ACTIVE_PROJECTS = _SCHED_CFG.get("max_active_projects", 3)
 REPORT_INTERVAL = _SCHED_CFG.get("report_interval", 5)
 
 TASK_NODE_MAP = {
-    "market_scan": "scan", "design_game": "design", "art_gen": "art",
-    "generate_music": "music", "develop": "develop", "develop_simple": "develop",
-    "qa": "qa", "build": "build", "localize": "build", "deploy": "deploy",
+    "market_scan": "scan",
+    "design_game": "design",
+    "art_gen": "art",
+    "generate_music": "music",
+    "develop": "develop",
+    "develop_simple": "develop",
+    "qa": "qa",
+    "build": "build",
+    "localize": "build",
+    "deploy": "deploy",
 }
+
 
 async def scheduler_tick() -> dict | None:
     """Execute one scheduler tick. Returns tick info dict or None."""
@@ -134,8 +174,10 @@ async def _process_instructions() -> None:
         if not content:
             continue
         await emit(
-            "scheduler", "Scheduler received instruction",
-            detail=content[:200], source_agent="scheduler",
+            "scheduler",
+            "Scheduler received instruction",
+            detail=content[:200],
+            source_agent="scheduler",
         )
         await _handle_instruction(content)
 
@@ -176,18 +218,25 @@ async def _resolve_answered_decisions() -> None:
         else:
             created = d.created_at
             if created:
-                now = datetime.now(timezone.utc)
+                now = datetime.now(UTC)
                 if created.tzinfo is None:
-                    created = created.replace(tzinfo=timezone.utc)
+                    created = created.replace(tzinfo=UTC)
                 hours_elapsed = (now - created).total_seconds() / 3600
                 if hours_elapsed >= timeout_hours:
-                    logger.info(f"Decision {d.id} timed out after {hours_elapsed:.1f}h, applying default: {timeout_action}")
+                    logger.info(
+                        f"Decision {d.id} timed out after {hours_elapsed:.1f}h, applying default: {timeout_action}"
+                    )
                     await resolve_decision(d.id, timeout_action)
                     if timeout_action == "approve":
                         await _handle_approved_decision(d)
                     else:
                         await _handle_rejected_decision(d)
-                    await emit("scheduler", f"Decision timed out: {d.question[:50]}", severity="warning", source_agent="scheduler")
+                    await emit(
+                        "scheduler",
+                        f"Decision timed out: {d.question[:50]}",
+                        severity="warning",
+                        source_agent="scheduler",
+                    )
 
 
 async def _handle_approved_decision(decision: DecisionPoint) -> None:
@@ -196,7 +245,7 @@ async def _handle_approved_decision(decision: DecisionPoint) -> None:
 
     if dtype == "new_project":
         ctx = decision.context
-        name = ctx.get("name", f"project-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M')}")
+        name = ctx.get("name", f"project-{datetime.now(UTC).strftime('%Y%m%d-%H%M')}")
         project = ProjectState(
             id=pid or _new_id(),
             name=name,
@@ -205,7 +254,12 @@ async def _handle_approved_decision(decision: DecisionPoint) -> None:
             proposal=ctx,
         )
         await save_project(project)
-        await emit("scheduler", f"New project approved: {name}", source_agent="scheduler", project_name=name)
+        await emit(
+            "scheduler",
+            f"New project approved: {name}",
+            source_agent="scheduler",
+            project_name=name,
+        )
 
     elif dtype == "publish" and pid:
         await update_project_phase(pid, "publishing")
@@ -213,14 +267,24 @@ async def _handle_approved_decision(decision: DecisionPoint) -> None:
         project = await get_project(pid)
         if project:
             await enqueue(pid, "deploy", {"project_name": project.name})
-            await emit("scheduler", f"Publishing approved for {project.name}", source_agent="scheduler", project_name=project.name)
+            await emit(
+                "scheduler",
+                f"Publishing approved for {project.name}",
+                source_agent="scheduler",
+                project_name=project.name,
+            )
 
     elif dtype == "budget_overrun" and pid:
         project = await get_project(pid)
         if project:
             await update_project_phase(pid, "developing")
             await update_project_awaiting_decision(pid, None)
-            await emit("scheduler", f"Budget overrun approved, continuing {project.name}", source_agent="scheduler", project_name=project.name)
+            await emit(
+                "scheduler",
+                f"Budget overrun approved, continuing {project.name}",
+                source_agent="scheduler",
+                project_name=project.name,
+            )
 
     elif dtype == "direction_change" and pid:
         ctx = decision.context
@@ -228,7 +292,12 @@ async def _handle_approved_decision(decision: DecisionPoint) -> None:
         if project:
             await update_project_phase(pid, "designing")
             await update_project_awaiting_decision(pid, None)
-            await emit("scheduler", f"Direction change for {project.name}", source_agent="scheduler", project_name=project.name)
+            await emit(
+                "scheduler",
+                f"Direction change for {project.name}",
+                source_agent="scheduler",
+                project_name=project.name,
+            )
 
 
 async def _handle_rejected_decision(decision: DecisionPoint) -> None:
@@ -241,12 +310,19 @@ async def _handle_rejected_decision(decision: DecisionPoint) -> None:
     elif dtype == "cancel" and pid:
         project = await get_project(pid)
         if project:
-            await emit("scheduler", f"Cancellation rejected, continuing {project.name}", source_agent="scheduler", project_name=project.name)
+            await emit(
+                "scheduler",
+                f"Cancellation rejected, continuing {project.name}",
+                source_agent="scheduler",
+                project_name=project.name,
+            )
 
     elif dtype == "publish" and pid:
         await update_project_phase(pid, "testing")
         await update_project_awaiting_decision(pid, None)
-        await emit("scheduler", "Publish rejected, sending back to testing", source_agent="scheduler")
+        await emit(
+            "scheduler", "Publish rejected, sending back to testing", source_agent="scheduler"
+        )
 
 
 async def _periodic_market_scan() -> None:
@@ -256,6 +332,7 @@ async def _periodic_market_scan() -> None:
 
 async def _fetch_itch_stats() -> None:
     from agents.ops.deployer.itch_stats import fetch_itch_stats
+
     try:
         results = await fetch_itch_stats()
         if results:
@@ -292,7 +369,8 @@ async def _ceo_evaluate_new_projects() -> None:
     # Check if we already suggested recently (dedup by checking last 20 CEO suggestions)
     recent_history = await get_chat_history(limit=20)
     recent_suggestions = {
-        msg.get("content", "") for msg in recent_history
+        msg.get("content", "")
+        for msg in recent_history
         if msg.get("agent_name") == "ceo" and "市场分析建议" in msg.get("content", "")
     }
 
@@ -307,9 +385,7 @@ async def _ceo_evaluate_new_projects() -> None:
         logger.info(f"CEO evaluate: no proposal approved (phase={result.get('phase')})")
         return
 
-    proposal_name = (
-        proposal.name if hasattr(proposal, "name") else proposal.get("name", "unnamed")
-    )
+    proposal_name = proposal.name if hasattr(proposal, "name") else proposal.get("name", "unnamed")
     proposal_genre = (
         proposal.genre if hasattr(proposal, "genre") else proposal.get("genre", "general")
     )
@@ -340,12 +416,16 @@ async def _ceo_evaluate_new_projects() -> None:
         f"这是基于最新市场数据的参考建议。如果您感兴趣，我们可以深入讨论细节和可行性。"
     )
     await save_chat_message(
-        "assistant", suggestion_msg, agent_name="ceo",
+        "assistant",
+        suggestion_msg,
+        agent_name="ceo",
         metadata={"type": "suggestion", "project_name": proposal_name},
     )
     await emit(
-        "ceo", f"Market suggestion: {proposal_name}",
-        source_agent="ceo", project_name=proposal_name,
+        "ceo",
+        f"Market suggestion: {proposal_name}",
+        source_agent="ceo",
+        project_name=proposal_name,
     )
     logger.info(
         f"CEO evaluate: suggested project '{proposal_name}' "
@@ -360,27 +440,35 @@ async def _advance_projects() -> None:
     max_dev = policy.get("max_dev_projects", 3)
     max_live = policy.get("max_live_projects", 5)
 
-    dev_phases = {ProjectPhase.SCANNING, ProjectPhase.DESIGNING, ProjectPhase.DEVELOPING,
-                  ProjectPhase.TESTING, ProjectPhase.BUILDING, ProjectPhase.PUBLISHING}
+    dev_phases = {
+        ProjectPhase.SCANNING,
+        ProjectPhase.DESIGNING,
+        ProjectPhase.DEVELOPING,
+        ProjectPhase.TESTING,
+        ProjectPhase.BUILDING,
+        ProjectPhase.PUBLISHING,
+    }
 
-    dev_projects = [p for p in projects
-                    if p.phase in dev_phases
-                    and not p.awaiting_decision]
+    dev_projects = [p for p in projects if p.phase in dev_phases and not p.awaiting_decision]
 
-    live_projects = [p for p in projects
-                     if p.phase == ProjectPhase.LIVE
-                     and not p.awaiting_decision]
+    live_projects = [
+        p for p in projects if p.phase == ProjectPhase.LIVE and not p.awaiting_decision
+    ]
 
     if len(dev_projects) > max_dev:
         dev_projects.sort(key=lambda p: p.progress or 0, reverse=True)
         for p in dev_projects[max_dev:]:
-            logger.debug(f"Scheduler: project {p.name} deferred ({len(dev_projects)} dev, max {max_dev})")
+            logger.debug(
+                f"Scheduler: project {p.name} deferred ({len(dev_projects)} dev, max {max_dev})"
+            )
         dev_projects = dev_projects[:max_dev]
 
     if len(live_projects) > max_live:
         live_projects.sort(key=lambda p: p.progress or 0, reverse=True)
         for p in live_projects[max_live:]:
-            logger.debug(f"Scheduler: project {p.name} deferred ({len(live_projects)} live, max {max_live})")
+            logger.debug(
+                f"Scheduler: project {p.name} deferred ({len(live_projects)} live, max {max_live})"
+            )
         live_projects = live_projects[:max_live]
 
     active = dev_projects + live_projects
@@ -397,9 +485,21 @@ async def _advance_project(project: ProjectState) -> None:
     max_ticks = PHASE_MAX_TICKS.get(phase_key, 10)
     phase_ticks = await _get_phase_ticks(pid)
     if phase_ticks >= max_ticks:
-        logger.warning(f"Scheduler: project {pid} exceeded {max_ticks} ticks in {phase_key}, resetting and continuing")
-        await save_chat_message("assistant", f"⚠️ 项目 **{project.name}** 在 {phase_key} 阶段停滞 ({phase_ticks}/{max_ticks} ticks)，自动重置继续", agent_name="ceo")
-        await emit("scheduler", f"Phase timeout (auto-reset): {project.name} in {phase_key}", severity="warning", source_agent="scheduler", project_name=project.name)
+        logger.warning(
+            f"Scheduler: project {pid} exceeded {max_ticks} ticks in {phase_key}, resetting and continuing"
+        )
+        await save_chat_message(
+            "assistant",
+            f"⚠️ 项目 **{project.name}** 在 {phase_key} 阶段停滞 ({phase_ticks}/{max_ticks} ticks)，自动重置继续",
+            agent_name="ceo",
+        )
+        await emit(
+            "scheduler",
+            f"Phase timeout (auto-reset): {project.name} in {phase_key}",
+            severity="warning",
+            source_agent="scheduler",
+            project_name=project.name,
+        )
 
     if phase == ProjectPhase.SCANNING:
         if not await has_active_task(pid, "market_scan"):
@@ -407,7 +507,9 @@ async def _advance_project(project: ProjectState) -> None:
 
     elif phase == ProjectPhase.DESIGNING:
         if not await has_active_task(pid, "design_game"):
-            await enqueue(pid, "design_game", {"project_name": project.name, "genre": project.genre})
+            await enqueue(
+                pid, "design_game", {"project_name": project.name, "genre": project.genre}
+            )
 
     elif phase == ProjectPhase.DEVELOPING:
         if project.art_status != "done":
@@ -415,7 +517,9 @@ async def _advance_project(project: ProjectState) -> None:
                 await enqueue(pid, "art_gen", {"project_name": project.name, "gdd": project.gdd})
         elif project.music_status != "done":
             if not await has_active_task(pid, "generate_music"):
-                await enqueue(pid, "generate_music", {"project_name": project.name, "gdd": project.gdd})
+                await enqueue(
+                    pid, "generate_music", {"project_name": project.name, "gdd": project.gdd}
+                )
         else:
             if not await has_active_task(pid, "develop"):
                 params = {"project_name": project.name, "gdd": project.gdd}
@@ -431,7 +535,9 @@ async def _advance_project(project: ProjectState) -> None:
 
     elif phase == ProjectPhase.BUILDING:
         if not await has_active_task(pid, "build"):
-            await enqueue(pid, "build", {"project_name": project.name, "code_path": project.code_path})
+            await enqueue(
+                pid, "build", {"project_name": project.name, "code_path": project.code_path}
+            )
 
     elif phase == ProjectPhase.PUBLISHING:
         if not await has_active_task(pid, "deploy"):
@@ -439,13 +545,17 @@ async def _advance_project(project: ProjectState) -> None:
             project = await get_project(pid)
             if project:
                 await enqueue(pid, "deploy", {"project_name": project.name})
-            await emit("scheduler", f"Publish auto-approved: {project.name}", source_agent="scheduler", project_name=project.name)
+            await emit(
+                "scheduler",
+                f"Publish auto-approved: {project.name}",
+                source_agent="scheduler",
+                project_name=project.name,
+            )
             await save_chat_message(
                 "assistant",
                 f"✅ 项目 **{project.name}** 自动发布。",
                 agent_name="ceo",
             )
-
 
 
 async def _execute_one_task() -> dict | None:
@@ -462,26 +572,47 @@ async def _execute_one_task() -> dict | None:
     retry_count = params.get("retry_count", 0)
     layer = params.get("layer", 1)
 
-    logger.info(f"Scheduler: executing task '{task_type}' for project {pid} (layer={layer}, retry={retry_count})")
+    logger.info(
+        f"Scheduler: executing task '{task_type}' for project {pid} (layer={layer}, retry={retry_count})"
+    )
 
     project = await get_project(pid) if pid != "__system__" else None
     project_name = project.name if project else ""
     node_name = TASK_NODE_MAP.get(task_type, task_type)
-    started_at = datetime.now(timezone.utc).isoformat()
+    started_at = datetime.now(UTC).isoformat()
 
     try:
         result = await _run_agent(task_type, pid, params)
         await complete_task(task.id, result)
-        duration = int((datetime.now(timezone.utc) - datetime.fromisoformat(started_at)).total_seconds() * 1000)
-        await save_agent_log(node_name, "completed", phase=task_type, duration_ms=duration,
-                             started_at=started_at, project_name=project_name)
+        duration = int(
+            (datetime.now(UTC) - datetime.fromisoformat(started_at)).total_seconds() * 1000
+        )
+        await save_agent_log(
+            node_name,
+            "completed",
+            phase=task_type,
+            duration_ms=duration,
+            started_at=started_at,
+            project_name=project_name,
+        )
         return {"task": task, "result": result, "status": "completed"}
     except Exception as e:
         error_msg = str(e)
-        duration = int((datetime.now(timezone.utc) - datetime.fromisoformat(started_at)).total_seconds() * 1000)
-        await save_agent_log(node_name, "failed", phase=task_type, error=error_msg, duration_ms=duration,
-                             started_at=started_at, project_name=project_name)
-        logger.error(f"Scheduler: task '{task_type}' failed (layer={layer}, retry={retry_count}): {e}")
+        duration = int(
+            (datetime.now(UTC) - datetime.fromisoformat(started_at)).total_seconds() * 1000
+        )
+        await save_agent_log(
+            node_name,
+            "failed",
+            phase=task_type,
+            error=error_msg,
+            duration_ms=duration,
+            started_at=started_at,
+            project_name=project_name,
+        )
+        logger.error(
+            f"Scheduler: task '{task_type}' failed (layer={layer}, retry={retry_count}): {e}"
+        )
         await fail_task(task.id, error_msg)
         recovery = await _handle_retry_recovery(task, error_msg)
         if recovery:
@@ -511,7 +642,9 @@ async def _retry_layer1(task: TaskRecord, error_msg: str, retry_count: int) -> d
     task_type = task.task_type
     logger.info(f"Scheduler: Layer 1 retry #{retry_count + 1} for '{task_type}' (project {pid})")
     await enqueue_retry(
-        pid, task_type, task.params,
+        pid,
+        task_type,
+        task.params,
         retry_count=retry_count + 1,
         retry_strategy="retry_with_feedback",
         layer=1,
@@ -537,13 +670,20 @@ async def _escalate_layer2(task: TaskRecord, error_msg: str) -> dict:
     alt_params["original_task_type"] = task_type
     logger.info(f"Scheduler: Layer 2 strategy change '{task_type}' -> '{alt_type}' (project {pid})")
     await enqueue_retry(
-        pid, alt_type, alt_params,
+        pid,
+        alt_type,
+        alt_params,
         retry_count=0,
         retry_strategy="strategy_change",
         layer=2,
         last_error=error_msg,
     )
-    return {"task": task, "error": error_msg, "status": "failed", "recovery": "layer2_strategy_change"}
+    return {
+        "task": task,
+        "error": error_msg,
+        "status": "failed",
+        "recovery": "layer2_strategy_change",
+    }
 
 
 MAX_LAYER3_RETRIES = 2
@@ -555,23 +695,49 @@ async def _escalate_layer3(task: TaskRecord, error_msg: str) -> dict:
     layer3_count = task.params.get("layer3_count", 0) + 1
 
     if layer3_count > MAX_LAYER3_RETRIES:
-        logger.error(f"Scheduler: project {pid} task '{task_type}' exceeded {MAX_LAYER3_RETRIES} layer3 retries, cancelling")
-        await save_chat_message("assistant", f"🔴 项目 **{pid}** 任务 {task_type} 超过最大重试次数，自动取消", agent_name="ceo")
+        logger.error(
+            f"Scheduler: project {pid} task '{task_type}' exceeded {MAX_LAYER3_RETRIES} layer3 retries, cancelling"
+        )
+        await save_chat_message(
+            "assistant",
+            f"🔴 项目 **{pid}** 任务 {task_type} 超过最大重试次数，自动取消",
+            agent_name="ceo",
+        )
         await update_project_phase(pid, "cancelled")
-        await emit("scheduler", f"Project {pid} cancelled after {layer3_count} layer3 retries", severity="error", source_agent="scheduler")
+        await emit(
+            "scheduler",
+            f"Project {pid} cancelled after {layer3_count} layer3 retries",
+            severity="error",
+            source_agent="scheduler",
+        )
         return {"task": task, "error": error_msg, "status": "failed", "recovery": "cancelled"}
 
-    logger.warning(f"Scheduler: Layer 3 auto-retry #{layer3_count} for project {pid}, task '{task_type}'")
+    logger.warning(
+        f"Scheduler: Layer 3 auto-retry #{layer3_count} for project {pid}, task '{task_type}'"
+    )
 
-    await save_chat_message("assistant", f"⚠️ 任务 **{task_type}** 失败 (layer3 retry #{layer3_count}/{MAX_LAYER3_RETRIES}): {error_msg[:100]}", agent_name="ceo")
+    await save_chat_message(
+        "assistant",
+        f"⚠️ 任务 **{task_type}** 失败 (layer3 retry #{layer3_count}/{MAX_LAYER3_RETRIES}): {error_msg[:100]}",
+        agent_name="ceo",
+    )
 
-    await enqueue(pid, task_type, {
-        "retry_count": 0,
-        "layer": 1,
-        "original_task_type": task_type,
-        "layer3_count": layer3_count,
-    })
-    await emit("scheduler", f"Project {pid} task '{task_type}' auto-retried after layer 3 failure", severity="warning", source_agent="scheduler")
+    await enqueue(
+        pid,
+        task_type,
+        {
+            "retry_count": 0,
+            "layer": 1,
+            "original_task_type": task_type,
+            "layer3_count": layer3_count,
+        },
+    )
+    await emit(
+        "scheduler",
+        f"Project {pid} task '{task_type}' auto-retried after layer 3 failure",
+        severity="warning",
+        source_agent="scheduler",
+    )
     return {"task": task, "error": error_msg, "status": "failed", "recovery": "layer3_auto_retry"}
 
 
@@ -624,11 +790,11 @@ async def _run_agent(task_type: str, project_id: str, params: dict) -> dict:
         project_name=project.name if project else None,
         gdd=project.gdd if project else None,
         current_proposal=_proposal_from_project(project) if project else None,
-        art_assets_path=params.get("art_assets_path") or (project.art_assets_path if project else None),
+        art_assets_path=params.get("art_assets_path")
+        or (project.art_assets_path if project else None),
         game_code_path=params.get("code_path") or (project.code_path if project else None),
-        build_path=params.get("build_path") or (
-            str(Path(project.code_path) / "dist") if project and project.code_path else None
-        ),
+        build_path=params.get("build_path")
+        or (str(Path(project.code_path) / "dist") if project and project.code_path else None),
     )
 
     if params.get("last_qa_failure"):
@@ -660,30 +826,37 @@ async def _run_agent(task_type: str, project_id: str, params: dict) -> dict:
 
     if task_type == "market_scan":
         from agents.research.scanner import scan_market
+
         return await scan_market(state)
 
     elif task_type == "design_game":
         from agents.dev.designer.agent import design_game
+
         return await design_game(state)
 
     elif task_type == "art_gen":
         from agents.dev.artist.art_node import generate_art
+
         return await generate_art(state)
 
     elif task_type == "generate_music":
         from agents.dev.music.music_generator import generate_music
+
         return await generate_music(state)
 
     elif task_type in ("develop", "develop_simple"):
         from agents.dev.programmer.agent import develop_game
+
         return await develop_game(state)
 
     elif task_type == "qa":
         from agents.dev.qa.qa_agent import run_qa
+
         return await run_qa(state)
 
     elif task_type == "build":
         from agents.dev.builder.build_agent import build_game
+
         return await build_game(state)
 
     elif task_type == "localize":
@@ -705,6 +878,7 @@ async def _run_agent(task_type: str, project_id: str, params: dict) -> dict:
 
     elif task_type == "deploy":
         from agents.ops.deployer.itch_deployer import deploy_to_itch
+
         return await deploy_to_itch(state)
 
     else:
@@ -716,6 +890,7 @@ def _proposal_from_project(project: ProjectState | None) -> dict | None:
     if not project or not project.proposal:
         return None
     from shared.models import GameProposal
+
     p = project.proposal
     return GameProposal(
         name=p.get("name", project.name),
@@ -743,7 +918,12 @@ async def _apply_task_result(task_result: dict) -> None:
         if recovery:
             logger.info(f"Scheduler: task '{task.task_type}' failed, recovery action: {recovery}")
         else:
-            await emit("scheduler", f"Task '{task.task_type}' failed for project {pid}", severity="warning", source_agent="scheduler")
+            await emit(
+                "scheduler",
+                f"Task '{task.task_type}' failed for project {pid}",
+                severity="warning",
+                source_agent="scheduler",
+            )
         return
 
     result = task_result.get("result", {})
@@ -761,7 +941,9 @@ async def _apply_task_result(task_result: dict) -> None:
                 "name": top.get("name", project.name),
                 "genre": top.get("genre", project.genre),
                 "description": top.get("description", ""),
-                "market_opportunity_score": top.get("market_opportunity_score", top.get("score", 0)),
+                "market_opportunity_score": top.get(
+                    "market_opportunity_score", top.get("score", 0)
+                ),
             }
             await update_project_proposal_and_phase(pid, proposal)
         else:
@@ -793,7 +975,9 @@ async def _apply_task_result(task_result: dict) -> None:
             project_id=pid,
             version=version,
             gdd_snapshot=project.gdd if project else None,
-            changelog="Code generated" if not project or not project.code_path else "Code regenerated after QA feedback",
+            changelog="Code generated"
+            if not project or not project.code_path
+            else "Code regenerated after QA feedback",
         )
         await update_project_phase(pid, "testing")
 
@@ -813,7 +997,9 @@ async def _apply_task_result(task_result: dict) -> None:
 
             checks = qa_results.get("checks", {})
             playtest = checks.get("playtest", {})
-            failed_names = sorted(c["name"] for c in playtest.get("checks", []) if not c.get("passed"))
+            failed_names = sorted(
+                c["name"] for c in playtest.get("checks", []) if not c.get("passed")
+            )
             current_fingerprint = ",".join(failed_names)
             same_fingerprint = current_fingerprint == prev_fingerprint and current_fingerprint != ""
 
@@ -838,7 +1024,12 @@ async def _apply_task_result(task_result: dict) -> None:
                     agent_name="ceo",
                 )
                 await update_project_phase(pid, "cancelled")
-                await emit("scheduler", f"Project {pid} cancelled: QA failed {new_fail_count}x (same issue {same_streak}x)", severity="error", source_agent="scheduler")
+                await emit(
+                    "scheduler",
+                    f"Project {pid} cancelled: QA failed {new_fail_count}x (same issue {same_streak}x)",
+                    severity="error",
+                    source_agent="scheduler",
+                )
             else:
                 await update_project_phase(pid, "developing")
 
@@ -852,14 +1043,28 @@ async def _apply_task_result(task_result: dict) -> None:
     elif effective_type == "localize":
         locales = result.get("locales", [])
         if locales:
-            await emit("scheduler", f"Localized '{project.name}' to {len(locales)} locales: {', '.join(locales)}", source_agent="scheduler", project_name=project.name)
+            await emit(
+                "scheduler",
+                f"Localized '{project.name}' to {len(locales)} locales: {', '.join(locales)}",
+                source_agent="scheduler",
+                project_name=project.name,
+            )
 
     elif effective_type == "deploy":
         itch_url = result.get("itch_url")
         if itch_url:
             await set_project_live(pid, itch_url)
-            await emit("scheduler", f"Project '{project.name}' published to {itch_url}", source_agent="scheduler", project_name=project.name)
-            await save_chat_message("assistant", f"🚀 Project '{project.name}' is now live at {itch_url}", agent_name="scheduler")
+            await emit(
+                "scheduler",
+                f"Project '{project.name}' published to {itch_url}",
+                source_agent="scheduler",
+                project_name=project.name,
+            )
+            await save_chat_message(
+                "assistant",
+                f"🚀 Project '{project.name}' is now live at {itch_url}",
+                agent_name="scheduler",
+            )
             get_memory_store().consolidate(pid)
 
 
@@ -868,7 +1073,11 @@ async def _generate_reports() -> None:
         return
 
     projects = await get_all_projects()
-    active = [p for p in projects if p.phase not in (ProjectPhase.BACKLOG, ProjectPhase.CANCELLED, ProjectPhase.LIVE)]
+    active = [
+        p
+        for p in projects
+        if p.phase not in (ProjectPhase.BACKLOG, ProjectPhase.CANCELLED, ProjectPhase.LIVE)
+    ]
     live = [p for p in projects if p.phase == ProjectPhase.LIVE]
     pending = await get_pending_decisions()
 
@@ -878,7 +1087,7 @@ async def _generate_reports() -> None:
     policy = await get_company_policy()
     budget_limit = policy.get("budget_limit_usd", 5.0)
 
-    now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    now_str = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
     lines = [
         "📊 今日汇报",
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
@@ -905,7 +1114,9 @@ async def _generate_reports() -> None:
         lines.append(f"📋 **待决策**: {pending_count} 项")
         lines.append("")
 
-    lines.append(f"💰 **本月支出**: ${total_cost:.2f} / ${budget_limit:.2f} ({total_cost/budget_limit*100:.0f}%)")
+    lines.append(
+        f"💰 **本月支出**: ${total_cost:.2f} / ${budget_limit:.2f} ({total_cost / budget_limit * 100:.0f}%)"
+    )
 
     report = "\n".join(lines)
     await save_chat_message("assistant", report, agent_name="ceo", metadata={"type": "report"})
@@ -913,4 +1124,5 @@ async def _generate_reports() -> None:
 
 def _new_id() -> str:
     import uuid
+
     return str(uuid.uuid4())

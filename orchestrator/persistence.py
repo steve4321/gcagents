@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
@@ -15,7 +15,15 @@ from shared.constants import (
     TRUNC_FEEDBACK_TEXT,
     TRUNC_RAW_ANALYSIS,
 )
-from shared.models import DecisionPoint, DecisionStatus, DecisionType, ProjectPhase, ProjectState, TaskRecord, TaskStatus
+from shared.models import (
+    DecisionPoint,
+    DecisionStatus,
+    DecisionType,
+    ProjectPhase,
+    ProjectState,
+    TaskRecord,
+    TaskStatus,
+)
 
 _engine_cache = None
 
@@ -31,7 +39,8 @@ def _get_engine() -> AsyncEngine:
 async def ensure_tables():
     engine = _get_engine()
     async with AsyncSession(engine) as db:
-        await db.execute(text("""
+        await db.execute(
+            text("""
             CREATE TABLE IF NOT EXISTS agent_logs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 node_name TEXT NOT NULL,
@@ -44,8 +53,10 @@ async def ensure_tables():
                 project_name TEXT,
                 run_id TEXT
             )
-        """))
-        await db.execute(text("""
+        """)
+        )
+        await db.execute(
+            text("""
             CREATE TABLE IF NOT EXISTS market_reports (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 signals_count INTEGER DEFAULT 0,
@@ -53,8 +64,10 @@ async def ensure_tables():
                 raw_analysis TEXT,
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
             )
-        """))
-        await db.execute(text("""
+        """)
+        )
+        await db.execute(
+            text("""
             CREATE TABLE IF NOT EXISTS game_feedback (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 project_id INTEGER NOT NULL,
@@ -68,8 +81,10 @@ async def ensure_tables():
                 processed INTEGER DEFAULT 0,
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
             )
-        """))
-        await db.execute(text("""
+        """)
+        )
+        await db.execute(
+            text("""
             CREATE TABLE IF NOT EXISTS game_versions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 project_id TEXT NOT NULL,
@@ -80,8 +95,10 @@ async def ensure_tables():
                 build_size INTEGER DEFAULT 0,
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
             )
-        """))
-        await db.execute(text("""
+        """)
+        )
+        await db.execute(
+            text("""
             CREATE TABLE IF NOT EXISTS game_metrics (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 project_id INTEGER NOT NULL,
@@ -89,8 +106,10 @@ async def ensure_tables():
                 metric_value REAL NOT NULL,
                 recorded_at TEXT NOT NULL DEFAULT (datetime('now'))
             )
-        """))
-        await db.execute(text("""
+        """)
+        )
+        await db.execute(
+            text("""
             CREATE TABLE IF NOT EXISTS api_usage_logs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 model TEXT NOT NULL,
@@ -102,8 +121,10 @@ async def ensure_tables():
                 estimated_cost_usd REAL DEFAULT 0.0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """))
-        await db.execute(text("""
+        """)
+        )
+        await db.execute(
+            text("""
             CREATE TABLE IF NOT EXISTS finance_budgets (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 category TEXT NOT NULL,
@@ -116,8 +137,10 @@ async def ensure_tables():
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 updated_at TEXT NOT NULL DEFAULT (datetime('now'))
             )
-        """))
-        await db.execute(text("""
+        """)
+        )
+        await db.execute(
+            text("""
             CREATE TABLE IF NOT EXISTS chat_messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 role TEXT NOT NULL,
@@ -126,8 +149,10 @@ async def ensure_tables():
                 metadata_json TEXT DEFAULT '{}',
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
             )
-        """))
-        await db.execute(text("""
+        """)
+        )
+        await db.execute(
+            text("""
             CREATE TABLE IF NOT EXISTS event_logs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 event_type TEXT NOT NULL,
@@ -139,8 +164,10 @@ async def ensure_tables():
                 metadata_json TEXT DEFAULT '{}',
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
             )
-        """))
-        await db.execute(text("""
+        """)
+        )
+        await db.execute(
+            text("""
             CREATE TABLE IF NOT EXISTS projects (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
@@ -160,8 +187,10 @@ async def ensure_tables():
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 updated_at TEXT NOT NULL DEFAULT (datetime('now'))
             )
-        """))
-        await db.execute(text("""
+        """)
+        )
+        await db.execute(
+            text("""
             CREATE TABLE IF NOT EXISTS decisions (
                 id TEXT PRIMARY KEY,
                 project_id TEXT,
@@ -174,8 +203,10 @@ async def ensure_tables():
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 resolved_at TEXT
             )
-        """))
-        await db.execute(text("""
+        """)
+        )
+        await db.execute(
+            text("""
             CREATE TABLE IF NOT EXISTS tasks (
                 id TEXT PRIMARY KEY,
                 project_id TEXT,
@@ -193,9 +224,11 @@ async def ensure_tables():
                 started_at TEXT,
                 completed_at TEXT
             )
-        """))
+        """)
+        )
         # Referenced by save_pipeline_state() and dashboard /api/status endpoints.
-        await db.execute(text("""
+        await db.execute(
+            text("""
             CREATE TABLE IF NOT EXISTS orchestrator_state (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 phase TEXT,
@@ -203,8 +236,10 @@ async def ensure_tables():
                 errors TEXT,
                 updated_at TEXT
             )
-        """))
-        await db.execute(text("""
+        """)
+        )
+        await db.execute(
+            text("""
             CREATE TABLE IF NOT EXISTS company_policy (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
                 budget_limit_usd REAL DEFAULT 5.0,
@@ -219,8 +254,10 @@ async def ensure_tables():
                 timeout_action TEXT DEFAULT 'reject',
                 updated_at TEXT NOT NULL DEFAULT (datetime('now'))
             )
-        """))
-        await db.execute(text("""
+        """)
+        )
+        await db.execute(
+            text("""
             CREATE TABLE IF NOT EXISTS market_signals (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 source TEXT NOT NULL,
@@ -231,8 +268,10 @@ async def ensure_tables():
                 score REAL DEFAULT 0.0,
                 captured_at TEXT NOT NULL DEFAULT (datetime('now'))
             )
-        """))
-        await db.execute(text("""
+        """)
+        )
+        await db.execute(
+            text("""
             CREATE TABLE IF NOT EXISTS game_projects (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
@@ -247,8 +286,10 @@ async def ensure_tables():
                 updated_at TEXT NOT NULL DEFAULT (datetime('now')),
                 published_at TEXT
             )
-        """))
-        await db.execute(text("""
+        """)
+        )
+        await db.execute(
+            text("""
             CREATE TABLE IF NOT EXISTS company_memory (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 category TEXT NOT NULL,
@@ -257,8 +298,10 @@ async def ensure_tables():
                 importance REAL DEFAULT 0.5,
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
             )
-        """))
-        await db.execute(text("""
+        """)
+        )
+        await db.execute(
+            text("""
             CREATE TABLE IF NOT EXISTS itch_stats (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 project_id TEXT NOT NULL,
@@ -270,42 +313,106 @@ async def ensure_tables():
                 purchases_count INTEGER DEFAULT 0,
                 fetched_at TEXT NOT NULL DEFAULT (datetime('now'))
             )
-        """))
+        """)
+        )
 
         # Schema migrations for existing tables
-        existing_cols = {row[1] for row in (await db.execute(text("PRAGMA table_info(projects)"))).fetchall()}
+        existing_cols = {
+            row[1] for row in (await db.execute(text("PRAGMA table_info(projects)"))).fetchall()
+        }
         if "music_status" not in existing_cols:
-            await db.execute(text("ALTER TABLE projects ADD COLUMN music_status TEXT DEFAULT 'pending'"))
+            await db.execute(
+                text("ALTER TABLE projects ADD COLUMN music_status TEXT DEFAULT 'pending'")
+            )
         if "feedback_count" not in existing_cols:
-            await db.execute(text("ALTER TABLE projects ADD COLUMN feedback_count INTEGER DEFAULT 0"))
+            await db.execute(
+                text("ALTER TABLE projects ADD COLUMN feedback_count INTEGER DEFAULT 0")
+            )
         if "art_assets_path" not in existing_cols:
-            await db.execute(text("ALTER TABLE projects ADD COLUMN art_assets_path TEXT DEFAULT ''"))
+            await db.execute(
+                text("ALTER TABLE projects ADD COLUMN art_assets_path TEXT DEFAULT ''")
+            )
 
-        policy_cols = {row[1] for row in (await db.execute(text("PRAGMA table_info(company_policy)"))).fetchall()}
+        policy_cols = {
+            row[1]
+            for row in (await db.execute(text("PRAGMA table_info(company_policy)"))).fetchall()
+        }
         if "max_dev_projects" not in policy_cols:
-            await db.execute(text("ALTER TABLE company_policy ADD COLUMN max_dev_projects INTEGER DEFAULT 3"))
+            await db.execute(
+                text("ALTER TABLE company_policy ADD COLUMN max_dev_projects INTEGER DEFAULT 3")
+            )
         if "max_live_projects" not in policy_cols:
-            await db.execute(text("ALTER TABLE company_policy ADD COLUMN max_live_projects INTEGER DEFAULT 5"))
+            await db.execute(
+                text("ALTER TABLE company_policy ADD COLUMN max_live_projects INTEGER DEFAULT 5")
+            )
 
         await db.execute(text("CREATE INDEX IF NOT EXISTS idx_projects_phase ON projects(phase)"))
-        await db.execute(text("CREATE INDEX IF NOT EXISTS idx_projects_updated_at ON projects(updated_at)"))
-        await db.execute(text("CREATE INDEX IF NOT EXISTS idx_tasks_project_id ON tasks(project_id)"))
+        await db.execute(
+            text("CREATE INDEX IF NOT EXISTS idx_projects_updated_at ON projects(updated_at)")
+        )
+        await db.execute(
+            text("CREATE INDEX IF NOT EXISTS idx_tasks_project_id ON tasks(project_id)")
+        )
         await db.execute(text("CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)"))
-        await db.execute(text("CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON tasks(created_at)"))
-        await db.execute(text("CREATE INDEX IF NOT EXISTS idx_decisions_project_id ON decisions(project_id)"))
-        await db.execute(text("CREATE INDEX IF NOT EXISTS idx_decisions_status ON decisions(status)"))
-        await db.execute(text("CREATE INDEX IF NOT EXISTS idx_game_feedback_project_id ON game_feedback(project_id)"))
-        await db.execute(text("CREATE INDEX IF NOT EXISTS idx_game_feedback_processed ON game_feedback(processed)"))
-        await db.execute(text("CREATE INDEX IF NOT EXISTS idx_game_versions_project_id ON game_versions(project_id)"))
-        await db.execute(text("CREATE INDEX IF NOT EXISTS idx_game_metrics_project_id ON game_metrics(project_id)"))
-        await db.execute(text("CREATE INDEX IF NOT EXISTS idx_api_usage_logs_project_name ON api_usage_logs(project_name)"))
-        await db.execute(text("CREATE INDEX IF NOT EXISTS idx_api_usage_logs_created_at ON api_usage_logs(created_at)"))
-        await db.execute(text("CREATE INDEX IF NOT EXISTS idx_chat_messages_role ON chat_messages(role)"))
-        await db.execute(text("CREATE INDEX IF NOT EXISTS idx_market_signals_captured_at ON market_signals(captured_at)"))
-        await db.execute(text("CREATE INDEX IF NOT EXISTS idx_event_logs_event_type ON event_logs(event_type)"))
-        await db.execute(text("CREATE INDEX IF NOT EXISTS idx_event_logs_created_at ON event_logs(created_at)"))
-        await db.execute(text("CREATE INDEX IF NOT EXISTS idx_itch_stats_project_id ON itch_stats(project_id)"))
-        await db.execute(text("CREATE INDEX IF NOT EXISTS idx_itch_stats_fetched_at ON itch_stats(fetched_at)"))
+        await db.execute(
+            text("CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON tasks(created_at)")
+        )
+        await db.execute(
+            text("CREATE INDEX IF NOT EXISTS idx_decisions_project_id ON decisions(project_id)")
+        )
+        await db.execute(
+            text("CREATE INDEX IF NOT EXISTS idx_decisions_status ON decisions(status)")
+        )
+        await db.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS idx_game_feedback_project_id ON game_feedback(project_id)"
+            )
+        )
+        await db.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS idx_game_feedback_processed ON game_feedback(processed)"
+            )
+        )
+        await db.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS idx_game_versions_project_id ON game_versions(project_id)"
+            )
+        )
+        await db.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS idx_game_metrics_project_id ON game_metrics(project_id)"
+            )
+        )
+        await db.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS idx_api_usage_logs_project_name ON api_usage_logs(project_name)"
+            )
+        )
+        await db.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS idx_api_usage_logs_created_at ON api_usage_logs(created_at)"
+            )
+        )
+        await db.execute(
+            text("CREATE INDEX IF NOT EXISTS idx_chat_messages_role ON chat_messages(role)")
+        )
+        await db.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS idx_market_signals_captured_at ON market_signals(captured_at)"
+            )
+        )
+        await db.execute(
+            text("CREATE INDEX IF NOT EXISTS idx_event_logs_event_type ON event_logs(event_type)")
+        )
+        await db.execute(
+            text("CREATE INDEX IF NOT EXISTS idx_event_logs_created_at ON event_logs(created_at)")
+        )
+        await db.execute(
+            text("CREATE INDEX IF NOT EXISTS idx_itch_stats_project_id ON itch_stats(project_id)")
+        )
+        await db.execute(
+            text("CREATE INDEX IF NOT EXISTS idx_itch_stats_fetched_at ON itch_stats(fetched_at)")
+        )
 
         await db.commit()
 
@@ -322,7 +429,7 @@ async def save_agent_log(
 ) -> int:
     engine = _get_engine()
     async with AsyncSession(engine) as db:
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         result = await db.execute(
             text("""
                 INSERT INTO agent_logs
@@ -361,7 +468,7 @@ async def save_market_report(
                 "signals_count": signals_count,
                 "opportunities_json": json.dumps(opportunities, ensure_ascii=False),
                 "raw_analysis": (raw_analysis or "")[:TRUNC_RAW_ANALYSIS],
-                "created_at": datetime.now(timezone.utc).isoformat(),
+                "created_at": datetime.now(UTC).isoformat(),
             },
         )
         await db.commit()
@@ -396,8 +503,8 @@ async def save_pipeline_state(
                             "genre": project_genre or "unknown",
                             "status": phase,
                             "proposal": json.dumps({"name": project_name, "genre": project_genre}),
-                            "created_at": datetime.now(timezone.utc).isoformat(),
-                            "updated_at": datetime.now(timezone.utc).isoformat(),
+                            "created_at": datetime.now(UTC).isoformat(),
+                            "updated_at": datetime.now(UTC).isoformat(),
                         },
                     )
                     current_project_id = insert_result.lastrowid
@@ -411,7 +518,7 @@ async def save_pipeline_state(
                     "phase": phase,
                     "project_id": current_project_id,
                     "errors": json.dumps(errors or []),
-                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                    "updated_at": datetime.now(UTC).isoformat(),
                 },
             )
             await db.commit()
@@ -421,6 +528,7 @@ async def save_pipeline_state(
 
 
 # ── Feedback ────────────────────────────────────────────────────────────────
+
 
 async def save_feedback(
     project_id: int,
@@ -451,7 +559,7 @@ async def save_feedback(
                 "post_id": post_id,
                 "author": author[:100],
                 "text": body[:TRUNC_FEEDBACK_TEXT],
-                "posted_at": posted_at or datetime.now(timezone.utc).isoformat(),
+                "posted_at": posted_at or datetime.now(UTC).isoformat(),
                 "vote_count": vote_count,
                 "category": category,
                 "ai_analysis": ai_analysis[:TRUNC_AI_ANALYSIS],
@@ -469,7 +577,9 @@ async def get_unprocessed_feedback(project_id: int) -> list[dict]:
     engine = _get_engine()
     async with AsyncSession(engine) as db:
         rows = await db.execute(
-            text("SELECT * FROM game_feedback WHERE project_id = :pid AND processed = 0 ORDER BY posted_at DESC"),
+            text(
+                "SELECT * FROM game_feedback WHERE project_id = :pid AND processed = 0 ORDER BY posted_at DESC"
+            ),
             {"pid": project_id},
         )
         return [dict(r._mapping) for r in rows.fetchall()]
@@ -490,6 +600,7 @@ async def mark_feedback_processed(feedback_ids: list[int]) -> None:
 
 
 # ── Game Versions ───────────────────────────────────────────────────────────
+
 
 async def save_game_version(
     project_id: str,
@@ -518,7 +629,7 @@ async def save_game_version(
         )
         await db.execute(
             text("UPDATE projects SET version = :ver, updated_at = :now WHERE id = :pid"),
-            {"ver": version, "now": datetime.now(timezone.utc).isoformat(), "pid": project_id},
+            {"ver": version, "now": datetime.now(UTC).isoformat(), "pid": project_id},
         )
         await db.commit()
         return result.lastrowid or 0
@@ -537,6 +648,7 @@ async def get_latest_version(project_id: str) -> str:
 
 # ── Game Metrics ────────────────────────────────────────────────────────────
 
+
 async def save_game_metric(project_id: int, metric_name: str, metric_value: float) -> None:
     engine = _get_engine()
     async with AsyncSession(engine) as db:
@@ -545,12 +657,17 @@ async def save_game_metric(project_id: int, metric_name: str, metric_value: floa
                 INSERT INTO game_metrics (project_id, metric_name, metric_value)
                 VALUES (:project_id, :metric_name, :metric_value)
             """),
-            {"project_id": project_id, "metric_name": metric_name[:50], "metric_value": metric_value},
+            {
+                "project_id": project_id,
+                "metric_name": metric_name[:50],
+                "metric_value": metric_value,
+            },
         )
         await db.commit()
 
 
 # ── itch.io Stats ────────────────────────────────────────────────────────────
+
 
 async def save_itch_stat(
     project_id: str,
@@ -590,8 +707,9 @@ async def save_itch_stat(
 async def get_latest_itch_stats() -> list[dict]:
     engine = _get_engine()
     async with AsyncSession(engine) as db:
-        rows = (await db.execute(
-            text("""
+        rows = (
+            await db.execute(
+                text("""
                 SELECT s.project_id, s.itch_game_id, s.title, s.itch_url,
                        s.downloads_count, s.views_count, s.purchases_count, s.fetched_at
                 FROM itch_stats s
@@ -604,7 +722,8 @@ async def get_latest_itch_stats() -> list[dict]:
                  AND s.fetched_at = latest.max_fetched
                 ORDER BY s.downloads_count DESC, s.title ASC
             """)
-        )).fetchall()
+            )
+        ).fetchall()
         return [
             {
                 "project_id": r[0],
@@ -637,6 +756,7 @@ async def get_project_metrics(project_id: int, limit: int = 100) -> list[dict]:
 
 # ── Queries ─────────────────────────────────────────────────────────────────
 
+
 async def get_live_projects() -> list[dict]:
     engine = _get_engine()
     async with AsyncSession(engine) as db:
@@ -668,16 +788,18 @@ async def save_market_signals(signals: list[dict]) -> None:
                         "title": sig.get("title", "")[:200],
                         "data": json.dumps(sig.get("data", {})),
                         "score": float(sig.get("score", 0)),
-                        "captured_at": sig.get("captured_at", datetime.now(timezone.utc).isoformat()),
+                        "captured_at": sig.get("captured_at", datetime.now(UTC).isoformat()),
                     },
                 )
             except Exception as e:
                 import logging
+
                 logging.getLogger(__name__).warning(f"Failed to insert market signal: {e}")
         await db.commit()
 
 
 # ── API Usage ────────────────────────────────────────────────────────────────
+
 
 async def log_api_usage(
     model: str,
@@ -794,6 +916,7 @@ async def get_project_cost(project_name: str) -> dict:
 
 # ── Finance Budgets ──────────────────────────────────────────────────────────
 
+
 async def set_budget(
     category: str,
     budget_type: str,
@@ -810,7 +933,7 @@ async def set_budget(
             {"category": category, "budget_type": budget_type},
         )
         row = existing.fetchone()
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         if row:
             await db.execute(
                 text(
@@ -874,7 +997,7 @@ async def check_budget_available(category: str, estimated_cost_usd: float) -> bo
 async def record_spend(category: str, amount_usd: float) -> None:
     engine = _get_engine()
     async with AsyncSession(engine) as db:
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         await db.execute(
             text(
                 "UPDATE finance_budgets SET spent_usd = spent_usd + :amount, updated_at = :now WHERE category = :category AND is_active = 1"
@@ -885,6 +1008,7 @@ async def record_spend(category: str, amount_usd: float) -> None:
 
 
 # ── Chat Messages ────────────────────────────────────────────────────────────
+
 
 async def save_chat_message(
     role: str,
@@ -904,7 +1028,7 @@ async def save_chat_message(
                 "content": content,
                 "agent_name": agent_name,
                 "metadata_json": json.dumps(metadata or {}),
-                "created_at": datetime.now(timezone.utc).isoformat(),
+                "created_at": datetime.now(UTC).isoformat(),
             },
         )
         await db.commit()
@@ -948,6 +1072,7 @@ async def get_pending_instructions(agent_name: str) -> list[dict]:
 
 # ── Event Logs ───────────────────────────────────────────────────────────────
 
+
 async def log_event(
     event_type: str,
     severity: str,
@@ -973,7 +1098,7 @@ async def log_event(
                 "source_agent": source_agent,
                 "project_name": project_name,
                 "metadata_json": json.dumps(metadata or {}),
-                "created_at": datetime.now(timezone.utc).isoformat(),
+                "created_at": datetime.now(UTC).isoformat(),
             },
         )
         await db.commit()
@@ -999,6 +1124,7 @@ async def get_recent_events(limit: int = 200, event_type: str = "") -> list[dict
 
 
 # ── Company Policy ───────────────────────────────────────────────────────────
+
 
 async def get_company_policy() -> dict:
     """Get the company policy (singleton row). Returns default policy if none exists."""
@@ -1033,7 +1159,7 @@ async def set_company_policy(policy: dict) -> None:
     """Upsert the company policy (singleton row)."""
     engine = _get_engine()
     async with AsyncSession(engine) as db:
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         existing = await db.execute(text("SELECT id FROM company_policy WHERE id = 1"))
         if existing.fetchone():
             await db.execute(
@@ -1059,7 +1185,9 @@ async def set_company_policy(policy: dict) -> None:
                     "preferred_genres": json.dumps(policy.get("preferred_genres", [])),
                     "auto_publish": 1 if policy.get("auto_publish", True) else 0,
                     "auto_cancel": 1 if policy.get("auto_cancel", True) else 0,
-                    "require_new_project_approval": 1 if policy.get("require_new_project_approval", True) else 0,
+                    "require_new_project_approval": 1
+                    if policy.get("require_new_project_approval", True)
+                    else 0,
                     "working_hours_start": policy.get("working_hours_start", 9),
                     "working_hours_end": policy.get("working_hours_end", 23),
                     "max_active_projects": policy.get("max_active_projects", 3),
@@ -1088,7 +1216,9 @@ async def set_company_policy(policy: dict) -> None:
                     "preferred_genres": json.dumps(policy.get("preferred_genres", [])),
                     "auto_publish": 1 if policy.get("auto_publish", True) else 0,
                     "auto_cancel": 1 if policy.get("auto_cancel", True) else 0,
-                    "require_new_project_approval": 1 if policy.get("require_new_project_approval", True) else 0,
+                    "require_new_project_approval": 1
+                    if policy.get("require_new_project_approval", True)
+                    else 0,
                     "working_hours_start": policy.get("working_hours_start", 9),
                     "working_hours_end": policy.get("working_hours_end", 23),
                     "max_active_projects": policy.get("max_active_projects", 3),
@@ -1104,10 +1234,11 @@ async def set_company_policy(policy: dict) -> None:
 
 # ── Projects (multi-project) ──────────────────────────────────────────────────
 
+
 async def save_project(project: ProjectState) -> str:
     engine = _get_engine()
     async with AsyncSession(engine) as db:
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         existing = await db.execute(
             text("SELECT id FROM projects WHERE id = :id"),
             {"id": project.id},
@@ -1129,7 +1260,9 @@ async def save_project(project: ProjectState) -> str:
                     "id": project.id,
                     "name": project.name,
                     "genre": project.genre,
-                    "phase": project.phase.value if hasattr(project.phase, "value") else project.phase,
+                    "phase": project.phase.value
+                    if hasattr(project.phase, "value")
+                    else project.phase,
                     "progress": project.progress,
                     "proposal": json.dumps(project.proposal) if project.proposal else None,
                     "gdd": json.dumps(project.gdd) if project.gdd else None,
@@ -1158,7 +1291,9 @@ async def save_project(project: ProjectState) -> str:
                     "id": project.id,
                     "name": project.name,
                     "genre": project.genre,
-                    "phase": project.phase.value if hasattr(project.phase, "value") else project.phase,
+                    "phase": project.phase.value
+                    if hasattr(project.phase, "value")
+                    else project.phase,
                     "progress": project.progress,
                     "proposal": json.dumps(project.proposal) if project.proposal else None,
                     "gdd": json.dumps(project.gdd) if project.gdd else None,
@@ -1194,9 +1329,7 @@ async def get_project(project_id: str) -> ProjectState | None:
 async def get_all_projects() -> list[ProjectState]:
     engine = _get_engine()
     async with AsyncSession(engine) as db:
-        rows = await db.execute(
-            text("SELECT * FROM projects ORDER BY updated_at DESC")
-        )
+        rows = await db.execute(text("SELECT * FROM projects ORDER BY updated_at DESC"))
         return [_row_to_project(dict(r._mapping)) for r in rows.fetchall()]
 
 
@@ -1213,10 +1346,12 @@ async def get_projects_by_phase(phase: str) -> list[ProjectState]:
 async def update_project_phase(project_id: str, phase: str, progress: float | None = None) -> None:
     engine = _get_engine()
     async with AsyncSession(engine) as db:
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         if progress is not None:
             await db.execute(
-                text("UPDATE projects SET phase=:phase, progress=:progress, updated_at=:now WHERE id=:id"),
+                text(
+                    "UPDATE projects SET phase=:phase, progress=:progress, updated_at=:now WHERE id=:id"
+                ),
                 {"phase": phase, "progress": progress, "now": now, "id": project_id},
             )
         else:
@@ -1229,13 +1364,13 @@ async def update_project_phase(project_id: str, phase: str, progress: float | No
 
 def _parse_datetime(val: str | None) -> datetime:
     if not val:
-        return datetime.now(timezone.utc)
+        return datetime.now(UTC)
     if isinstance(val, datetime):
         return val
     try:
         return datetime.fromisoformat(val)
     except (ValueError, TypeError):
-        return datetime.now(timezone.utc)
+        return datetime.now(UTC)
 
 
 def _row_to_project(d: dict) -> ProjectState:
@@ -1262,10 +1397,11 @@ def _row_to_project(d: dict) -> ProjectState:
 
 # ── Decisions ────────────────────────────────────────────────────────────────
 
+
 async def save_decision(decision: DecisionPoint) -> str:
     engine = _get_engine()
     async with AsyncSession(engine) as db:
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         await db.execute(
             text("""
                 INSERT INTO decisions (id, project_id, decision_type, question,
@@ -1276,11 +1412,15 @@ async def save_decision(decision: DecisionPoint) -> str:
             {
                 "id": decision.id,
                 "project_id": decision.project_id,
-                "decision_type": decision.decision_type.value if hasattr(decision.decision_type, "value") else decision.decision_type,
+                "decision_type": decision.decision_type.value
+                if hasattr(decision.decision_type, "value")
+                else decision.decision_type,
                 "question": decision.question,
                 "options": json.dumps(decision.options),
                 "context": json.dumps(decision.context),
-                "status": decision.status.value if hasattr(decision.status, "value") else decision.status,
+                "status": decision.status.value
+                if hasattr(decision.status, "value")
+                else decision.status,
                 "human_response": decision.human_response,
                 "created_at": now,
                 "resolved_at": decision.resolved_at.isoformat() if decision.resolved_at else None,
@@ -1329,9 +1469,11 @@ async def resolve_decision(decision_id: str, response: str) -> None:
     status = "approved" if response == "approve" else "rejected"
     engine = _get_engine()
     async with AsyncSession(engine) as db:
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         await db.execute(
-            text("UPDATE decisions SET status=:status, human_response=:response, resolved_at=:now WHERE id=:id"),
+            text(
+                "UPDATE decisions SET status=:status, human_response=:response, resolved_at=:now WHERE id=:id"
+            ),
             {"status": status, "response": response, "now": now, "id": decision_id},
         )
         await db.commit()
@@ -1340,8 +1482,9 @@ async def resolve_decision(decision_id: str, response: str) -> None:
 async def get_decision_history(limit: int = 50) -> list[dict]:
     engine = _get_engine()
     async with AsyncSession(engine) as db:
-        rows = (await db.execute(
-            text("""
+        rows = (
+            await db.execute(
+                text("""
                 SELECT id, project_id, decision_type, question, options, context,
                        status, human_response, created_at, resolved_at
                 FROM decisions
@@ -1349,8 +1492,9 @@ async def get_decision_history(limit: int = 50) -> list[dict]:
                 ORDER BY resolved_at DESC
                 LIMIT :lim
             """),
-            {"lim": limit},
-        )).fetchall()
+                {"lim": limit},
+            )
+        ).fetchall()
     return [dict(r._mapping) for r in rows]
 
 
@@ -1371,10 +1515,11 @@ def _row_to_decision(d: dict) -> DecisionPoint:
 
 # ── Tasks ──────────────────────────────────────────────────────────────────────
 
+
 async def save_task(task) -> str:
     engine = _get_engine()
     async with AsyncSession(engine) as db:
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         await db.execute(
             text("""
                 INSERT INTO tasks (id, project_id, task_type, status, progress,
@@ -1427,7 +1572,9 @@ async def get_pending_tasks() -> list[TaskRecord]:
     engine = _get_engine()
     async with AsyncSession(engine) as db:
         rows = await db.execute(
-            text("SELECT * FROM tasks WHERE status IN ('pending', 'running') ORDER BY created_at ASC")
+            text(
+                "SELECT * FROM tasks WHERE status IN ('pending', 'running') ORDER BY created_at ASC"
+            )
         )
         return [_row_to_task(dict(r._mapping)) for r in rows.fetchall()]
 
@@ -1436,7 +1583,9 @@ async def has_active_task(project_id: str, task_type: str) -> bool:
     engine = _get_engine()
     async with AsyncSession(engine) as db:
         row = await db.execute(
-            text("SELECT 1 FROM tasks WHERE project_id=:pid AND task_type=:type AND status IN ('pending','running') LIMIT 1"),
+            text(
+                "SELECT 1 FROM tasks WHERE project_id=:pid AND task_type=:type AND status IN ('pending','running') LIMIT 1"
+            ),
             {"pid": project_id, "type": task_type},
         )
         return row.fetchone() is not None
@@ -1445,7 +1594,7 @@ async def has_active_task(project_id: str, task_type: str) -> bool:
 async def claim_next_task() -> TaskRecord | None:
     engine = _get_engine()
     async with AsyncSession(engine) as db:
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         row = await db.execute(
             text(
                 "UPDATE tasks SET status='running', started_at=:now "
@@ -1472,7 +1621,7 @@ async def update_task_status(
 ) -> None:
     engine = _get_engine()
     async with AsyncSession(engine) as db:
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         sets = ["status=:status"]
         params: dict = {"id": task_id, "status": status}
         if progress is not None:
@@ -1515,10 +1664,11 @@ def _row_to_task(d: dict) -> TaskRecord:
 
 # ── Targeted update helpers (replaces raw SQL in scheduler/decision_gate) ────
 
+
 async def update_project_awaiting_decision(project_id: str, decision_id: str | None) -> None:
     engine = _get_engine()
     async with AsyncSession(engine) as db:
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         await db.execute(
             text("UPDATE projects SET awaiting_decision=:d, updated_at=:now WHERE id=:id"),
             {"d": decision_id, "now": now, "id": project_id},
@@ -1531,9 +1681,11 @@ async def update_project_proposal_and_phase(
 ) -> None:
     engine = _get_engine()
     async with AsyncSession(engine) as db:
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         await db.execute(
-            text("UPDATE projects SET phase=:phase, proposal=:proposal, updated_at=:now WHERE id=:id"),
+            text(
+                "UPDATE projects SET phase=:phase, proposal=:proposal, updated_at=:now WHERE id=:id"
+            ),
             {"phase": phase, "proposal": json.dumps(proposal), "now": now, "id": project_id},
         )
         await db.commit()
@@ -1542,7 +1694,7 @@ async def update_project_proposal_and_phase(
 async def update_project_gdd(project_id: str, gdd: dict) -> None:
     engine = _get_engine()
     async with AsyncSession(engine) as db:
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         await db.execute(
             text("UPDATE projects SET gdd=:gdd, updated_at=:now WHERE id=:id"),
             {"gdd": json.dumps(gdd), "now": now, "id": project_id},
@@ -1553,7 +1705,7 @@ async def update_project_gdd(project_id: str, gdd: dict) -> None:
 async def update_project_art_status(project_id: str, status: str = "done") -> None:
     engine = _get_engine()
     async with AsyncSession(engine) as db:
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         await db.execute(
             text("UPDATE projects SET art_status=:s, updated_at=:now WHERE id=:id"),
             {"s": status, "now": now, "id": project_id},
@@ -1564,7 +1716,7 @@ async def update_project_art_status(project_id: str, status: str = "done") -> No
 async def update_project_music_status(project_id: str, status: str = "done") -> None:
     engine = _get_engine()
     async with AsyncSession(engine) as db:
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         await db.execute(
             text("UPDATE projects SET music_status=:s, updated_at=:now WHERE id=:id"),
             {"s": status, "now": now, "id": project_id},
@@ -1575,7 +1727,7 @@ async def update_project_music_status(project_id: str, status: str = "done") -> 
 async def update_project_code_path(project_id: str, code_path: str) -> None:
     engine = _get_engine()
     async with AsyncSession(engine) as db:
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         await db.execute(
             text("UPDATE projects SET code_path=:cp, updated_at=:now WHERE id=:id"),
             {"cp": code_path, "now": now, "id": project_id},
@@ -1586,7 +1738,7 @@ async def update_project_code_path(project_id: str, code_path: str) -> None:
 async def update_project_qa_result(project_id: str, qa_result: dict) -> None:
     engine = _get_engine()
     async with AsyncSession(engine) as db:
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         await db.execute(
             text("UPDATE projects SET qa_result=:qr, updated_at=:now WHERE id=:id"),
             {"qr": json.dumps(qa_result), "now": now, "id": project_id},
@@ -1597,7 +1749,7 @@ async def update_project_qa_result(project_id: str, qa_result: dict) -> None:
 async def update_project_build_path(project_id: str, build_path: str) -> None:
     engine = _get_engine()
     async with AsyncSession(engine) as db:
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         await db.execute(
             text("UPDATE projects SET build_path=:bp, updated_at=:now WHERE id=:id"),
             {"bp": build_path, "now": now, "id": project_id},
@@ -1608,7 +1760,7 @@ async def update_project_build_path(project_id: str, build_path: str) -> None:
 async def update_project_art_assets_path(project_id: str, art_assets_path: str) -> None:
     engine = _get_engine()
     async with AsyncSession(engine) as db:
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         await db.execute(
             text("UPDATE projects SET art_assets_path=:aap, updated_at=:now WHERE id=:id"),
             {"aap": art_assets_path, "now": now, "id": project_id},
@@ -1616,12 +1768,10 @@ async def update_project_art_assets_path(project_id: str, art_assets_path: str) 
         await db.commit()
 
 
-async def set_project_live(
-    project_id: str, itch_url: str, version: str = "0.0.0"
-) -> None:
+async def set_project_live(project_id: str, itch_url: str, version: str = "0.0.0") -> None:
     engine = _get_engine()
     async with AsyncSession(engine) as db:
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         await db.execute(
             text(
                 "UPDATE projects SET itch_url=:url, version=:ver, phase='live', "
@@ -1665,8 +1815,12 @@ async def find_project_to_update() -> dict | None:
         )
         row = rows.fetchone()
     if row:
-        return {"id": row.id, "name": row.name, "itch_url": row.itch_url,
-                "unprocessed_count": row.unprocessed_count}
+        return {
+            "id": row.id,
+            "name": row.name,
+            "itch_url": row.itch_url,
+            "unprocessed_count": row.unprocessed_count,
+        }
     return None
 
 
@@ -1709,7 +1863,9 @@ async def count_completed_tasks_by_type(project_id: str, task_type: str) -> int:
     engine = _get_engine()
     async with AsyncSession(engine) as db:
         rows = await db.execute(
-            text("SELECT COUNT(*) FROM tasks WHERE project_id=:pid AND task_type=:task_type AND status='completed'"),
+            text(
+                "SELECT COUNT(*) FROM tasks WHERE project_id=:pid AND task_type=:task_type AND status='completed'"
+            ),
             {"pid": project_id, "task_type": task_type},
         )
         return rows.scalar() or 0
@@ -1718,20 +1874,31 @@ async def count_completed_tasks_by_type(project_id: str, task_type: str) -> int:
 async def get_api_usage_summary() -> dict:
     engine = _get_engine()
     async with AsyncSession(engine) as db:
-        row = (await db.execute(
-            text("SELECT COUNT(*) as calls, COALESCE(SUM(estimated_cost_usd), 0) as total_cost FROM api_usage_logs")
-        )).fetchone()
+        row = (
+            await db.execute(
+                text(
+                    "SELECT COUNT(*) as calls, COALESCE(SUM(estimated_cost_usd), 0) as total_cost FROM api_usage_logs"
+                )
+            )
+        ).fetchone()
     return {"calls": row[0] if row else 0, "total_cost": float(row[1]) if row else 0.0}
 
 
 async def get_recent_completed_tasks(limit: int = 5) -> list[dict]:
     engine = _get_engine()
     async with AsyncSession(engine) as db:
-        rows = (await db.execute(
-            text("SELECT task_type, project_id, completed_at FROM tasks WHERE status='completed' ORDER BY completed_at DESC LIMIT :lim"),
-            {"lim": limit},
-        )).fetchall()
-    return [{"task_type": r.task_type, "project_id": r.project_id, "completed_at": r.completed_at} for r in rows]
+        rows = (
+            await db.execute(
+                text(
+                    "SELECT task_type, project_id, completed_at FROM tasks WHERE status='completed' ORDER BY completed_at DESC LIMIT :lim"
+                ),
+                {"lim": limit},
+            )
+        ).fetchall()
+    return [
+        {"task_type": r.task_type, "project_id": r.project_id, "completed_at": r.completed_at}
+        for r in rows
+    ]
 
 
 # ── API Server Helpers ────────────────────────────────────────────────────────
@@ -1740,9 +1907,11 @@ async def get_recent_completed_tasks(limit: int = 5) -> list[dict]:
 async def get_orchestrator_state() -> dict | None:
     engine = _get_engine()
     async with AsyncSession(engine) as db:
-        row = (await db.execute(
-            text("SELECT phase, errors FROM orchestrator_state ORDER BY id DESC LIMIT 1")
-        )).fetchone()
+        row = (
+            await db.execute(
+                text("SELECT phase, errors FROM orchestrator_state ORDER BY id DESC LIMIT 1")
+            )
+        ).fetchone()
     if row:
         return {"phase": row.phase, "errors": row.errors}
     return None
@@ -1751,18 +1920,20 @@ async def get_orchestrator_state() -> dict | None:
 async def get_last_scan_time() -> str | None:
     engine = _get_engine()
     async with AsyncSession(engine) as db:
-        row = (await db.execute(
-            text("SELECT MAX(captured_at) as last_scan FROM market_signals")
-        )).fetchone()
+        row = (
+            await db.execute(text("SELECT MAX(captured_at) as last_scan FROM market_signals"))
+        ).fetchone()
     return row.last_scan if row and row.last_scan else None
 
 
 async def get_latest_project() -> dict | None:
     engine = _get_engine()
     async with AsyncSession(engine) as db:
-        row = (await db.execute(
-            text("SELECT name, status FROM game_projects ORDER BY updated_at DESC LIMIT 1")
-        )).fetchone()
+        row = (
+            await db.execute(
+                text("SELECT name, status FROM game_projects ORDER BY updated_at DESC LIMIT 1")
+            )
+        ).fetchone()
     if row:
         return {"name": row.name, "status": row.status}
     return None
@@ -1771,19 +1942,23 @@ async def get_latest_project() -> dict | None:
 async def get_orchestrator_history(limit: int = 20) -> list[dict]:
     engine = _get_engine()
     async with AsyncSession(engine) as db:
-        rows = (await db.execute(
-            text("SELECT phase, updated_at, errors FROM orchestrator_state ORDER BY id DESC LIMIT :lim"),
-            {"lim": limit},
-        )).fetchall()
+        rows = (
+            await db.execute(
+                text(
+                    "SELECT phase, updated_at, errors FROM orchestrator_state ORDER BY id DESC LIMIT :lim"
+                ),
+                {"lim": limit},
+            )
+        ).fetchall()
     return [{"phase": r.phase, "updated_at": r.updated_at, "errors": r.errors} for r in rows]
 
 
 async def get_market_report_detail() -> dict | None:
     engine = _get_engine()
     async with AsyncSession(engine) as db:
-        row = (await db.execute(
-            text("SELECT * FROM market_reports ORDER BY id DESC LIMIT 1")
-        )).fetchone()
+        row = (
+            await db.execute(text("SELECT * FROM market_reports ORDER BY id DESC LIMIT 1"))
+        ).fetchone()
     if row:
         return dict(row._mapping)
     return None
@@ -1792,10 +1967,12 @@ async def get_market_report_detail() -> dict | None:
 async def get_project_gdd(project_id: str) -> dict | None:
     engine = _get_engine()
     async with AsyncSession(engine) as db:
-        row = (await db.execute(
-            text("SELECT name, gdd, proposal FROM game_projects WHERE id = :pid"),
-            {"pid": project_id},
-        )).fetchone()
+        row = (
+            await db.execute(
+                text("SELECT name, gdd, proposal FROM game_projects WHERE id = :pid"),
+                {"pid": project_id},
+            )
+        ).fetchone()
     if row:
         return {"name": row.name, "gdd": row.gdd, "proposal": row.proposal}
     return None
@@ -1804,35 +1981,46 @@ async def get_project_gdd(project_id: str) -> dict | None:
 async def find_project_by_name(name: str) -> str | None:
     engine = _get_engine()
     async with AsyncSession(engine) as db:
-        row = (await db.execute(
-            text("SELECT id FROM game_projects WHERE name = :name"),
-            {"name": name},
-        )).fetchone()
+        row = (
+            await db.execute(
+                text("SELECT id FROM game_projects WHERE name = :name"),
+                {"name": name},
+            )
+        ).fetchone()
     return row.id if row else None
 
 
 async def get_pending_feedback(project_id: str) -> list[dict]:
     engine = _get_engine()
     async with AsyncSession(engine) as db:
-        rows = (await db.execute(
-            text("SELECT * FROM game_feedback WHERE project_id = :pid AND processed = 0 ORDER BY posted_at DESC"),
-            {"pid": project_id},
-        )).fetchall()
+        rows = (
+            await db.execute(
+                text(
+                    "SELECT * FROM game_feedback WHERE project_id = :pid AND processed = 0 ORDER BY posted_at DESC"
+                ),
+                {"pid": project_id},
+            )
+        ).fetchall()
     return [dict(r._mapping) for r in rows]
 
 
 async def get_all_feedback(project_id: str) -> list[dict]:
     engine = _get_engine()
     async with AsyncSession(engine) as db:
-        rows = (await db.execute(
-            text("SELECT * FROM game_feedback WHERE project_id = :pid ORDER BY posted_at DESC LIMIT 50"),
-            {"pid": project_id},
-        )).fetchall()
+        rows = (
+            await db.execute(
+                text(
+                    "SELECT * FROM game_feedback WHERE project_id = :pid ORDER BY posted_at DESC LIMIT 50"
+                ),
+                {"pid": project_id},
+            )
+        ).fetchall()
     return [dict(r._mapping) for r in rows]
 
 
 async def save_user_genre_directive(genre: str, instruction: str, now: str) -> None:
     import json as _json
+
     engine = _get_engine()
     async with AsyncSession(engine) as db:
         await db.execute(
@@ -1841,7 +2029,9 @@ async def save_user_genre_directive(genre: str, instruction: str, now: str) -> N
                 VALUES ('directive', 'user_genre_directive', :content, 0.9, :now)
             """),
             {
-                "content": _json.dumps({"genre": genre, "instruction": instruction, "source": "user_chat"}),
+                "content": _json.dumps(
+                    {"genre": genre, "instruction": instruction, "source": "user_chat"}
+                ),
                 "now": now,
             },
         )
@@ -1851,35 +2041,45 @@ async def save_user_genre_directive(genre: str, instruction: str, now: str) -> N
 async def get_agent_logs(limit: int = 50) -> list[dict]:
     engine = _get_engine()
     async with AsyncSession(engine) as db:
-        rows = (await db.execute(
-            text("SELECT node_name, status, phase, started_at, completed_at, duration_ms, error, project_name FROM agent_logs ORDER BY id DESC LIMIT :lim"),
-            {"lim": limit},
-        )).fetchall()
+        rows = (
+            await db.execute(
+                text(
+                    "SELECT node_name, status, phase, started_at, completed_at, duration_ms, error, project_name FROM agent_logs ORDER BY id DESC LIMIT :lim"
+                ),
+                {"lim": limit},
+            )
+        ).fetchall()
     return [dict(r._mapping) for r in rows]
 
 
 async def get_agent_stats() -> list[dict]:
     engine = _get_engine()
     async with AsyncSession(engine) as db:
-        rows = (await db.execute(
-            text("""
+        rows = (
+            await db.execute(
+                text("""
                 SELECT node_name, COUNT(*) as runs,
                     SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END) as successes,
                     SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END) as failures,
                     ROUND(AVG(CASE WHEN duration_ms IS NOT NULL THEN duration_ms ELSE 0 END)) as avg_duration_ms
                 FROM agent_logs GROUP BY node_name ORDER BY node_name
             """)
-        )).fetchall()
+            )
+        ).fetchall()
     return [dict(r._mapping) for r in rows]
 
 
 async def get_latest_market_signals(limit: int = 50) -> list[dict]:
     engine = _get_engine()
     async with AsyncSession(engine) as db:
-        rows = (await db.execute(
-            text("SELECT id, source, signal_type, genre, title, data, score, captured_at FROM market_signals ORDER BY captured_at DESC LIMIT :lim"),
-            {"lim": limit},
-        )).fetchall()
+        rows = (
+            await db.execute(
+                text(
+                    "SELECT id, source, signal_type, genre, title, data, score, captured_at FROM market_signals ORDER BY captured_at DESC LIMIT :lim"
+                ),
+                {"lim": limit},
+            )
+        ).fetchall()
     signals = []
     for row in rows:
         d = dict(row._mapping)
@@ -1892,10 +2092,14 @@ async def get_latest_market_signals(limit: int = 50) -> list[dict]:
 async def get_company_memory(limit: int = 50) -> list[dict]:
     engine = _get_engine()
     async with AsyncSession(engine) as db:
-        rows = (await db.execute(
-            text("SELECT id, category, title, content, importance, created_at FROM company_memory ORDER BY importance DESC, created_at DESC LIMIT :lim"),
-            {"lim": limit},
-        )).fetchall()
+        rows = (
+            await db.execute(
+                text(
+                    "SELECT id, category, title, content, importance, created_at FROM company_memory ORDER BY importance DESC, created_at DESC LIMIT :lim"
+                ),
+                {"lim": limit},
+            )
+        ).fetchall()
     memories = []
     for row in rows:
         d = dict(row._mapping)
@@ -1911,24 +2115,28 @@ async def get_company_memory(limit: int = 50) -> list[dict]:
 async def get_analytics_summary() -> dict:
     engine = _get_engine()
     async with AsyncSession(engine) as db:
-        projects = (await db.execute(
-            text("""
+        projects = (
+            await db.execute(
+                text("""
                 SELECT id, name, genre, status, feedback_count, current_version
                 FROM game_projects
                 WHERE status IN ('live', 'updating')
                 ORDER BY updated_at DESC
             """)
-        )).fetchall()
+            )
+        ).fetchall()
 
-        metrics_rows = (await db.execute(
-            text("""
+        metrics_rows = (
+            await db.execute(
+                text("""
                 SELECT project_id, metric_name,
                        SUM(metric_value) as total_value,
                        COUNT(*) as sample_count
                 FROM game_metrics
                 GROUP BY project_id, metric_name
             """)
-        )).fetchall()
+            )
+        ).fetchall()
 
         metrics_by_project: dict[int, dict] = {}
         for row in metrics_rows:

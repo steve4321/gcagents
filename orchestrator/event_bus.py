@@ -1,4 +1,5 @@
 """Unified event emission for system-wide logging and Dashboard updates."""
+
 from __future__ import annotations
 
 from loguru import logger
