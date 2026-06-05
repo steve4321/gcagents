@@ -308,6 +308,302 @@ Return ONLY a JSON object of file paths to contents."""
     return project_dir
 
 
+async def _vn_llm_round(
+    prompt: str,
+    model: str,
+    max_tokens: int,
+    game_title: str,
+    round_label: str,
+) -> dict[str, str]:
+    """Execute one VN generation LLM round with DeepSeek fallback on parse failure."""
+    response = await llm.chat_completion(
+        model=model,
+        messages=[
+            {"role": "system", "content": PROGRAMMER_SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ],
+        temperature=0.4,
+        max_tokens=max_tokens,
+        agent_name="programmer",
+        project_name=game_title,
+    )
+    try:
+        return _parse_code_files(response[0])
+    except ValueError:
+        logger.warning(f"VN round '{round_label}' parse failed, retrying with deepseek-v4-flash")
+        retry = await llm.chat_completion(
+            model="deepseek-v4-flash",
+            messages=[
+                {"role": "system", "content": PROGRAMMER_SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.3,
+            max_tokens=max_tokens,
+            agent_name="programmer",
+            project_name=game_title,
+        )
+        return _parse_code_files(retry[0])
+
+
+def _extract_partial_data(result: dict[str, str]) -> dict:
+    """Extract branching and dialogue dicts from a route round's LLM response.
+
+    The response may contain "branching" and "dialogue" as top-level keys,
+    or they may be JSON-encoded strings within the dict.
+    """
+    branching: dict = {}
+    dialogue: dict = {}
+
+    if "branching" in result:
+        raw = result["branching"]
+        branching = json.loads(raw) if isinstance(raw, str) else raw
+    if "dialogue" in result:
+        raw = result["dialogue"]
+        dialogue = json.loads(raw) if isinstance(raw, str) else raw
+
+    # Fallback: if keys aren't present, the entire result might be the partial data
+    if not branching and not dialogue:
+        for key, val in result.items():
+            if isinstance(val, str):
+                try:
+                    parsed = json.loads(val)
+                    if isinstance(parsed, dict):
+                        if "nodes" in parsed:
+                            branching = parsed
+                        elif not dialogue and any(
+                            isinstance(v, dict) and "speaker" in v for v in parsed.values()
+                        ):
+                            dialogue = parsed
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+    return {"branching": branching, "dialogue": dialogue}
+
+
+def _count_nodes(result: dict) -> int:
+    """Count branching nodes in a route round response."""
+    for val in result.values():
+        if isinstance(val, str):
+            try:
+                parsed = json.loads(val)
+                if isinstance(parsed, dict) and "nodes" in parsed:
+                    return len(parsed["nodes"])
+            except (json.JSONDecodeError, TypeError):
+                pass
+        elif isinstance(val, dict) and "nodes" in val:
+            return len(val["nodes"])
+    return 0
+
+
+def _add_round_summary(
+    summaries: list[str], label: str, files: dict[str, str], node_count: int = 0,
+) -> None:
+    """Append a one-line summary of a completed round for cross-round context."""
+    parts = [label]
+    if files:
+        parts.append(f"files: {', '.join(sorted(files.keys())[:6])}")
+    if node_count:
+        parts.append(f"nodes: {node_count}")
+    summaries.append(" | ".join(parts))
+
+
+def _merge_vn_data(
+    partial_data_list: list[dict], gdd: dict,
+) -> tuple[dict, dict]:
+    """Merge multiple partial branching/dialogue dicts into unified files."""
+    merged_branching: dict = {
+        "root": "",
+        "nodes": {},
+        "edges": [],
+        "routes": {},
+    }
+    merged_dialogue: dict = {}
+
+    gdd_tree = gdd.get("branching_tree", {})
+    gdd_root = gdd_tree.get("root", "")
+
+    for partial in partial_data_list:
+        branching = partial.get("branching", {})
+        dialogue = partial.get("dialogue", {})
+
+        if isinstance(branching, dict):
+            nodes = branching.get("nodes", {})
+            if isinstance(nodes, dict):
+                merged_branching["nodes"].update(nodes)
+            edges = branching.get("edges", [])
+            if isinstance(edges, list):
+                merged_branching["edges"].extend(edges)
+
+        if isinstance(dialogue, dict):
+            merged_dialogue.update(dialogue)
+
+    if gdd_root:
+        merged_branching["root"] = gdd_root
+    elif "common_start" in merged_branching["nodes"]:
+        merged_branching["root"] = "common_start"
+    elif merged_branching["nodes"]:
+        merged_branching["root"] = next(iter(merged_branching["nodes"]))
+
+    # Build routes metadata from node ID prefixes
+    route_prefixes: dict[str, list[str]] = {}
+    for node_id in merged_branching["nodes"]:
+        prefix = node_id.rsplit("_", 1)[0] if "_" in node_id else "common"
+        route_prefixes.setdefault(prefix, []).append(node_id)
+    for prefix, node_ids in route_prefixes.items():
+        merged_branching["routes"][prefix] = {
+            "node_count": len(node_ids),
+            "start_node": f"{prefix}_start" if f"{prefix}_start" in merged_branching["nodes"] else node_ids[0],
+        }
+
+    return merged_branching, merged_dialogue
+
+
+def _validate_vn_data_consistency(project_dir: Path) -> list[str]:
+    """Validate cross-file data consistency in generated VN project.
+
+    Checks:
+        - All next_node references in branching.json exist as nodes
+        - All dialogue_refs in nodes exist in dialogue.json
+        - All stat names in choices/endings match stats.json
+    """
+    errors: list[str] = []
+    data_dir = project_dir / "src" / "game" / "data"
+
+    branching = _load_json_safe(data_dir / "branching.json")
+    dialogue = _load_json_safe(data_dir / "dialogue.json")
+    stats = _load_json_safe(data_dir / "stats.json")
+    endings = _load_json_safe(data_dir / "endings.json")
+
+    if not branching:
+        errors.append("branching.json missing or invalid")
+        return errors
+
+    nodes = branching.get("nodes", {})
+    node_ids = set(nodes.keys())
+
+    # Check next_node references
+    for node_id, node in nodes.items():
+        if not isinstance(node, dict):
+            continue
+        for choice in node.get("choices", []) or []:
+            if not isinstance(choice, dict):
+                continue
+            nxt = choice.get("next_node", "")
+            if nxt and nxt not in node_ids:
+                errors.append(f"Node '{node_id}' references missing next_node '{nxt}'")
+
+    # Check dialogue refs
+    if dialogue:
+        dialogue_ids = set(dialogue.keys()) if isinstance(dialogue, dict) else set()
+        for node_id, node in nodes.items():
+            if not isinstance(node, dict):
+                continue
+            for ref in node.get("dialogue_refs", []) or []:
+                if ref and ref not in dialogue_ids:
+                    errors.append(f"Node '{node_id}' references missing dialogue '{ref}'")
+
+    # Check stat names in choices match stats.json
+    if stats:
+        stat_names = set()
+        stats_list = stats.get("stats", [])
+        if isinstance(stats_list, list):
+            for s in stats_list:
+                if isinstance(s, dict) and "name" in s:
+                    stat_names.add(s["name"])
+
+        if stat_names:
+            for node_id, node in nodes.items():
+                if not isinstance(node, dict):
+                    continue
+                for choice in node.get("choices", []) or []:
+                    if not isinstance(choice, dict):
+                        continue
+                    deltas = choice.get("stat_deltas", {})
+                    if isinstance(deltas, dict):
+                        for stat_name in deltas:
+                            if stat_name not in stat_names:
+                                errors.append(
+                                    f"Node '{node_id}' choice references unknown stat '{stat_name}'"
+                                )
+
+            # Check ending triggers
+            endings_list = endings.get("endings", endings) if isinstance(endings, dict) else endings
+            if isinstance(endings_list, list):
+                for ending in endings_list:
+                    if not isinstance(ending, dict):
+                        continue
+                    trigger = ending.get("trigger", {})
+                    if isinstance(trigger, dict):
+                        for stat_name in trigger:
+                            if stat_name not in stat_names:
+                                errors.append(
+                                    f"Ending '{ending.get('name', '?')}' references unknown stat '{stat_name}'"
+                                )
+
+    return errors
+
+
+def _load_json_safe(path: Path) -> dict | None:
+    """Load a JSON file, returning None on any error."""
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+async def _vn_auto_fix_data(
+    project_dir: Path, model: str, errors: list[str], game_title: str,
+) -> bool:
+    """Attempt one LLM round to fix data consistency issues."""
+    data_dir = project_dir / "src" / "game" / "data"
+    existing_data: dict[str, str] = {}
+
+    for fname in ("branching.json", "dialogue.json", "stats.json", "endings.json", "characters.json"):
+        fpath = data_dir / fname
+        if fpath.exists():
+            existing_data[fname] = fpath.read_text(encoding="utf-8")[:3000]
+
+    fix_prompt = f"""The following Visual Novel data files have consistency errors.
+
+Errors found:
+{chr(10).join(f'- {e}' for e in errors)}
+
+Current data files:
+{chr(10).join(f'### {name}{chr(10)}{content}' for name, content in existing_data.items())}
+
+Fix the errors. Return a JSON object mapping file paths (relative to project root, e.g. "src/game/data/branching.json") to the CORRECTED file contents.
+Only return files that need changes.
+
+Return ONLY a JSON object mapping file paths to file contents."""
+
+    try:
+        fixes = await _vn_llm_round(fix_prompt, model, 4096, game_title, "Data Fix")
+        for fp, content in fixes.items():
+            if not _validate_file_path(project_dir, fp):
+                continue
+            full_path = project_dir / fp
+            text_content = content if isinstance(content, str) else json.dumps(content, indent=2, ensure_ascii=False)
+            await asyncio.to_thread(full_path.write_text, text_content, encoding="utf-8")
+        return bool(fixes)
+    except Exception as e:
+        logger.warning(f"VN auto-fix failed: {e}")
+        return False
+
+
+def _copy_vn_data_to_public(project_dir: Path) -> None:
+    """Copy src/game/data/*.json to public/assets/data/ for runtime loading."""
+    src_dir = project_dir / "src" / "game" / "data"
+    dst_dir = project_dir / "public" / "assets" / "data"
+    if not src_dir.exists():
+        return
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    for json_file in src_dir.glob("*.json"):
+        shutil.copy2(json_file, dst_dir / json_file.name)
+        logger.debug(f"Copied data to public: {json_file.name}")
+
+
 async def _generate_all_at_once(
     gdd: dict,
     project_dir: Path,
@@ -872,13 +1168,23 @@ async def _generate_visual_novel(
     max_tokens: int,
     art_assets_path: str = "",
 ) -> Path:
-    """Generate a hybrid Visual Novel in 2 rounds.
+    """Generate a hybrid Visual Novel via route-by-route generation.
 
-    Round 1: dialogue + characters + base scenes (Title, Menu, Novel stub) + DialogueSystem.
-    Round 2: branching + stats + endings + BranchingEngine + StatSystem + ChoiceSystem + NovelScene integration.
+    Flow:
+        Round 1:   Engine code (systems + skeleton scenes + config + main)
+        Round 2:   Common route data (branching nodes + dialogue, ~12 nodes)
+        Round 3-N: One character route per round (~8 nodes each)
+        Round N+1: Endings + remaining data (stats.json, characters.json)
+        Round N+2: Scene code (BootScene, TitleScene, MenuScene, update NovelScene)
+        Merge:     Combine all partial data into unified branching.json + dialogue.json
+        Validate:  Data consistency check + auto-fix if needed
     """
     game_title = gdd.get("title", "visual_novel")
-    logger.info(f"VN code gen in 2 rounds: {game_title}")
+    route_structure = gdd.get("route_structure", {})
+    common_route = route_structure.get("common_route", {})
+    character_routes = route_structure.get("character_routes", [])
+    total_rounds = 2 + len(character_routes) + 1 + 1  # engine + common + routes + endings + scenes
+    logger.info(f"VN code gen route-by-route: {game_title} ({total_rounds} rounds, {len(character_routes)} character routes)")
 
     art_instruction = ""
     if art_assets_path:
@@ -888,24 +1194,44 @@ async def _generate_visual_novel(
         )
 
     accumulated: dict[str, str] = {}
+    # Track partial data from each route round for later merging
+    partial_data_list: list[dict] = []
+    # Track round summaries for cross-round context
+    round_summaries: list[str] = []
 
     char_summary = json.dumps(gdd.get("character_roster", []), indent=2)[:2000]
-    round1_prompt = f"""You are building a hybrid Visual Novel with Phaser 4 + TypeScript. ROUND 1 of 2.
+    stats_summary = json.dumps(gdd.get("stat_system", {}), indent=2)[:1000]
+
+    # ── Round 1: Engine Code ──────────────────────────────────────────
+    round_num = 1
+    round1_prompt = f"""You are building a hybrid Visual Novel with Phaser 4 + TypeScript. ROUND {round_num} of {total_rounds}: ENGINE CODE.
 
 Game: {game_title}
 Narrative Premise: {gdd.get('narrative_premise', '')}
 Player Protagonist: {json.dumps(gdd.get('player_protagonist', {}))}
 Character Roster (truncated): {char_summary}
+Stat System: {stats_summary}
 
 Generate these files (return a JSON object mapping file paths to file contents):
-1. src/game/data/characters.json — full character roster (name, role, sprite_set, expression_variants, personality, stat_affinities)
-2. src/game/data/dialogue.json — 8-15 dialogue lines, each with id, scene_id, speaker, text (and optional expression)
-3. src/main.ts — Phaser entry, scene list [BootScene, TitleScene, MenuScene, NovelScene], window.__TEST__ interface with state() returning {{ currentScene, currentRoute, stats, flags, cgsUnlocked, routeProgress, endingReached, saveDataValid, visitedScenes, endingsReached }}
-4. src/game/scenes/BootScene.ts — load data/*.json, transition to TitleScene
-5. src/game/scenes/TitleScene.ts — title screen with game name
-6. src/game/scenes/MenuScene.ts — NEW GAME / CONTINUE / GALLERY menu
-7. src/game/scenes/NovelScene.ts — basic dialogue display using DialogueSystem
-8. src/game/systems/DialogueSystem.ts — typewriter-style dialogue renderer
+
+1. src/game/config.ts — Phaser game config with parent:'game-container', scene list, scale settings
+2. src/main.ts — Phaser entry, scene list [BootScene, TitleScene, MenuScene, NovelScene], window.__TEST__ with state() returning {{ currentScene, currentRoute, stats, flags, cgsUnlocked, routeProgress, endingReached, saveDataValid, visitedScenes, endingsReached }}
+3. src/game/scenes/NovelScene.ts — SKELETON only: import systems, create() sets up containers, update() loop. The DialogueSystem/ChoiceSystem/Bran­chingEngine will be integrated in a later round.
+4. src/game/systems/DialogueSystem.ts — typewriter-style dialogue renderer. MUST implement:
+   showChoices(node: any), showAnimated(), hideAnimated(), destroy()
+5. src/game/systems/BranchingEngine.ts — DAG traversal + condition evaluation + scene progression. MUST implement:
+   getCurrentNode(), advance(choiceId: string), getVisitedNodes(), getActiveRoutes()
+6. src/game/systems/ChoiceSystem.ts — choice UI panel with stat_delta application. MUST implement:
+   showChoices(node: any), showAnimated(), hideAnimated(), destroy()
+7. src/game/systems/StatSystem.ts — stat tracking with branching thresholds. MUST implement:
+   get(name: string), set(name: string, value: number), applyDeltas(deltas: Record<string,number>), evaluateConditions(conditions: any): boolean
+
+INTERFACE CONTRACTS (STRICT — these exact method signatures MUST exist):
+- ChoiceSystem: showChoices(node), showAnimated(), hideAnimated(), destroy()
+- BranchingEngine: getCurrentNode(), advance(choiceId), getVisitedNodes(), getActiveRoutes()
+- StatSystem: get(name), set(name, value), applyDeltas(deltas), evaluateConditions(conditions)
+
+FORBIDDEN: importing 'fs', 'path', 'os' — these crash in browser. This is a Phaser browser game.
 
 Rules:
 - `import * as Phaser from 'phaser';` (NOT `import Phaser from 'phaser'`)
@@ -916,113 +1242,253 @@ Rules:
 
 Return ONLY a JSON object mapping file paths to file contents."""
 
-    r1_response = await llm.chat_completion(
-        model=model,
-        messages=[
-            {"role": "system", "content": PROGRAMMER_SYSTEM_PROMPT},
-            {"role": "user", "content": round1_prompt},
-        ],
-        temperature=0.4,
-        max_tokens=max_tokens,
-        agent_name="programmer",
-        project_name=game_title,
+    r1_files = await _vn_llm_round(
+        round1_prompt, model, max_tokens, game_title, "Engine Code"
     )
-    try:
-        r1_files = _parse_code_files(r1_response[0])
-    except ValueError:
-        logger.warning("VN Round 1 parse failed, retrying with deepseek-v4-flash")
-        r1_retry = await llm.chat_completion(
-            model="deepseek-v4-flash",
-            messages=[
-                {"role": "system", "content": PROGRAMMER_SYSTEM_PROMPT},
-                {"role": "user", "content": round1_prompt},
-            ],
-            temperature=0.3,
-            max_tokens=max_tokens,
-            agent_name="programmer",
-            project_name=game_title,
-        )
-        r1_files = _parse_code_files(r1_retry[0])
     accumulated.update(r1_files)
-    logger.info(f"VN Round 1: {len(r1_files)} files")
+    _add_round_summary(round_summaries, "Round 1 (Engine Code)", r1_files)
+    logger.info(f"VN Round 1 (Engine Code): {len(r1_files)} files")
 
+    # ── Round 2: Common Route Data ────────────────────────────────────
+    round_num = 2
+    common_nodes_expected = common_route.get("nodes", 12) if isinstance(common_route, dict) else 12
+    common_theme = common_route.get("theme", "shared prologue and introduction") if isinstance(common_route, dict) else "shared prologue"
     existing_summary = _summarize_files(accumulated)
-    branch_summary = json.dumps(
-        gdd.get("branching_tree", {}).get("nodes", {}), indent=2
-    )[:1500]
-    stats_summary = json.dumps(gdd.get("stat_system", {}), indent=2)[:1000]
-    endings_summary = json.dumps(gdd.get("ending_conditions", []), indent=2)[:1000]
+    past_rounds_ctx = "\n".join(round_summaries)
 
-    round2_prompt = f"""You are building a hybrid Visual Novel with Phaser 4 + TypeScript. ROUND 2 of 2.
+    round2_prompt = f"""You are building a hybrid Visual Novel. ROUND {round_num} of {total_rounds}: COMMON ROUTE DATA.
 
 Game: {game_title}
-Branching Tree (nodes): {branch_summary}
-Stat System: {stats_summary}
-Ending Conditions: {endings_summary}
+Narrative Premise: {gdd.get('narrative_premise', '')}
+Common Route Theme: {common_theme}
+Expected nodes: ~{common_nodes_expected}
 
-Already implemented (Round 1 file summary):
+Past rounds summary:
+{past_rounds_ctx}
+
+Already implemented files:
 {existing_summary}
 
-Now generate (return JSON mapping path -> content):
-1. src/game/data/branching.json — full branching tree with root, nodes (each with scene_key, dialogue refs, choices array), edges
-2. src/game/data/stats.json — stat definitions with name, range, decay, branching_thresholds
-3. src/game/data/endings.json — ending conditions with name, trigger dict, epilogue_key, is_good_ending
-4. src/game/systems/BranchingEngine.ts — DAG traversal + condition evaluation + scene progression
-5. src/game/systems/StatSystem.ts — stat tracking with branching threshold evaluation
-6. src/game/systems/ChoiceSystem.ts — choice UI panel that applies stat_delta and triggers BranchingEngine advance
-7. src/game/scenes/NovelScene.ts — UPDATE to integrate BranchingEngine, StatSystem, ChoiceSystem (replaces Round 1 stub)
+Generate a JSON object with EXACTLY these two keys:
+- "branching": A partial branching tree dict with "nodes" (dict of node_id -> node_obj) and "edges" (list).
+  Each node MUST have: scene_key (str), dialogue_refs (list of dialogue IDs), and optionally choices (list of {{text, next_node, stat_deltas}}).
+  Generate ~{common_nodes_expected} nodes for the common/shared route. Use IDs like "common_01", "common_02", etc.
+  The first node ID should be "common_start".
+- "dialogue": A dict mapping dialogue_id -> dialogue_obj.
+  Each dialogue obj has: id, scene_id, speaker, text, and optional expression.
+  Generate 10-20 dialogue entries for common route scenes.
 
-__TEST__ contract (MUST be present in main.ts, expose full state):
-state: () => ({{ currentScene, currentRoute, stats, flags, cgsUnlocked, routeProgress, endingReached, saveDataValid, visitedScenes, endingsReached }})
+Rules:
+- All next_node references must point to node IDs that exist in this round OR will exist (use "common_*" pattern).
+- The last common route node should have choices pointing to character route start nodes (e.g. "route_<name>_start").
+- Keep total output under 4000 tokens.
+- Real narrative content, not placeholders.
 
-Generated data/*.json files MUST validate:
-- branching.json: >=8 nodes, root must exist, all nodes reachable via BFS through choices, no cycles
-- stats.json: >=5 stats, each with name and range [min, max] where min < max
-- endings.json: >=3 endings, each with name and unique trigger dict (no two endings with identical triggers)
+CRITICAL INTERFACE CONTRACT — these methods MUST exist with EXACT signatures:
+- ChoiceSystem: showChoices(node: BranchingNode): void, showAnimated(): void, hideAnimated(): void
+- BranchingEngine: getCurrentNode(): BranchingNode | undefined, advance(choiceId: string): BranchingNode | null
+- StatSystem: get(name: string): number, applyDeltas(deltas: Record<string, number>): void, evaluateConditions(conditions: dict): boolean
+- FORBIDDEN IMPORTS: never import 'fs', 'path', 'os', 'child_process' — these crash in the browser
+
+Return ONLY a JSON object with "branching" and "dialogue" keys."""
+
+    r2_result = await _vn_llm_round(
+        round2_prompt, model, 4096, game_title, "Common Route Data"
+    )
+    partial_data_list.append(_extract_partial_data(r2_result))
+    _add_round_summary(round_summaries, "Round 2 (Common Route)", {}, node_count=_count_nodes(r2_result))
+    logger.info(f"VN Round 2 (Common Route): {len(r2_result)} keys in response")
+
+    # ── Rounds 3..N: Character Routes ─────────────────────────────────
+    for i, route in enumerate(character_routes):
+        round_num = 3 + i
+        route_name = route.get("name", f"route_{i+1}") if isinstance(route, dict) else f"route_{i+1}"
+        route_heroine = route.get("heroine", "unknown") if isinstance(route, dict) else "unknown"
+        route_nodes = route.get("nodes", 8) if isinstance(route, dict) else 8
+        route_theme = route.get("theme", "") if isinstance(route, dict) else ""
+        past_rounds_ctx = "\n".join(round_summaries[-3:])  # Last 3 rounds for context window
+
+        route_prompt = f"""You are building a hybrid Visual Novel. ROUND {round_num} of {total_rounds}: CHARACTER ROUTE "{route_name}".
+
+Game: {game_title}
+Narrative Premise: {gdd.get('narrative_premise', '')}
+Route: {route_name}
+Heroine: {route_heroine}
+Theme: {route_theme}
+Expected nodes: ~{route_nodes}
+
+Recent rounds summary:
+{past_rounds_ctx}
+
+Generate a JSON object with EXACTLY these two keys:
+- "branching": Partial branching tree with "nodes" and "edges". Generate ~{route_nodes} nodes for this route.
+  Use node IDs like "{route_name}_01", "{route_name}_02", etc. First node: "{route_name}_start".
+  Each node has: scene_key, dialogue_refs, and optionally choices ({{text, next_node, stat_deltas}}).
+  The route should branch from common route and eventually lead to an ending node.
+  End choices should point to ending nodes like "ending_<type>".
+- "dialogue": Dict of dialogue_id -> {{id, scene_id, speaker, text, expression?}}.
+  Generate 8-15 dialogue entries specific to this route's story.
+
+Rules:
+- All next_node references should use "{route_name}_*" or "ending_*" patterns.
+- Include at least 2 meaningful choices that affect stats.
+- Keep total output under 4000 tokens.
+- Deep, character-driven dialogue — not shallow placeholder text.
+
+Return ONLY a JSON object with "branching" and "dialogue" keys."""
+
+        route_result = await _vn_llm_round(
+            route_prompt, model, 4096, game_title, f"Route: {route_name}"
+        )
+        partial_data_list.append(_extract_partial_data(route_result))
+        _add_round_summary(round_summaries, f"Round {round_num} ({route_name})", {}, node_count=_count_nodes(route_result))
+        logger.info(f"VN Round {round_num} ({route_name}): generated route data")
+
+    # ── Round N+1: Endings + Data Files ───────────────────────────────
+    round_num = 2 + len(character_routes) + 1
+    endings_summary = json.dumps(gdd.get("ending_conditions", []), indent=2)[:1500]
+    past_rounds_ctx = "\n".join(round_summaries[-3:])
+
+    endings_prompt = f"""You are building a hybrid Visual Novel. ROUND {round_num} of {total_rounds}: ENDINGS & DATA FILES.
+
+Game: {game_title}
+Ending Conditions from GDD: {endings_summary}
+Stat System: {stats_summary}
+Character Roster (truncated): {char_summary}
+
+Recent rounds summary:
+{past_rounds_ctx}
+
+Generate a JSON object mapping file paths to file contents:
+1. src/game/data/endings.json — ending definitions. Each ending has: name, trigger (dict of stat conditions), epilogue_key, is_good_ending.
+   At least 3 endings (one good, one normal, one bad). Trigger conditions must reference stat names from the stat system.
+2. src/game/data/stats.json — stat definitions from the GDD. Each stat: name, range [min, max], decay, branching_thresholds.
+   At least 5 stats.
+3. src/game/data/characters.json — full character roster. Each: name, role, sprite_set, expression_variants (>=3), personality, stat_affinities.
+
+Rules:
+- ending trigger stats MUST match stat names in stats.json
+- expression_variants lists must have >= 3 entries per character
+- Keep total output under 4000 tokens.
 
 Return ONLY a JSON object mapping file paths to file contents."""
 
-    r2_response = await llm.chat_completion(
-        model=model,
-        messages=[
-            {"role": "system", "content": PROGRAMMER_SYSTEM_PROMPT},
-            {"role": "user", "content": round2_prompt},
-        ],
-        temperature=0.3,
-        max_tokens=max_tokens,
-        agent_name="programmer",
-        project_name=game_title,
+    endings_files = await _vn_llm_round(
+        endings_prompt, model, 4096, game_title, "Endings & Data"
     )
-    try:
-        r2_files = _parse_code_files(r2_response[0])
-    except ValueError:
-        logger.warning("VN Round 2 parse failed, retrying with deepseek-v4-flash")
-        r2_retry = await llm.chat_completion(
-            model="deepseek-v4-flash",
-            messages=[
-                {"role": "system", "content": PROGRAMMER_SYSTEM_PROMPT},
-                {"role": "user", "content": round2_prompt},
-            ],
-            temperature=0.2,
-            max_tokens=max_tokens,
-            agent_name="programmer",
-            project_name=game_title,
-        )
-        r2_files = _parse_code_files(r2_retry[0])
-    accumulated.update(r2_files)
-    logger.info(f"VN Round 2: {len(r2_files)} files")
+    accumulated.update(endings_files)
+    _add_round_summary(round_summaries, f"Round {round_num} (Endings & Data)", endings_files)
+    logger.info(f"VN Round {round_num} (Endings & Data): {len(endings_files)} files")
 
+    # ── Round N+2: Scene Code ─────────────────────────────────────────
+    round_num = 2 + len(character_routes) + 2
+    existing_summary = _summarize_files(accumulated)
+    past_rounds_ctx = "\n".join(round_summaries[-3:])
+
+    scene_prompt = f"""You are building a hybrid Visual Novel. ROUND {round_num} of {total_rounds}: SCENE CODE.
+
+Game: {game_title}
+
+Already implemented files:
+{existing_summary}
+
+Past rounds summary:
+{past_rounds_ctx}
+
+Generate these scene files (return JSON mapping path -> content):
+1. src/game/scenes/BootScene.ts — Load all data/*.json files via this.load.json(), transition to TitleScene.
+2. src/game/scenes/TitleScene.ts — Title screen with game name, press-to-start or click-to-start.
+3. src/game/scenes/MenuScene.ts — NEW GAME / CONTINUE / GALLERY menu with visual polish.
+4. src/game/scenes/NovelScene.ts — FULL implementation integrating BranchingEngine, StatSystem, ChoiceSystem, DialogueSystem.
+   On create(): load branching.json and dialogue.json from registry, initialize systems, start at root node.
+   On each node: display dialogue via DialogueSystem, then show choices via ChoiceSystem.
+   On choice: apply stat deltas, advance BranchingEngine, check endings.
+   If ending conditions met, transition to ending display.
+
+Rules:
+- `import * as Phaser from 'phaser';` (NOT `import Phaser from 'phaser'`)
+- Access loaded JSON via this.cache.json.get('key') or scene.settings.data
+- FORBIDDEN: importing 'fs', 'path', 'os' — browser crash
+- TypeScript strict mode
+- Real implementation, no TODOs
+{art_instruction}
+
+Return ONLY a JSON object mapping file paths to file contents."""
+
+    scene_files = await _vn_llm_round(
+        scene_prompt, model, max_tokens, game_title, "Scene Code"
+    )
+    accumulated.update(scene_files)
+    _add_round_summary(round_summaries, f"Round {round_num} (Scene Code)", scene_files)
+    logger.info(f"VN Round {round_num} (Scene Code): {len(scene_files)} files")
+
+    # ── Merge all partial route data into unified files ───────────────
+    logger.info(f"VN: Merging {len(partial_data_list)} partial route data sets")
+    merged_branching, merged_dialogue = _merge_vn_data(partial_data_list, gdd)
+
+    # Write merged data files
+    data_dir = project_dir / "src" / "game" / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    branching_path = data_dir / "branching.json"
+    dialogue_path = data_dir / "dialogue.json"
+    await asyncio.to_thread(
+        branching_path.write_text,
+        json.dumps(merged_branching, indent=2, ensure_ascii=False),
+        "utf-8",
+    )
+    await asyncio.to_thread(
+        dialogue_path.write_text,
+        json.dumps(merged_dialogue, indent=2, ensure_ascii=False),
+        "utf-8",
+    )
+    accumulated["src/game/data/branching.json"] = json.dumps(merged_branching, indent=2, ensure_ascii=False)
+    accumulated["src/game/data/dialogue.json"] = json.dumps(merged_dialogue, indent=2, ensure_ascii=False)
+    logger.info(
+        f"VN: Merged branching.json ({len(merged_branching.get('nodes', {}))} nodes, "
+        f"{len(merged_branching.get('edges', []))} edges) + dialogue.json ({len(merged_dialogue)} entries)"
+    )
+
+    # Copy data files to public/assets/data/ for runtime loading
+    _copy_vn_data_to_public(project_dir)
+
+    # ── Write all accumulated code files ──────────────────────────────
     src_dir = project_dir / "src"
     src_dir.mkdir(parents=True, exist_ok=True)
     for file_path, content in accumulated.items():
         if not _validate_file_path(project_dir, file_path):
             continue
         full_path = project_dir / file_path
-        full_path.parent.mkdir(parents=True, exist_ok=True)
+        await asyncio.to_thread(full_path.parent.mkdir, parents=True, exist_ok=True)
         text_content = content if isinstance(content, str) else json.dumps(content, indent=2, ensure_ascii=False)
-        full_path.write_text(text_content, encoding="utf-8")
+        await asyncio.to_thread(full_path.write_text, text_content, encoding="utf-8")
 
-    logger.info(f"VN generation complete: {len(accumulated)} files across 2 rounds")
+    # ── Data consistency validation + auto-fix ────────────────────────
+    consistency_errors = _validate_vn_data_consistency(project_dir)
+    if consistency_errors:
+        logger.warning(f"VN data consistency issues ({len(consistency_errors)}): {consistency_errors[:5]}")
+        fixed = await _vn_auto_fix_data(project_dir, model, consistency_errors, game_title)
+        if fixed:
+            _copy_vn_data_to_public(project_dir)
+            logger.info("VN: Auto-fix applied and data re-copied to public/")
+
+    from shared.data_contract import extract_data_schemas, validate_data_against_schema, validate_code_against_schema
+
+    schemas = extract_data_schemas(gdd)
+    for data_type in ["branching", "dialogue", "stats", "endings"]:
+        data_path = project_dir / "src" / "game" / "data" / f"{data_type}.json"
+        if data_path.exists():
+            with open(data_path, encoding="utf-8") as f:
+                data = json.load(f)
+            errs = validate_data_against_schema(data, schemas, data_type)
+            if errs:
+                logger.error(f"Schema contract violation ({data_type}): {errs[:5]}")
+
+    code_errs = validate_code_against_schema(accumulated, schemas.get("code_interfaces", {}))
+    if code_errs:
+        logger.error(f"Code interface violations: {code_errs[:5]}")
+
+    logger.info(f"VN generation complete: {len(accumulated)} files across {total_rounds} rounds")
     return project_dir
 
 
