@@ -44,7 +44,18 @@ async def run_auto_playtest(game_dist_path: str | Path, game_dir: str | Path | N
     if not index_html.exists():
         return {"passed": False, "score": 0.0, "error": f"index.html not found at {index_html}"}
 
-    url = f"file://{index_html.resolve()}"
+    import http.server
+    import threading
+
+    handler = http.server.SimpleHTTPRequestHandler
+    server = http.server.HTTPServer(("127.0.0.1", 0), handler)
+    port = server.server_address[1]
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+
+    import os
+    os.chdir(game_path)
+    url = f"http://127.0.0.1:{port}/index.html"
     started_at = datetime.now(UTC)
 
     all_errors: list[str] = []
@@ -126,6 +137,7 @@ async def run_auto_playtest(game_dist_path: str | Path, game_dir: str | Path | N
     duration_ms = int(elapsed.total_seconds() * 1000)
 
     min_pass_count = max(total_count - 2, 1)
+    server.shutdown()
     return {
         "passed": passed_count >= min_pass_count and complexity_passed,
         "score": final_score,

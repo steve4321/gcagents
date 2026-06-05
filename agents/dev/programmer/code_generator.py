@@ -854,7 +854,8 @@ def _vn_post_gen_verify(project_dir: Path) -> str:
         try:
             with open(endings_path, encoding="utf-8") as f:
                 data = json.load(f)
-            errs = validate_ending_conditions(data.get("endings", []))
+            endings_list = data.get("endings", data) if isinstance(data, dict) else data
+            errs = validate_ending_conditions(endings_list if isinstance(endings_list, list) else [])
             if errs:
                 errors.extend([f"endings.json: {e}" for e in errs])
         except (json.JSONDecodeError, OSError) as e:
@@ -926,7 +927,22 @@ Return ONLY a JSON object mapping file paths to file contents."""
         agent_name="programmer",
         project_name=game_title,
     )
-    r1_files = _parse_code_files(r1_response[0])
+    try:
+        r1_files = _parse_code_files(r1_response[0])
+    except ValueError:
+        logger.warning("VN Round 1 parse failed, retrying with deepseek-v4-flash")
+        r1_retry = await llm.chat_completion(
+            model="deepseek-v4-flash",
+            messages=[
+                {"role": "system", "content": PROGRAMMER_SYSTEM_PROMPT},
+                {"role": "user", "content": round1_prompt},
+            ],
+            temperature=0.3,
+            max_tokens=max_tokens,
+            agent_name="programmer",
+            project_name=game_title,
+        )
+        r1_files = _parse_code_files(r1_retry[0])
     accumulated.update(r1_files)
     logger.info(f"VN Round 1: {len(r1_files)} files")
 
@@ -977,7 +993,22 @@ Return ONLY a JSON object mapping file paths to file contents."""
         agent_name="programmer",
         project_name=game_title,
     )
-    r2_files = _parse_code_files(r2_response[0])
+    try:
+        r2_files = _parse_code_files(r2_response[0])
+    except ValueError:
+        logger.warning("VN Round 2 parse failed, retrying with deepseek-v4-flash")
+        r2_retry = await llm.chat_completion(
+            model="deepseek-v4-flash",
+            messages=[
+                {"role": "system", "content": PROGRAMMER_SYSTEM_PROMPT},
+                {"role": "user", "content": round2_prompt},
+            ],
+            temperature=0.2,
+            max_tokens=max_tokens,
+            agent_name="programmer",
+            project_name=game_title,
+        )
+        r2_files = _parse_code_files(r2_retry[0])
     accumulated.update(r2_files)
     logger.info(f"VN Round 2: {len(r2_files)} files")
 
@@ -988,7 +1019,8 @@ Return ONLY a JSON object mapping file paths to file contents."""
             continue
         full_path = project_dir / file_path
         full_path.parent.mkdir(parents=True, exist_ok=True)
-        full_path.write_text(content, encoding="utf-8")
+        text_content = content if isinstance(content, str) else json.dumps(content, indent=2, ensure_ascii=False)
+        full_path.write_text(text_content, encoding="utf-8")
 
     logger.info(f"VN generation complete: {len(accumulated)} files across 2 rounds")
     return project_dir
@@ -1048,5 +1080,22 @@ def _parse_code_files(text: str) -> dict[str, str]:
                 continue
         if combined:
             return combined
+
+    # Case 5: mixed JSON with code-fence values — extract file paths and contents
+    # LLM may return {"path": "```ts\ncode\n```", ...} which is not valid JSON
+    try:
+        import re as _re
+        file_pattern = _re.compile(
+            r'"((?:src|public)[^"]+)"\s*:\s*`([^`]*(?:`[^`]*)*)`',
+            _re.DOTALL,
+        )
+        if file_pattern.search(text):
+            result = {}
+            for match in file_pattern.finditer(text):
+                result[match.group(1)] = match.group(2)
+            if result:
+                return result
+    except Exception:
+        pass
 
     raise ValueError(f"Failed to parse generated code files (text starts: {text[:200]})")
