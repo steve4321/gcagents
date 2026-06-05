@@ -128,48 +128,62 @@ async def step_design() -> dict:
 
 
 async def step_art(gdd: dict) -> str | None:
-    """Step 2: Generate art assets or create placeholder structure."""
+    """Step 2: Generate real art assets via ComfyUI."""
     logger.info("=" * 60)
-    logger.info("STEP 2: Art Generation")
+    logger.info("STEP 2: Art Generation (ComfyUI)")
     logger.info("=" * 60)
 
     assets_dir = PROJECT_DIR / "public" / "assets"
-    assets_dir.mkdir(parents=True, exist_ok=True)
-
-    # Create character asset directories
-    characters_dir = assets_dir / "characters"
-    characters_dir.mkdir(exist_ok=True)
-
-    for char in gdd.get("character_roster", []):
-        char_name = char.get("name", "unknown").lower().replace(" ", "_")
-        char_dir = characters_dir / char_name
-        char_dir.mkdir(exist_ok=True)
-        for expr in char.get("expression_variants", ["neutral", "happy", "sad"]):
-            # Create placeholder PNG markers
-            marker = char_dir / f"{expr}.png"
-            if not marker.exists():
-                marker.write_bytes(b"")
-
-    # Create BG directories
     bg_dir = assets_dir / "backgrounds"
-    bg_dir.mkdir(exist_ok=True)
-    for scene in gdd.get("scenes", []):
-        scene_name = scene.get("name", "unknown").lower().replace(" ", "_")
-        bg_marker = bg_dir / f"{scene_name}.png"
-        if not bg_marker.exists():
-            bg_marker.write_bytes(b"")
-
-    # Create CG directory
+    char_dir = assets_dir / "characters"
     cg_dir = assets_dir / "cg"
-    cg_dir.mkdir(exist_ok=True)
-    for cg in gdd.get("cg_milestones", []):
-        cg_key = cg.get("cg_key", "unknown").lower().replace(" ", "_")
-        cg_marker = cg_dir / f"{cg_key}.png"
-        if not cg_marker.exists():
-            cg_marker.write_bytes(b"")
+    for d in (bg_dir, char_dir, cg_dir):
+        d.mkdir(parents=True, exist_ok=True)
 
-    logger.info(f"Asset structure created at {assets_dir}")
-    logger.info("Note: ComfyUI not available — code gen will use Phaser shape rendering")
+    try:
+        from agents.dev.artist.comfyui_client import ComfyUIClient
+        from agents.dev.artist.sprite_generator import SpriteGenerator
+        from agents.dev.artist.art_style import resolve_art_style
+
+        client = ComfyUIClient(base_url="http://localhost:8188")
+        art_style = resolve_art_style(gdd)
+        generator = SpriteGenerator(client, art_style=art_style)
+
+        generated = 0
+        scenes = gdd.get("scenes", [])
+        for i, scene in enumerate(scenes[:8]):
+            scene_name = scene.get("name", f"scene_{i}").lower().replace(" ", "_")
+            out_path = bg_dir / f"{scene_name}.png"
+            if out_path.exists() and out_path.stat().st_size > 0:
+                continue
+            try:
+                result = await generator.generate_vn_background(
+                    scene_name=scene_name,
+                    scene_description=scene.get("description", scene.get("name", "city scene")),
+                    output_dir=bg_dir,
+                )
+                if result:
+                    generated += 1
+                    logger.info(f"Generated background: {scene_name}")
+            except Exception as e:
+                logger.warning(f"BG gen failed for {scene_name}: {e}")
+
+        chars = gdd.get("character_roster", [])[:6]
+        if chars:
+            try:
+                char_results = await generator.generate_vn_character_sprites(
+                    characters=chars,
+                    output_dir=char_dir,
+                )
+                if char_results:
+                    generated += len(char_results)
+                    logger.info(f"Generated {len(char_results)} character sprites")
+            except Exception as e:
+                logger.warning(f"Character sprite gen failed: {e}")
+
+        logger.info(f"Art generation complete: {generated} new assets")
+    except Exception as e:
+        logger.error(f"ComfyUI art pipeline error: {e} — game will use colored shapes")
 
     return str(assets_dir)
 
