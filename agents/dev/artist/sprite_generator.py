@@ -11,6 +11,9 @@ from .workflows import (
     BACKGROUND_WORKFLOW,
     CHARACTER_SPRITE_WORKFLOW,
     UI_ELEMENT_WORKFLOW,
+    VN_BACKGROUND_WORKFLOW,
+    VN_CG_WORKFLOW,
+    VN_CHARACTER_SPRITE_WORKFLOW,
     build_workflow,
 )
 
@@ -135,3 +138,121 @@ class SpriteGenerator:
                 results[elem] = path
 
         return results
+
+    async def _generate_vn_character_expression(
+        self,
+        character_name: str,
+        description: str,
+        expression: str,
+        seed: int,
+        output_dir: Path,
+    ) -> tuple[str, str, Path | None]:
+        gender_tag = "1girl" if any(
+            w in description.lower() for w in ["girl", "woman", "female", "she"]
+        ) else "1boy"
+        positive = (
+            f"{gender_tag}, {description}, {expression} expression, "
+            "anime visual novel character, transparent background, "
+            "high quality, clean lineart"
+        )
+        negative = (
+            "realistic, photo, blurry, low quality, watermark, text, "
+            "bad anatomy, multiple characters"
+        )
+        workflow = build_workflow(VN_CHARACTER_SPRITE_WORKFLOW, positive, negative, seed=seed)
+        slug = character_name.lower().replace(" ", "_")
+        workflow["7"]["inputs"]["filename_prefix"] = f"vn_{slug}_{expression}"
+
+        prompt_id = await self._client.queue_prompt(workflow)
+        images = await self._client.get_output_images(prompt_id, output_dir)
+        if images:
+            logger.info(f"Generated VN sprite {character_name}/{expression}: {images[0]}")
+            return character_name, expression, images[0]
+        return character_name, expression, None
+
+    async def generate_vn_character_sprites(
+        self,
+        characters: list[dict],
+        output_dir: Path,
+        base_seed: int = 42,
+    ) -> dict[str, dict[str, Path]]:
+        logger.info(f"Generating VN sprites for {len(characters)} characters")
+
+        tasks = []
+        for idx, char in enumerate(characters):
+            name = char["name"]
+            description = char.get("description", "")
+            expressions = char.get("expressions", ["neutral"])
+            seed = base_seed + idx
+            for expr in expressions:
+                tasks.append(
+                    self._generate_vn_character_expression(
+                        name, description, expr, seed, output_dir
+                    )
+                )
+
+        results_list = await asyncio.gather(*tasks)
+
+        results: dict[str, dict[str, Path]] = {}
+        for char_name, expression, path in results_list:
+            if path:
+                results.setdefault(char_name, {})[expression] = path
+
+        return results
+
+    async def generate_vn_background(
+        self,
+        scene_name: str,
+        scene_description: str,
+        output_dir: Path,
+    ) -> Path | None:
+        logger.info(f"Generating VN background: {scene_name}")
+
+        positive = (
+            f"{scene_description}, anime visual novel background, "
+            "detailed environment, cinematic lighting, no characters"
+        )
+        negative = (
+            "characters, people, realistic, photo, blurry, low quality, "
+            "watermark, text, signature"
+        )
+        workflow = build_workflow(VN_BACKGROUND_WORKFLOW, positive, negative)
+        slug = scene_name.lower().replace(" ", "_")
+        workflow["7"]["inputs"]["filename_prefix"] = f"vn_bg_{slug}"
+
+        prompt_id = await self._client.queue_prompt(workflow)
+        images = await self._client.get_output_images(prompt_id, output_dir)
+        if images:
+            logger.info(f"Generated VN background {scene_name}: {images[0]}")
+            return images[0]
+        return None
+
+    async def generate_vn_cg(
+        self,
+        cg_key: str,
+        scene_description: str,
+        characters: list[str],
+        output_dir: Path,
+    ) -> Path | None:
+        logger.info(f"Generating VN CG: {cg_key}")
+
+        char_text = ", ".join(characters) if characters else ""
+        char_clause = f", {char_text}" if char_text else ""
+        positive = (
+            f"{scene_description}{char_clause}, "
+            "anime visual novel CG, dramatic lighting, detailed"
+        )
+        negative = (
+            "realistic, photo, blurry, low quality, watermark, text, "
+            "signature, bad anatomy"
+        )
+        workflow = build_workflow(VN_CG_WORKFLOW, positive, negative)
+        slug = cg_key.lower().replace(" ", "_")
+        workflow["7"]["inputs"]["filename_prefix"] = f"vn_cg_{slug}"
+
+        prompt_id = await self._client.queue_prompt(workflow)
+        images = await self._client.get_output_images(prompt_id, output_dir)
+        if images:
+            logger.info(f"Generated VN CG {cg_key}: {images[0]}")
+            return images[0]
+        return None

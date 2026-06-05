@@ -128,6 +128,132 @@ UI_ELEMENT_WORKFLOW: dict = {
     },
 }
 
+VN_CHARACTER_SPRITE_WORKFLOW: dict = {
+    "1": {
+        "class_type": "CheckpointLoaderSimple",
+        "inputs": {"ckpt_name": "v1-5-pruned-emaonly.safetensors"},
+    },
+    "2": {
+        "class_type": "CLIPTextEncode",
+        "inputs": {"text": "", "clip": ["1", 1]},
+    },
+    "3": {
+        "class_type": "CLIPTextEncode",
+        "inputs": {"text": "", "clip": ["1", 1]},
+    },
+    "4": {
+        "class_type": "EmptyLatentImage",
+        "inputs": {"width": 512, "height": 768, "batch_size": 1},
+    },
+    "5": {
+        "class_type": "KSampler",
+        "inputs": {
+            "seed": 42,
+            "steps": 25,
+            "cfg": 7,
+            "sampler_name": "euler",
+            "scheduler": "normal",
+            "denoise": 1,
+            "model": ["1", 0],
+            "positive": ["2", 0],
+            "negative": ["3", 0],
+            "latent_image": ["4", 0],
+        },
+    },
+    "6": {
+        "class_type": "VAEDecode",
+        "inputs": {"samples": ["5", 0], "vae": ["1", 2]},
+    },
+    "7": {
+        "class_type": "SaveImage",
+        "inputs": {"filename_prefix": "vn_character", "images": ["6", 0]},
+    },
+}
+
+VN_BACKGROUND_WORKFLOW: dict = {
+    "1": {
+        "class_type": "CheckpointLoaderSimple",
+        "inputs": {"ckpt_name": "v1-5-pruned-emaonly.safetensors"},
+    },
+    "2": {
+        "class_type": "CLIPTextEncode",
+        "inputs": {"text": "", "clip": ["1", 1]},
+    },
+    "3": {
+        "class_type": "CLIPTextEncode",
+        "inputs": {"text": "", "clip": ["1", 1]},
+    },
+    "4": {
+        "class_type": "EmptyLatentImage",
+        "inputs": {"width": 1024, "height": 576, "batch_size": 1},
+    },
+    "5": {
+        "class_type": "KSampler",
+        "inputs": {
+            "seed": 42,
+            "steps": 25,
+            "cfg": 7,
+            "sampler_name": "euler",
+            "scheduler": "normal",
+            "denoise": 1,
+            "model": ["1", 0],
+            "positive": ["2", 0],
+            "negative": ["3", 0],
+            "latent_image": ["4", 0],
+        },
+    },
+    "6": {
+        "class_type": "VAEDecode",
+        "inputs": {"samples": ["5", 0], "vae": ["1", 2]},
+    },
+    "7": {
+        "class_type": "SaveImage",
+        "inputs": {"filename_prefix": "vn_background", "images": ["6", 0]},
+    },
+}
+
+VN_CG_WORKFLOW: dict = {
+    "1": {
+        "class_type": "CheckpointLoaderSimple",
+        "inputs": {"ckpt_name": "v1-5-pruned-emaonly.safetensors"},
+    },
+    "2": {
+        "class_type": "CLIPTextEncode",
+        "inputs": {"text": "", "clip": ["1", 1]},
+    },
+    "3": {
+        "class_type": "CLIPTextEncode",
+        "inputs": {"text": "", "clip": ["1", 1]},
+    },
+    "4": {
+        "class_type": "EmptyLatentImage",
+        "inputs": {"width": 1024, "height": 576, "batch_size": 1},
+    },
+    "5": {
+        "class_type": "KSampler",
+        "inputs": {
+            "seed": 42,
+            "steps": 30,
+            "cfg": 7,
+            "sampler_name": "euler",
+            "scheduler": "normal",
+            "denoise": 1,
+            "model": ["1", 0],
+            "positive": ["2", 0],
+            "negative": ["3", 0],
+            "latent_image": ["4", 0],
+        },
+    },
+    "6": {
+        "class_type": "VAEDecode",
+        "inputs": {"samples": ["5", 0], "vae": ["1", 2]},
+    },
+    "7": {
+        "class_type": "SaveImage",
+        "inputs": {"filename_prefix": "vn_cg", "images": ["6", 0]},
+    },
+}
+
 
 def build_workflow(
     template: dict, positive_prompt: str, negative_prompt: str, seed: int = 42

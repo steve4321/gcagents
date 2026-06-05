@@ -42,6 +42,18 @@ ART_STYLES = {
         "negative_prompt": "perfect geometry, vector, 3d, photo",
         "palette": "muted_natural",
     },
+    "anime_vn": {
+        "name": "Anime Visual Novel",
+        "prompt_suffix": (
+            ", anime style, visual novel game, clean lines, "
+            "flat shading, high quality illustration"
+        ),
+        "sprite_size": 512,
+        "negative_prompt": (
+            "realistic, photo, 3d render, blurry, low quality, "
+            "watermark, text, signature, western cartoon"
+        ),
+    },
 }
 
 
@@ -95,6 +107,8 @@ class ArtStyleConfig:
 def select_style_for_genre(genre: str) -> str:
     """Auto-select art style based on game genre."""
     genre_lower = genre.lower()
+    if any(g in genre_lower for g in ["visual novel", "vn", "dating sim", "galgame", "otome"]):
+        return "anime_vn"
     if any(g in genre_lower for g in ["platformer", "arcade", "retro"]):
         return "pixel_16"
     if any(g in genre_lower for g in ["puzzle", "casual", "match"]):

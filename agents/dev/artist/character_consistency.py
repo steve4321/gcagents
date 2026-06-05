@@ -113,3 +113,32 @@ def validate_expression_coverage(characters: list[dict], min_per_char: int = 3) 
                 f"expressions, need >= {min_per_char}"
             )
     return errors
+
+
+def build_character_prompt_template(
+    character: dict,
+    expression: str,
+    seed: int,
+) -> tuple[str, str, int]:
+    gender_tag = "1girl" if any(
+        w in character.get("description", character.get("base_description", "")).lower()
+        for w in ["girl", "woman", "female", "she"]
+    ) else "1boy"
+    description = character.get("description", character.get("base_description", ""))
+    expression_modifier = EXPRESSION_MODIFIERS.get(
+        expression, f"{expression} expression"
+    )
+
+    positive = (
+        f"{gender_tag}, {description}, {expression_modifier}, "
+        "anime visual novel character, transparent background, "
+        "high quality, clean lineart, consistent character design, "
+        "same face, same clothing, same hair"
+    )
+    negative = (
+        "different hairstyle, different eye color, different clothing, "
+        "different body type, multiple characters, realistic, photo, "
+        "blurry, low quality, watermark, text, bad anatomy"
+    )
+
+    return positive, negative, seed
