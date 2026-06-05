@@ -8,6 +8,7 @@ from shared.config import AppConfig
 from shared.constants import DEFAULT_ANALYSIS_MODEL
 from shared.llm_client import llm
 from shared.models import GameProposal
+from shared.vn_schema import is_visual_novel, validate_gdd
 
 # Genre → Phaser architecture knowledge (loaded from config)
 try:
@@ -203,7 +204,13 @@ async def generate_gdd(proposal: GameProposal, config: AppConfig) -> dict:
     logger.info(f"Generating GDD for: {proposal.name} ({proposal.genre})")
 
     model = DEFAULT_ANALYSIS_MODEL
-    if not config.minimax_api_key:
+
+    # For complex VN GDDs, prefer DeepSeek which handles large structured JSON better
+    if config.deepseek_api_key and proposal.estimated_dev_hours >= 20:
+        model = "deepseek-v4-flash"
+        logger.info(f"Using {model} for complex GDD generation")
+
+    if not config.deepseek_api_key and not config.minimax_api_key:
         logger.error("No AI API key configured")
         return {"title": proposal.name, "genre": proposal.genre, "scenes": []}
 
@@ -225,7 +232,9 @@ Scale complexity to match the dev hours: more hours = more mechanics, scenes, an
 
 IMPORTANT: This game should have enough depth to engage a player for 5-10 minutes. Simple one-button games will be rejected.
 
-DESIGN FOR DEPTH: Include data-driven content (levels with varying enemy compositions, upgrade trees with meaningful choices, multiple enemy AI patterns). The game should feel like it was made by a skilled game designer, not a template."""
+DESIGN FOR DEPTH: Include data-driven content (levels with varying enemy compositions, upgrade trees with meaningful choices, multiple enemy AI patterns). The game should feel like it was made by a skilled game designer, not a template.
+
+CRITICAL: Return ONLY the raw JSON object. No markdown, no explanation, no preamble. Start with {{ and end with }}. Do NOT include any text before or after the JSON."""
 
     text, usage = await llm.chat_completion(
         model=model,
@@ -233,12 +242,46 @@ DESIGN FOR DEPTH: Include data-driven content (levels with varying enemy composi
             {"role": "system", "content": DESIGNER_SYSTEM_PROMPT},
             {"role": "user", "content": user_prompt},
         ],
-        temperature=0.8,
-        max_tokens=6000,
+        temperature=0.7,
+        max_tokens=16000,
         agent_name="designer",
         project_name=proposal.name,
     )
     gdd = _parse_gdd(text)
+
+    if is_visual_novel(gdd):
+        errors = validate_gdd(gdd)
+        if errors:
+            logger.warning(f"GDD validation: {len(errors)} issues, retrying with fix prompt")
+            for e in errors:
+                logger.warning(f"  - {e}")
+            fix_prompt = (
+                "The previous GDD JSON had validation errors:\n"
+                + "\n".join(f"- {e}" for e in errors)
+                + "\n\nReturn the COMPLETE corrected GDD JSON. "
+                "Do NOT truncate. Ensure ALL required fields are present."
+            )
+            text2, _ = await llm.chat_completion(
+                model=model,
+                messages=[
+                    {"role": "system", "content": DESIGNER_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_prompt},
+                    {"role": "assistant", "content": text},
+                    {"role": "user", "content": fix_prompt},
+                ],
+                temperature=0.3,
+                max_tokens=16000,
+                agent_name="designer",
+                project_name=proposal.name,
+            )
+            gdd2 = _parse_gdd(text2)
+            errors2 = validate_gdd(gdd2)
+            if not errors2:
+                gdd = gdd2
+                logger.info("GDD validation fixed on retry ✓")
+            else:
+                logger.warning(f"GDD still has {len(errors2)} issues after retry")
+
     logger.info(
         f"GDD generated: {gdd.get('title', 'untitled')} with {len(gdd.get('scenes', []))} scenes"
     )
@@ -248,16 +291,74 @@ DESIGN FOR DEPTH: Include data-driven content (levels with varying enemy composi
 
 def _parse_gdd(text: str) -> dict:
     text = text.strip()
+
+    # Strip markdown code fences
     if text.startswith("```"):
-        text = text.split("\n", 1)[1].rsplit("```", 1)[0]
+        text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+
+    # Strip any leading non-JSON content (LLM may add preamble)
+    json_start = text.find("{")
+    if json_start > 0:
+        text = text[json_start:]
+    elif json_start < 0:
+        raise ValueError(
+            f"No JSON object found in LLM response (length={len(text)})"
+        )
+
+    # Strip trailing non-JSON after last }
+    json_end = text.rfind("}") + 1
+    if json_end > 0:
+        text = text[:json_end]
+
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        start = text.find("{")
-        end = text.rfind("}") + 1
-        if start >= 0 and end > start:
-            try:
-                return json.loads(text[start:end])
-            except json.JSONDecodeError:
-                pass
-        raise ValueError("Failed to parse GDD JSON")
+        pass
+
+    try:
+        return _repair_truncated_json(text)
+    except Exception:
+        pass
+
+    raise ValueError(
+        f"Failed to parse GDD JSON (text length={len(text)}, "
+        f"first 200 chars: {text[:200]})"
+    )
+
+
+def _repair_truncated_json(text: str) -> dict:
+    """Attempt to repair a truncated JSON object by balancing braces/brackets."""
+    stack: list[str] = []
+    in_string = False
+    escape = False
+
+    for ch in text:
+        if escape:
+            escape = False
+            continue
+        if ch == "\\":
+            escape = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch in "{[":
+            stack.append(ch)
+        elif ch in "}]":
+            if stack:
+                stack.pop()
+
+    suffix = ""
+    for opener in reversed(stack):
+        if opener == "{":
+            suffix += "}"
+        elif opener == "[":
+            suffix += "]"
+
+    if not suffix:
+        raise ValueError("Cannot repair JSON")
+
+    repaired = text + suffix
+    return json.loads(repaired)
