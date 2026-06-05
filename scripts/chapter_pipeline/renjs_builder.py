@@ -16,6 +16,85 @@ from pathlib import Path
 from typing import Any
 
 
+def generate_gui_yaml(plan: dict) -> str:
+    """Generate GUI.yaml with proper messageBox/choices configuration.
+
+    Uses Phaser's built-in default font ('Arial') so we don't need to
+    ship font files. Coordinates are for 1024x768 canvas.
+    """
+    return """# RenJS GUI.yaml — auto-generated, compatible with RenJS V2
+name: default
+resolution:
+  - 1024
+  - 768
+assetCounter: 1
+config:
+  hud:
+    - id: default
+      type: choices
+      x: 512
+      'y': 400
+      alignment: centered
+      separation: 15
+      text:
+        style:
+          font: "Georgia, serif"
+          fontSize: 26px
+          fill: "#d4af37"
+          align: left
+          boundsAlignH: center
+          boundsAlignV: middle
+      hover:
+        fill: "#ffffff"
+    - id: default
+      type: messageBox
+      x: 40
+      'y': 530
+      width: 944
+      height: 200
+      backgroundColor: "rgba(0, 0, 0, 0.85)"
+      text:
+        x: 24
+        'y': 24
+        style:
+          font: "Georgia, serif"
+          fontSize: 22px
+          fill: "#ffffff"
+          align: left
+          wordWrap: true
+          wordWrapWidth: 896
+    - id: default
+      type: nameBox
+      x: 60
+      'y': 490
+      text:
+        x: 0
+        'y': 0
+        style:
+          font: "Georgia, serif"
+          fontSize: 24px
+          fill: "#d4af37"
+          align: left
+          boundsAlignH: left
+          boundsAlignV: middle
+    - id: default
+      type: log
+      x: 512
+      'y': 100
+      width: 944
+      height: 400
+      backgroundColor: "rgba(0, 0, 0, 0.8)"
+      text:
+        style:
+          font: "Georgia, serif"
+          fontSize: 20px
+          fill: "#cccccc"
+          align: left
+          wordWrap: true
+          wordWrapWidth: 920
+"""
+
+
 def generate_config_yaml(plan: dict) -> str:
     """Generate Config.yaml from the production plan.
 
@@ -286,7 +365,17 @@ const RenJSConfig = {{
   name: '{title}',
   w: 1024,
   h: 768,
-  scaleMode: 'SHOW_ALL',
+  renderer: Phaser.AUTO,
+  scaleMode: Phaser.ScaleManager.SHOW_ALL,
+  startScene: 'ch1_start',
+  loadingScreen: {{
+    background: 'vendor/renjs/loading_bg.png',
+    loadingBar: {{
+      asset: 'vendor/renjs/loading_bar.png',
+      position: {{ x: 109, y: 458 }},
+      size: {{ w: 578, h: 82 }},
+    }},
+  }},
   fonts: '',
   guiConfig: 'story/GUI.yaml',
   storyConfig: 'story/Config.yaml',

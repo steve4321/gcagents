@@ -345,7 +345,7 @@ async def _run_story_track(
 
 
 def _integrate(output_dir: Path, plan: dict, story_result: dict) -> None:
-    """Integration: write Config.yaml, Setup.yaml, copy assets to final location."""
+    """Integration: write Config.yaml, Setup.yaml, GUI.yaml, copy assets to final location."""
     story_dir = output_dir / "story"
     story_dir.mkdir(exist_ok=True)
 
@@ -357,11 +357,16 @@ def _integrate(output_dir: Path, plan: dict, story_result: dict) -> None:
     (story_dir / "Setup.yaml").write_text(setup_yaml, encoding="utf-8")
     update_plan_status(plan, "data", "setup", "completed")
 
-    logger.info("  Config.yaml + Setup.yaml written")
+    from scripts.chapter_pipeline.renjs_builder import generate_gui_yaml
+    gui_yaml = generate_gui_yaml(plan)
+    (story_dir / "GUI.yaml").write_text(gui_yaml, encoding="utf-8")
+    update_plan_status(plan, "data", "gui", "completed")
+
+    logger.info("  Config.yaml + Setup.yaml + GUI.yaml written")
 
 
 def _build(output_dir: Path, plan: dict) -> None:
-    """Build: single index.html + boot.js + vendor/renjs.js."""
+    """Build: single index.html + boot.js + vendor/renjs.js + loading screen."""
     build_dir = output_dir / "build"
     build_dir.mkdir(exist_ok=True)
 
@@ -371,6 +376,8 @@ def _build(output_dir: Path, plan: dict) -> None:
         vendor_dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(vendor_src, vendor_dst)
         logger.info(f"  Vendored renjs.js to {vendor_dst}")
+
+    _generate_loading_screen(build_dir / "vendor" / "renjs")
 
     story_dir = build_dir / "story"
     story_src = output_dir / "story"
@@ -398,6 +405,23 @@ def _build(output_dir: Path, plan: dict) -> None:
     (build_dir / "package.json").write_text(json.dumps(pkg_json, indent=2), encoding="utf-8")
 
     logger.info(f"  Build output: {build_dir}")
+
+
+def _generate_loading_screen(vendor_dir: Path) -> None:
+    """Generate simple loading screen images required by RenJS."""
+    try:
+        from PIL import Image
+        vendor_dir.mkdir(parents=True, exist_ok=True)
+        bg_path = vendor_dir / "loading_bg.png"
+        bar_path = vendor_dir / "loading_bar.png"
+        if not bg_path.exists():
+            bg = Image.new("RGB", (800, 600), color=(10, 10, 20))
+            bg.save(bg_path)
+        if not bar_path.exists():
+            bar = Image.new("RGB", (578, 82), color=(212, 175, 55))
+            bar.save(bar_path)
+    except Exception as e:
+        logger.warning(f"Could not generate loading screen images: {e}")
 
 
 def _generate_package_json(plan: dict) -> dict:
