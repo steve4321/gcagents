@@ -148,7 +148,19 @@ Fix the TypeScript/build errors. Return a JSON object with ONLY the files you mo
             agent_name="programmer",
             project_name=gdd.get("title", "unknown"),
         )
-        files = _parse_code_files(response[0])
+        try:
+            files = _parse_code_files(response[0])
+        except ValueError:
+            logger.warning("Self-verify fix parse failed, retrying with deepseek-v4-flash")
+            response = await llm.chat_completion(
+                model="deepseek-v4-flash",
+                messages=messages,
+                temperature=0.1,
+                max_tokens=8192,
+                agent_name="programmer",
+                project_name=gdd.get("title", "unknown"),
+            )
+            files = _parse_code_files(response[0])
         for fp, content in files.items():
             if not _validate_file_path(code_path, fp):
                 continue
@@ -200,7 +212,19 @@ Fix the runtime errors. Return a JSON object with ONLY the files you modified.""
             agent_name="programmer",
             project_name=gdd.get("title", "unknown"),
         )
-        files = _parse_code_files(response[0])
+        try:
+            files = _parse_code_files(response[0])
+        except ValueError:
+            logger.warning("Runtime fix parse failed, retrying with deepseek-v4-flash")
+            response = await llm.chat_completion(
+                model="deepseek-v4-flash",
+                messages=messages,
+                temperature=0.1,
+                max_tokens=8192,
+                agent_name="programmer",
+                project_name=gdd.get("title", "unknown"),
+            )
+            files = _parse_code_files(response[0])
         for fp, content in files.items():
             if not _validate_file_path(code_path, fp):
                 continue
@@ -308,6 +332,35 @@ Return ONLY a JSON object of file paths to contents."""
     return project_dir
 
 
+def _try_direct_json_parse(text: str) -> dict[str, str] | None:
+    clean = text.strip()
+    if clean.startswith("```"):
+        first_nl = clean.index("\n") + 1 if "\n" in clean else 3
+        last_fence = clean.rfind("```")
+        if last_fence > first_nl:
+            clean = clean[first_nl:last_fence].strip()
+    # Try finding JSON object boundaries
+    start = clean.find("{")
+    if start >= 0:
+        brace_count = 0
+        for i in range(start, len(clean)):
+            if clean[i] == "{":
+                brace_count += 1
+            elif clean[i] == "}":
+                brace_count -= 1
+            if brace_count == 0:
+                clean = clean[start:i + 1]
+                break
+    try:
+        parsed = json.loads(clean)
+        if isinstance(parsed, dict):
+            return {k: json.dumps(v, ensure_ascii=False) if not isinstance(v, str) else v
+                    for k, v in parsed.items()}
+    except (json.JSONDecodeError, TypeError) as e:
+        logger.debug(f"Direct JSON parse failed: {e}, text[:100]={clean[:100]}")
+    return None
+
+
 async def _vn_llm_round(
     prompt: str,
     model: str,
@@ -330,6 +383,9 @@ async def _vn_llm_round(
     try:
         return _parse_code_files(response[0])
     except ValueError:
+        direct = _try_direct_json_parse(response[0])
+        if direct is not None:
+            return direct
         logger.warning(f"VN round '{round_label}' parse failed, retrying with deepseek-v4-flash")
         retry = await llm.chat_completion(
             model="deepseek-v4-flash",
@@ -342,7 +398,13 @@ async def _vn_llm_round(
             agent_name="programmer",
             project_name=game_title,
         )
-        return _parse_code_files(retry[0])
+        try:
+            return _parse_code_files(retry[0])
+        except ValueError:
+            direct = _try_direct_json_parse(retry[0])
+            if direct is not None:
+                return direct
+            raise
 
 
 def _extract_partial_data(result: dict[str, str]) -> dict:
@@ -428,7 +490,11 @@ def _merge_vn_data(
 
         if isinstance(branching, dict):
             nodes = branching.get("nodes", {})
-            if isinstance(nodes, dict):
+            if isinstance(nodes, list):
+                for n in nodes:
+                    if isinstance(n, dict) and "id" in n:
+                        merged_branching["nodes"][n["id"]] = n
+            elif isinstance(nodes, dict):
                 merged_branching["nodes"].update(nodes)
             edges = branching.get("edges", [])
             if isinstance(edges, list):
@@ -443,6 +509,23 @@ def _merge_vn_data(
         merged_branching["root"] = "common_start"
     elif merged_branching["nodes"]:
         merged_branching["root"] = next(iter(merged_branching["nodes"]))
+
+    # Generate edges from node choices if edges are sparse
+    if not merged_branching["edges"] and merged_branching["nodes"]:
+        edge_set = set()
+        for nid, node in merged_branching["nodes"].items():
+            for choice in node.get("choices", []):
+                target = choice.get("next_node", "")
+                if target:
+                    key = (nid, target)
+                    if key not in edge_set:
+                        edge_set.add(key)
+                        merged_branching["edges"].append({"from": nid, "to": target})
+            if node.get("next"):
+                key = (nid, node["next"])
+                if key not in edge_set:
+                    edge_set.add(key)
+                    merged_branching["edges"].append({"from": nid, "to": node["next"]})
 
     # Build routes metadata from node ID prefixes
     route_prefixes: dict[str, list[str]] = {}
@@ -505,7 +588,7 @@ def _validate_vn_data_consistency(project_dir: Path) -> list[str]:
     # Check stat names in choices match stats.json
     if stats:
         stat_names = set()
-        stats_list = stats.get("stats", [])
+        stats_list = stats.get("stats", stats) if isinstance(stats, dict) else stats
         if isinstance(stats_list, list):
             for s in stats_list:
                 if isinstance(s, dict) and "name" in s:
@@ -908,6 +991,8 @@ def _summarize_files(files: dict[str, str], max_chars: int = 2000) -> str:
     lines = []
     total = 0
     for path, content in sorted(files.items()):
+        if not isinstance(content, str):
+            content = json.dumps(content, ensure_ascii=False)
         line_count = content.count("\n") + 1
         exports = []
         for line in content.split("\n"):
@@ -1281,32 +1366,25 @@ Generate a JSON object with EXACTLY these two keys:
 Rules:
 - All next_node references must point to node IDs that exist in this round OR will exist (use "common_*" pattern).
 - The last common route node should have choices pointing to character route start nodes (e.g. "route_<name>_start").
-- Keep total output under 4000 tokens.
-- Real narrative content, not placeholders.
-
-CRITICAL INTERFACE CONTRACT — these methods MUST exist with EXACT signatures:
-- ChoiceSystem: showChoices(node: BranchingNode): void, showAnimated(): void, hideAnimated(): void
-- BranchingEngine: getCurrentNode(): BranchingNode | undefined, advance(choiceId: string): BranchingNode | null
-- StatSystem: get(name: string): number, applyDeltas(deltas: Record<string, number>): void, evaluateConditions(conditions: dict): boolean
-- FORBIDDEN IMPORTS: never import 'fs', 'path', 'os', 'child_process' — these crash in the browser
+- Keep total output concise but complete — do NOT truncate the JSON.
 
 Return ONLY a JSON object with "branching" and "dialogue" keys."""
 
     r2_result = await _vn_llm_round(
-        round2_prompt, model, 4096, game_title, "Common Route Data"
+        round2_prompt, model, 8192, game_title, "Common Route Data"
     )
     partial_data_list.append(_extract_partial_data(r2_result))
-    _add_round_summary(round_summaries, "Round 2 (Common Route)", {}, node_count=_count_nodes(r2_result))
-    logger.info(f"VN Round 2 (Common Route): {len(r2_result)} keys in response")
+    _add_round_summary(round_summaries, f"Round {round_num} (Common Route)", {}, node_count=_count_nodes(r2_result))
+    logger.info(f"VN Round {round_num} (Common Route): 2 keys in response")
 
-    # ── Rounds 3..N: Character Routes ─────────────────────────────────
-    for i, route in enumerate(character_routes):
-        round_num = 3 + i
-        route_name = route.get("name", f"route_{i+1}") if isinstance(route, dict) else f"route_{i+1}"
-        route_heroine = route.get("heroine", "unknown") if isinstance(route, dict) else "unknown"
+    # ── Round 3..N: Character Routes ─────────────────────────────────────
+    for idx, route in enumerate(character_routes):
+        round_num = 3 + idx
+        route_name = route.get("name", f"route_{idx}") if isinstance(route, dict) else f"route_{idx}"
+        route_heroine = route.get("heroine", "") if isinstance(route, dict) else ""
         route_nodes = route.get("nodes", 8) if isinstance(route, dict) else 8
         route_theme = route.get("theme", "") if isinstance(route, dict) else ""
-        past_rounds_ctx = "\n".join(round_summaries[-3:])  # Last 3 rounds for context window
+        past_rounds_ctx = "\n".join(round_summaries[-3:])
 
         route_prompt = f"""You are building a hybrid Visual Novel. ROUND {round_num} of {total_rounds}: CHARACTER ROUTE "{route_name}".
 
@@ -1332,13 +1410,13 @@ Generate a JSON object with EXACTLY these two keys:
 Rules:
 - All next_node references should use "{route_name}_*" or "ending_*" patterns.
 - Include at least 2 meaningful choices that affect stats.
-- Keep total output under 4000 tokens.
+- Keep total output concise but complete — do NOT truncate the JSON.
 - Deep, character-driven dialogue — not shallow placeholder text.
 
 Return ONLY a JSON object with "branching" and "dialogue" keys."""
 
         route_result = await _vn_llm_round(
-            route_prompt, model, 4096, game_title, f"Route: {route_name}"
+            route_prompt, model, 8192, game_title, f"Route: {route_name}"
         )
         partial_data_list.append(_extract_partial_data(route_result))
         _add_round_summary(round_summaries, f"Round {round_num} ({route_name})", {}, node_count=_count_nodes(route_result))
@@ -1364,17 +1442,16 @@ Generate a JSON object mapping file paths to file contents:
    At least 3 endings (one good, one normal, one bad). Trigger conditions must reference stat names from the stat system.
 2. src/game/data/stats.json — stat definitions from the GDD. Each stat: name, range [min, max], decay, branching_thresholds.
    At least 5 stats.
-3. src/game/data/characters.json — full character roster. Each: name, role, sprite_set, expression_variants (>=3), personality, stat_affinities.
 
 Rules:
-- ending trigger stats MUST match stat names in stats.json
-- expression_variants lists must have >= 3 entries per character
-- Keep total output under 4000 tokens.
+- Stat names must exactly match those referenced in branching choices.
+- Trigger conditions use format: {{"stat_name": {{">=": value}}}}.
+- Keep total output concise but complete — do NOT truncate the JSON.
 
 Return ONLY a JSON object mapping file paths to file contents."""
 
     endings_files = await _vn_llm_round(
-        endings_prompt, model, 4096, game_title, "Endings & Data"
+        endings_prompt, model, 8192, game_title, "Endings & Data"
     )
     accumulated.update(endings_files)
     _add_round_summary(round_summaries, f"Round {round_num} (Endings & Data)", endings_files)
