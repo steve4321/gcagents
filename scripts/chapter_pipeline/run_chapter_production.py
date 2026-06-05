@@ -166,33 +166,20 @@ async def _run_chapter_art(chapter_gdd: dict, output_dir: Path) -> dict:
 
 
 async def _run_chapter_code(chapter_gdd: dict, output_dir: Path, art_result: dict) -> dict:
-    """Run code generation for one chapter using the existing route-by-route pipeline."""
-    from agents.dev.programmer.code_generator import generate_game_code
-    from orchestrator.state import CompanyState
-    from shared.config import load_config
+    """Run code generation for one chapter using the resilient per-chapter pipeline."""
+    from scripts.chapter_pipeline.chapter_codegen import generate_chapter_code_resilient
 
-    output_dir.mkdir(parents=True, exist_ok=True)
-    config = load_config()
     art_path = str(output_dir / "public" / "assets") if art_result.get("backgrounds", 0) > 0 else None
-
-    state = CompanyState(
-        phase="DEVELOPING",
-        project_name=chapter_gdd.get("title", "chapter"),
-        gdd=chapter_gdd,
-        art_assets_path=art_path,
-    )
-
     try:
-        code_path = await generate_game_code(
-            gdd=chapter_gdd,
+        result = await generate_chapter_code_resilient(
+            chapter_gdd=chapter_gdd,
             project_dir=output_dir,
-            config=config,
             art_assets_path=art_path,
         )
-        return {"code_path": str(code_path), "art_assets": art_path}
+        return result
     except Exception as e:
         logger.error(f"Code gen failed for chapter: {e}")
-        return {"error": str(e)}
+        return {"error": str(e), "code_path": output_dir}
 
 
 def _extract_chapter_data(ch_output: Path, ch_gdd: dict) -> dict | None:

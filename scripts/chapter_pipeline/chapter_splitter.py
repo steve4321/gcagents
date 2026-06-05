@@ -71,7 +71,7 @@ def split_gdd_into_chapters(
                 },
                 "character_routes": [
                     {
-                        "name": f"{r.get('name', f'route_{idx}')}_ch{ch_num}",
+                        "name": f"{_safe_route_name(r.get('name', f'route_{idx}'))}_ch{ch_num}",
                         "heroine": r.get("heroine", ""),
                         "theme": r.get("theme", ""),
                         "nodes": max(6, nodes_per_route // 2),
@@ -165,6 +165,12 @@ def _theme_for_position(idx: int, total: int) -> str:
         return "complications and midpoint reversal"
     else:
         return "climax and resolution"
+
+
+def _safe_route_name(name: str) -> str:
+    import re
+    cleaned = re.sub(r"[^a-zA-Z0-9_]+", "_", name).strip("_").lower()
+    return cleaned or "route"
 
 
 def _chapter_cgs(gdd: dict, ch_num: int, total: int) -> list[dict]:

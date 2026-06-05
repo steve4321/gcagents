@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{TITLE}}</title>
+  <style>
+    body { margin: 0; background: #000; display: flex; justify-content: center; align-items: center; height: 100vh; font-family: 'Noto Sans CJK SC', 'Microsoft YaHei', 'PingFang SC', sans-serif; overflow: hidden; }
+    #game-container { display: flex; justify-content: center; align-items: center; }
+    canvas { display: block; }
+  </style>
+  <script type="module" crossorigin src="./assets/{{JS_BUNDLE}}"></script>
+</head>
+<body>
+  <div id="game-container"></div>
+  <script>
+    window.__AD_CONFIG__ = [];
+    window.__triggerAdBreak = function() {};
+    window.__triggerHappyTime = function() {};
+  </script>
+</body>
+</html>
