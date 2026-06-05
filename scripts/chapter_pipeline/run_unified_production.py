@@ -391,6 +391,8 @@ def _build(output_dir: Path, plan: dict) -> None:
         if assets_dst.exists():
             shutil.rmtree(assets_dst)
         shutil.copytree(assets_src, assets_dst)
+
+        _normalize_asset_filenames(assets_dst, plan)
         logger.info(f"  Copied assets to {assets_dst}")
 
     boot_js = generate_boot_js(plan)
@@ -405,6 +407,43 @@ def _build(output_dir: Path, plan: dict) -> None:
     (build_dir / "package.json").write_text(json.dumps(pkg_json, indent=2), encoding="utf-8")
 
     logger.info(f"  Build output: {build_dir}")
+
+
+def _normalize_asset_filenames(assets_dir: Path, plan: dict) -> None:
+    """Rename ComfyUI-generated files to match the plan's expected IDs.
+
+    ComfyUI sprite generator outputs files like `vn_bg_ch1_prologue_00005_.png`
+    but the plan references them as `ch1_prologue.png`. This function creates
+    symlinks or copies with the expected names so the YAML references resolve.
+    """
+    for category in ("backgrounds", "characters", "cg"):
+        sub_dir = assets_dir / category
+        if not sub_dir.exists():
+            continue
+        for entry in plan.get("art", {}).get(category, []):
+            expected_id = entry.get("id")
+            if not expected_id:
+                continue
+            expected_path = entry.get("file_path", "")
+            expected_filename = Path(expected_path).name
+            target = sub_dir / expected_filename
+            if target.exists():
+                continue
+            prefix = "vn_bg_" if category == "backgrounds" else "vn_"
+            candidates = list(sub_dir.glob(f"{prefix}*"))
+            for cand in candidates:
+                base = cand.stem
+                if "_" in base:
+                    parts = base.split("_")
+                    tail = parts[-1]
+                    if tail.isdigit() or (len(tail) == 8 and tail.isalnum()):
+                        rest = "_".join(parts[1:-1])
+                        if rest == expected_id:
+                            shutil.copy2(cand, target)
+                            break
+            else:
+                if candidates:
+                    shutil.copy2(candidates[0], target)
 
 
 def _generate_loading_screen(vendor_dir: Path) -> None:

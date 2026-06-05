@@ -14,7 +14,10 @@ from typing import Any
 def ir_to_renjs_yaml(ir: dict) -> str:
     """Convert a Story IR into RenJS Story.yaml.
 
-    IR scene IDs become RenJS scene names.
+    The first scene is always named 'start' (RenJS's required entry point).
+    Other scene names are taken from the IR but prefixed with 'ch<N>_'
+    to be chapter-namespaced.
+
     IR events become RenJS actions:
       - show → "show <char>: <expr> AT <pos> [WITH FADE]"
       - say → "<char> says [expr]: <text>"
@@ -29,9 +32,17 @@ def ir_to_renjs_yaml(ir: dict) -> str:
       - end → "end:"
     """
     lines: list[str] = []
+    first_scene = True
+    scene_renames: dict[str, str] = {}
 
     for scene_id, scene in ir.get("scenes", {}).items():
-        lines.append(f"{scene_id}:")
+        if first_scene:
+            renjs_scene_id = "start"
+        else:
+            renjs_scene_id = scene_id
+        scene_renames[scene_id] = renjs_scene_id
+        first_scene = False
+        lines.append(f"{renjs_scene_id}:")
         events = scene.get("events", [])
         if not events:
             lines.append("  - narrator says: ...")

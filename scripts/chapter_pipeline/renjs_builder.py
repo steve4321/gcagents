@@ -367,7 +367,6 @@ const RenJSConfig = {{
   h: 768,
   renderer: Phaser.AUTO,
   scaleMode: Phaser.ScaleManager.SHOW_ALL,
-  startScene: 'ch1_start',
   loadingScreen: {{
     background: 'vendor/renjs/loading_bg.png',
     loadingBar: {{
