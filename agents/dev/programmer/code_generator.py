@@ -91,10 +91,9 @@ async def generate_game_code(
     if is_visual_novel(gdd):
         vn_errors = validate_gdd(gdd)
         if vn_errors:
-            logger.error(
-                f"VN GDD validation failed ({len(vn_errors)} errors): {vn_errors[:3]}"
+            logger.warning(
+                f"VN GDD validation issues ({len(vn_errors)}): {vn_errors[:3]} — proceeding with code generation anyway"
             )
-            return project_dir
         code_path = await _generate_visual_novel(
             gdd, project_dir, config, model, max_tokens, art_assets_path
         )
@@ -137,14 +136,14 @@ async def generate_game_code(
 {build_err[:TRUNC_LLM_PROMPT_ERROR]}
 {existing_block}
 
-Fix the TypeScript/build errors. Return a JSON object with ONLY the files you modified.""",
+Fix the TypeScript/build errors. Return a JSON object with ONLY the files you modified. Keep the response under 4000 tokens — do NOT include unchanged files.""",
             },
         ]
         response = await llm.chat_completion(
             model=model,
             messages=messages,
             temperature=0.2,
-            max_tokens=8192,
+            max_tokens=16384,
             agent_name="programmer",
             project_name=gdd.get("title", "unknown"),
         )
@@ -156,7 +155,7 @@ Fix the TypeScript/build errors. Return a JSON object with ONLY the files you mo
                 model="deepseek-v4-flash",
                 messages=messages,
                 temperature=0.1,
-                max_tokens=8192,
+                max_tokens=16384,
                 agent_name="programmer",
                 project_name=gdd.get("title", "unknown"),
             )
@@ -503,7 +502,7 @@ def _merge_vn_data(
         if isinstance(dialogue, dict):
             merged_dialogue.update(dialogue)
 
-    if gdd_root:
+    if gdd_root and gdd_root in merged_branching["nodes"]:
         merged_branching["root"] = gdd_root
     elif "common_start" in merged_branching["nodes"]:
         merged_branching["root"] = "common_start"
@@ -1079,9 +1078,9 @@ export default defineConfig({
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Game</title>
+  <title>{gdd.get('title', 'Visual Novel') if gdd else 'Visual Novel'}</title>
   <style>
-    body {{ margin: 0; background: #000; display: flex; justify-content: center; align-items: center; height: 100vh; }}
+    body {{ margin: 0; background: #000; display: flex; justify-content: center; align-items: center; height: 100vh; font-family: 'Noto Sans CJK SC', 'Microsoft YaHei', 'PingFang SC', 'Hiragino Sans GB', sans-serif; overflow: hidden; }}
     #game-container {{ display: flex; justify-content: center; align-items: center; }}
     canvas {{ display: block; }}
   </style>{sdk_scripts_block}
@@ -1192,20 +1191,13 @@ def _runtime_verify(project_dir: Path) -> str:
                 return f"No canvas element found after 3s. Phaser failed to initialize. Body content: {body_html[:200] or '(empty)'}"
             return ""
 
-    try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            import concurrent.futures
-
-            with concurrent.futures.ThreadPoolExecutor() as pool:
-                return (
-                    loop.run_in_executor(pool, lambda: asyncio.run(_check())).result()
-                    if False
-                    else asyncio.run(_check())
-                )
-        return asyncio.run(_check())
-    except Exception as e:
-        return f"Runtime verify error: {e}"
+    import concurrent.futures
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(asyncio.run, _check())
+        try:
+            return future.result(timeout=30)
+        except Exception as e:
+            return f"Runtime verify error: {e}"
 
 
 def _vn_post_gen_verify(project_dir: Path) -> str:
