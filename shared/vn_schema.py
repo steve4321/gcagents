@@ -423,16 +423,29 @@ def validate_stat_name_consistency(
         trigger = cond.get("trigger", {})
         if not isinstance(trigger, dict):
             continue
-        conditions = trigger.get("conditions", [])
+        conditions = trigger.get("conditions", {})
+        # Format 1: {"conditions": [{"stat": "name", ...}, ...]} (list of dicts)
         if isinstance(conditions, list):
             for c in conditions:
                 if isinstance(c, dict) and "stat" in c:
                     referenced_in_endings.add(c["stat"])
+        # Format 2: {"conditions": {"morality": {">=": 80}, ...}} (nested dict)
+        elif isinstance(conditions, dict):
+            for stat_name in conditions.keys():
+                if isinstance(stat_name, str):
+                    referenced_in_endings.add(stat_name)
+        # Format 3: flat {"morality:>=": 80, ...} in trigger itself (colon-separated stat:op keys)
+        # Format 4: flat {"morality": 50, ...} in trigger (bare stat key with numeric value)
         for key in trigger:
-            if key not in ("conditions", "type", "node"):
-                val = trigger[key]
-                if isinstance(val, (int, float)):
-                    referenced_in_endings.add(key)
+            if key in ("conditions", "type", "node", "route"):
+                continue
+            val = trigger[key]
+            if isinstance(val, (int, float)):
+                stat_name = key.split(":")[0].split(">")[0].split("<")[0].split("=")[0]
+                if stat_name:
+                    referenced_in_endings.add(stat_name)
+            elif isinstance(val, dict):
+                referenced_in_endings.add(key)
 
     invalid_ending_stats = referenced_in_endings - defined_names
     if invalid_ending_stats:

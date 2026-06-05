@@ -1186,7 +1186,7 @@
             "next_node": "route_reporter",
             "stat_delta": {
               "social_influence": 10,
-              "moral": 3
+              "morality": 3
             }
           }
         ]
@@ -1594,6 +1594,16 @@
       "scene_id": "scene_c4_11",
       "cg_key": "cg_union_march",
       "condition": "player joins union after chapter 4"
+    },
+    {
+      "scene_id": "c3_hacker",
+      "cg_key": "cg_server_room",
+      "description": "Hacking scene in server room"
+    },
+    {
+      "scene_id": "c3_union",
+      "cg_key": "cg_strike",
+      "description": "Strike action scene"
     }
   ],
   "save_points": [
