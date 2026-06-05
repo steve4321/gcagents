@@ -42,10 +42,10 @@ REQUIRED_TOP_LEVEL_FIELDS: tuple[str, ...] = (
 
 MIN_CHARACTERS = 2
 MIN_STATS = 5
-MIN_ENDINGS = 3
-MIN_BRANCHING_NODES = 8
+MIN_ENDINGS = 4
+MIN_BRANCHING_NODES = 30
 MIN_EXPRESSIONS_PER_CHARACTER = 3
-MIN_CG_MILESTONES = 1
+MIN_CG_MILESTONES = 3
 
 
 def is_visual_novel(gdd: dict[str, Any]) -> bool:
@@ -93,6 +93,18 @@ def validate_gdd(gdd: dict[str, Any]) -> list[str]:
         errors.extend(validate_ending_conditions(gdd["ending_conditions"]))
     if isinstance(gdd.get("cg_milestones"), list):
         errors.extend(validate_cg_milestones(gdd["cg_milestones"]))
+
+    # Cross-module consistency checks (only when both sides present)
+    if isinstance(gdd.get("branching_tree"), dict) and isinstance(gdd.get("dialogue"), dict):
+        errors.extend(validate_dialogue_against_branching(gdd["dialogue"], gdd["branching_tree"]))
+    if (
+        isinstance(gdd.get("stat_system"), dict)
+        and isinstance(gdd.get("branching_tree"), dict)
+        and isinstance(gdd.get("ending_conditions"), list)
+    ):
+        errors.extend(validate_stat_name_consistency(
+            gdd["stat_system"], gdd["branching_tree"], gdd["ending_conditions"]
+        ))
 
     # Schema version stamping (additive — never an error if missing)
     gdd.setdefault("vn_schema_version", SCHEMA_VERSION)
@@ -287,4 +299,146 @@ def validate_cg_milestones(cgs: list[Any]) -> list[str]:
             errors.append(f"cg_milestones[{i}] missing 'scene_id'")
         if not cg.get("cg_key") or not isinstance(cg["cg_key"], str):
             errors.append(f"cg_milestones[{i}] missing 'cg_key'")
+    return errors
+
+
+def validate_dialogue_against_branching(
+    dialogue: dict[str, Any], branching_tree: dict[str, Any]
+) -> list[str]:
+    """Validate that all dialogue keys referenced in branching exist in dialogue data.
+
+    Also checks:
+    * Each dialogue entry has ``speaker`` and ``text`` fields.
+    * No empty dialogue arrays.
+    * Minimum 2 dialogue lines per referenced key.
+    """
+    errors: list[str] = []
+
+    # Collect dialogue keys from branching nodes
+    referenced_keys: set[str] = set()
+    nodes = branching_tree.get("nodes", {})
+    if isinstance(nodes, dict):
+        for _node_id, node in nodes.items():
+            if not isinstance(node, dict):
+                continue
+            for d in node.get("dialogue", []):
+                if isinstance(d, str):
+                    referenced_keys.add(d)
+                elif isinstance(d, dict) and "key" in d:
+                    referenced_keys.add(d["key"])
+
+    if not referenced_keys:
+        return errors
+
+    # Unwrap if needed
+    dialogue_data = dialogue
+    if (
+        isinstance(dialogue, dict)
+        and "dialogue" in dialogue
+        and isinstance(dialogue["dialogue"], dict)
+    ):
+        dialogue_data = dialogue["dialogue"]
+
+    if not isinstance(dialogue_data, dict):
+        errors.append("dialogue is not a keyed dict")
+        return errors
+
+    missing_keys = referenced_keys - set(dialogue_data.keys())
+    if missing_keys:
+        errors.append(
+            f"dialogue missing {len(missing_keys)} keys referenced in branching: "
+            f"{sorted(missing_keys)[:10]}"
+        )
+
+    for key in sorted(referenced_keys & set(dialogue_data.keys())):
+        entries = dialogue_data.get(key)
+        if not isinstance(entries, list):
+            errors.append(f"dialogue key '{key}' is not an array")
+            continue
+        if len(entries) == 0:
+            errors.append(f"dialogue key '{key}' has empty dialogue array")
+            continue
+        if len(entries) < 2:
+            errors.append(f"dialogue key '{key}' has {len(entries)} entries, need >= 2")
+        for ei, entry in enumerate(entries):
+            if not isinstance(entry, dict):
+                errors.append(f"dialogue key '{key}' entry[{ei}] is not a dict")
+                continue
+            if "speaker" not in entry:
+                errors.append(f"dialogue key '{key}' entry[{ei}] missing 'speaker'")
+            if "text" not in entry:
+                errors.append(f"dialogue key '{key}' entry[{ei}] missing 'text'")
+
+    return errors
+
+
+def validate_stat_name_consistency(
+    stat_system: dict[str, Any],
+    branching_tree: dict[str, Any],
+    ending_conditions: list[Any],
+) -> list[str]:
+    """Validate that all stat names referenced in branching/endings exist in stat_system.
+
+    Checks ``stat_delta`` keys in choices AND condition keys in endings.
+    """
+    errors: list[str] = []
+
+    # Collect defined stat names
+    defined_names: set[str] = set()
+    stats_list = stat_system.get("stats", [])
+    if isinstance(stats_list, list):
+        for s in stats_list:
+            if isinstance(s, dict) and isinstance(s.get("name"), str):
+                defined_names.add(s["name"])
+
+    if not defined_names:
+        return errors
+
+    # Collect stat names referenced in branching choices
+    referenced_in_branching: set[str] = set()
+    nodes = branching_tree.get("nodes", {})
+    if isinstance(nodes, dict):
+        for _node_id, node in nodes.items():
+            if not isinstance(node, dict):
+                continue
+            for choice in node.get("choices", []):
+                if not isinstance(choice, dict):
+                    continue
+                delta = choice.get("stat_delta")
+                if isinstance(delta, dict):
+                    referenced_in_branching.update(delta.keys())
+
+    invalid_branching_stats = referenced_in_branching - defined_names
+    if invalid_branching_stats:
+        errors.append(
+            f"branching_tree choices reference undefined stats: "
+            f"{sorted(invalid_branching_stats)}"
+        )
+
+    # Collect stat names referenced in ending conditions
+    referenced_in_endings: set[str] = set()
+    for cond in ending_conditions:
+        if not isinstance(cond, dict):
+            continue
+        trigger = cond.get("trigger", {})
+        if not isinstance(trigger, dict):
+            continue
+        conditions = trigger.get("conditions", [])
+        if isinstance(conditions, list):
+            for c in conditions:
+                if isinstance(c, dict) and "stat" in c:
+                    referenced_in_endings.add(c["stat"])
+        for key in trigger:
+            if key not in ("conditions", "type", "node"):
+                val = trigger[key]
+                if isinstance(val, (int, float)):
+                    referenced_in_endings.add(key)
+
+    invalid_ending_stats = referenced_in_endings - defined_names
+    if invalid_ending_stats:
+        errors.append(
+            f"ending_conditions reference undefined stats: "
+            f"{sorted(invalid_ending_stats)}"
+        )
+
     return errors
