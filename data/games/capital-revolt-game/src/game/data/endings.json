@@ -1,0 +1,144 @@
+{
+  "endings": [
+    {
+      "name": "革命之路",
+      "key": "ending_revolution",
+      "epilogue_key": "epilogue_revolution",
+      "is_good_ending": true,
+      "description": "你带领工人阶级发起了全面的抗争，推翻了压迫性的制度。",
+      "trigger": {
+        "route": "union",
+        "conditions": {
+          "morality": {">=": 70},
+          "social_influence": {">=": 65}
+        }
+      }
+    },
+    {
+      "name": "真相大白",
+      "key": "ending_truth",
+      "epilogue_key": "epilogue_truth",
+      "is_good_ending": true,
+      "description": "真相终于被公之于众，正义得到了伸张。",
+      "trigger": {
+        "route": "reporter",
+        "conditions": {
+          "social_influence": {">=": 65},
+          "morality": {">=": 60}
+        }
+      }
+    },
+    {
+      "name": "工人团结",
+      "key": "ending_collective",
+      "epilogue_key": "epilogue_collective",
+      "is_good_ending": true,
+      "description": "通过团结和坚持，工人们赢得了应有的权利。",
+      "trigger": {
+        "route": "union",
+        "conditions": {
+          "social_influence": {">=": 55}
+        }
+      }
+    },
+    {
+      "name": "伦理创业",
+      "key": "ending_startup",
+      "epilogue_key": "epilogue_startup",
+      "is_good_ending": true,
+      "description": "你用行动证明了，不靠剥削也能成功。工人合作社成为了新商业模式的标杆。",
+      "trigger": {
+        "route": "entrepreneur",
+        "conditions": {
+          "economy": {">=": 55},
+          "morality": {">=": 50}
+        }
+      }
+    },
+    {
+      "name": "资本奴役",
+      "key": "ending_capitalist",
+      "epilogue_key": "epilogue_capitalist",
+      "is_good_ending": false,
+      "description": "你出卖了自己的灵魂，成为了你曾经最厌恶的人。",
+      "trigger": {
+        "conditions": {
+          "economy": {">=": 70},
+          "morality": {"<=": 25}
+        }
+      }
+    },
+    {
+      "name": "崩溃边缘",
+      "key": "ending_burnout",
+      "epilogue_key": "epilogue_burnout",
+      "is_good_ending": false,
+      "description": "持续的压力彻底击垮了你。在系统的齿轮下，你只是一颗被碾碎的螺丝钉。",
+      "trigger": {
+        "conditions": {
+          "mental_health": {"<=": 20}
+        }
+      }
+    },
+    {
+      "name": "消失无踪",
+      "key": "ending_disappeared",
+      "epilogue_key": "epilogue_disappeared",
+      "is_good_ending": false,
+      "description": "你知道了太多不该知道的东西。在这个系统中，让一个人消失比改变它容易得多。",
+      "trigger": {
+        "conditions": {
+          "social_influence": {"<=": 20},
+          "technical_ability": {"<=": 25}
+        }
+      }
+    },
+    {
+      "name": "卑躬屈膝",
+      "key": "ending_bow",
+      "epilogue_key": "epilogue_bow",
+      "is_good_ending": false,
+      "description": "你选择了屈从。在资本的铁蹄下，你放弃了所有的抵抗和尊严。",
+      "trigger": {
+        "conditions": {
+          "morality": {"<=": 15},
+          "mental_health": {"<=": 30}
+        }
+      }
+    }
+  ],
+  "epilogues": {
+    "epilogue_revolution": {
+      "title": "新的黎明",
+      "text": "六个月后，你发起的运动改变了整个科技行业。工人代表进入了董事会，996制度被废除，加班需要经过工会同意。你站在工会大楼的天台上，看着落日余晖下的城市，心中充满了力量。这不是终点，而是一个崭新时代的起点。"
+    },
+    "epilogue_truth": {
+      "title": "真相的力量",
+      "text": "你的调查报道获得了年度新闻奖。巨型科技被处以巨额罚款，天眼计划被彻底销毁。更重要的是，这场风波引发了全国范围内关于隐私权和企业道德的大讨论。你坐在编辑室里，看着屏幕上不断涌入的读者来信，知道这一切都值得。"
+    },
+    "epilogue_collective": {
+      "title": "团结的火焰",
+      "text": "大罢工的胜利像一颗火种，点燃了整个行业的觉醒。越来越多的科技公司开始实行工人共治模式。李薇成了全国知名的劳工权益倡导者，而你在幕后默默守护着这来之不易的成果。革命的种子已经播下，终将长成参天大树。"
+    },
+    "epilogue_startup": {
+      "title": "另一种可能",
+      "text": "你的工人合作社虽然不大，却成为了行业内的标杆。员工们真正拥有了话语权，创新活力远超传统公司。王蕾的愿景成为了现实：不靠剥削也能成功。也许这个世界终将改变，从每一个小小的实验开始。"
+    },
+    "epilogue_capitalist": {
+      "title": "金色牢笼",
+      "text": "你坐在高层办公室里，俯瞰着城市的万家灯火。封口费、期权、升职——你得到了曾经想要的一切。但每一个深夜，你都会想起那些并肩战斗过的面孔。你已经成为了机器的一部分，一个没有灵魂的齿轮。窗外的霓虹灯闪烁着，冰冷而无情。"
+    },
+    "epilogue_burnout": {
+      "title": "碎裂的齿轮",
+      "text": "你躺在医院的病床上，白色的天花板像永远不会结束的代码。长期的过劳和精神压力让你的身体发出了最后的警告。也许康复之后，你会找到新的方向。也许不会。但至少，你还活着。这一次，你决定先学会照顾自己。"
+    },
+    "epilogue_disappeared": {
+      "title": "无名之辈",
+      "text": "没有人知道你去了哪里。工位被清理，手机变成空号，社交媒体全部消失。同事们偶尔会在茶水间低声提起你的名字，然后很快被沉默吞没。在这个庞大的系统中，消除一个人存在过的痕迹，竟然如此简单。"
+    },
+    "epilogue_bow": {
+      "title": "跪下的人",
+      "text": "你接受了所有的条件，低下了头，回到了工位上。张总监满意地笑了。你告诉自己这只是暂时的妥协，但'暂时'一词的定义越来越模糊。日复一日，你变成了那些你最厌恶的人中的一员。跪久了，腿真的会麻。"
+    }
+  }
+}
