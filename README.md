@@ -44,7 +44,7 @@ GCAgents System
   ┌──────────────┐     ┌────────────────────────────────────────┐
   │   SQLite     │     │  Skills System                         │
   │  (async)     │     │  Pluggable conditionally-activated     │
-  │  18 tables   │     │  agent capabilities                    │
+  │  24 tables   │     │  agent capabilities                    │
   └──────────────┘     └────────────────────────────────────────┘
 ====================================================================
 ```
@@ -72,12 +72,16 @@ GCAgents System
 - **Automated playtesting** — Playwright 8-point verification against every build
 - **Prototype mode** — 5-minute playable demos using colored rectangles and emoji as placeholder art
 - **Auto-localization** — game UI strings translated to 15 languages
+- **Multi-platform deployment** — itch.io (Butler), CrazyGames (API), Poki (API), Newgrounds (manual) via adapter pattern with auto ad SDK injection
 - **Programmatic music** — Web Audio BGM per genre with optional Suno API integration
+- **Visual Novel pipeline** — Hybrid VN + stat-based branching production; GDD decomposed into common route + N character routes with independent QA and build
 - **Executive chat** — CEO-only interaction through decision cards; approve/reject through dashboard
 - **Document viewer** — view all agent work artifacts (proposal, GDD, market scan, reports) in-dashboard
 - **Scheduler pause/resume** — file-based pause mechanism via dashboard; state preserved across pauses
 - **Layered memory** — short-term events + long-term lessons + project context; fully queryable
 - **Security** — API key auth, path traversal protection, input validation, CEO action allowlist
+- **Complexity scoring** — GDD + code dual-dimension quality gate (minimum 0.45 threshold) before playtesting
+- **Phaser knowledge base** — 1200+ line genre-specific architecture guide (11 genres) for Designer and Programmer agents
 
 ---
 
@@ -94,8 +98,9 @@ GCAgents System
 | Art AI | ComfyUI + SD 1.5 | Game asset generation |
 | Verification | Playwright + custom | Multi-mode output verification |
 | Game Engine | Phaser 4 + TypeScript + Vite | Web mini-game runtime |
-| Dashboard | FastAPI + HTML/CSS/JS | 38+ API endpoints |
-| Database | SQLite (async SQLAlchemy) | 18 tables, full company operations |
+| Dashboard | FastAPI + HTML/CSS/JS | 44+ API endpoints |
+| Database | SQLite (async SQLAlchemy) | 24 tables (18 base + 6 VN), full company operations |
+| Multi-Platform | Adapter Pattern (itch/CrazyGames/Poki) | Multi-platform game distribution |
 
 ---
 
@@ -169,6 +174,8 @@ gcagents/
 │   ├── persistence.py        #   DB schema (projects/tasks/decisions/memory)
 │   ├── state.py              #   CompanyState, PipelinePhase, retry metadata
 │   ├── model_router.py       #   6-tier cost-aware model selection
+│   ├── vn_persistence.py     #   VN 专用持久化（6 张表）
+│   ├── vn_routes.py          #   VN 路线扩展与资产链接
 │   └── graph/
 │       └── pipeline.py      #   Legacy 13-node pipeline
 ├── agents/                   # AI agents
@@ -176,22 +183,45 @@ gcagents/
 │   │   ├── scanner.py        #   12-source market scanner
 │   │   ├── analyzer.py       #   Cross-source correlation, scoring
 │   │   └── sources/          #   Source adapters (itch, reddit, steamspy, etc.)
+│   │       └── fetchers.py   #   12 源适配器合并
 │   └── dev/
 │       ├── designer/         #   GDD generation + mechanic planning
 │       ├── artist/           #   ComfyUI/SD asset pipeline (sprites, bg, icons)
+│       │   ├── sprite_generator.py  #   Sprite generation
+│       │   └── character_consistency.py  #   角色视觉一致性
 │       ├── programmer/       #   DeepSeek code generation (Phaser 4 + TypeScript)
 │       ├── qa/               #   Playwright auto-playtest (8 checks)
 │       ├── music/            #   Web Audio BGM + optional Suno API
+│       │   ├── mood_bgm.py   #   情绪 BGM
+│       │   └── sfx_generator.py  #   音效生成
 │       ├── localize/         #   15-language auto-translation
+│       │   ├── character_names.py  #   角色名翻译
+│       │   └── ts_extractor.py  #   TypeScript 字符串提取
 │       └── builder/          #   Vite build → dist/
-├── shared/                   # Shared utilities
+│   └── ops/                   #   Operations
+│       ├── deployer/
+│       │   ├── base.py       #   平台适配器基类
+│       │   ├── registry.py    #   多平台注册表
+│       │   ├── itch_deployer.py  #   itch.io 部署
+│       │   ├── crazygames_deployer.py  #   CrazyGames 部署
+│       │   ├── poki_deployer.py  #   Poki 部署
+│       │   └── itch_stats.py  #   itch.io 统计
+│       ├── analytics/
+│       │   └── feedback_collector.py  #   反馈收集
+│       └── optimizer/
+├── shared/                   #   Shared utilities
 │   ├── events.py             #   Event schemas and utilities
-│   ├── sandbox.py           #   Subprocess isolation with resource limits
+│   ├── sandbox.py            #   Subprocess isolation with resource limits
 │   ├── verification.py       #   3-mode verification framework
 │   ├── model_router.py       #   Model routing client
 │   ├── context_manager.py    #   4-layer progressive LLM context compression
 │   ├── code_graph.py         #   PageRank-ranked dependency analysis
 │   ├── agent_messaging.py    #   SQLite-backed inter-agent mailbox
+│   ├── ad_sdk.py             #   广告 SDK 注入
+│   ├── fonts.py              #   CJK/RTL 字体回退
+│   ├── npm_runner.py         #   异步 npm 操作
+│   ├── vn_schema.py          #   VN GDD 校验
+│   ├── persistence_metrics.py  #   持久化指标
 │   ├── skills/               #   Skills system
 │   │   ├── base.py          #   Base skill class
 │   │   └── code_review.py   #   Code review skill
@@ -201,21 +231,26 @@ gcagents/
 │       ├── deploy/          #   Deployment tools (Butler)
 │       └── file_ops/        #   File operation tools (stubs)
 ├── dashboard/web/           # Dashboard
-│   ├── api_server.py        #   FastAPI backend (38+ endpoints)
+│   ├── api_server.py        #   FastAPI backend (44+ endpoints)
 │   ├── index.html           #   Project board, task monitor, decision cards
 │   ├── app.js               #   Frontend logic
 │   └── style.css            #   Styles
 ├── config/
 │   ├── agents.yaml          #   Agent → model mappings
-│   └── sources.yaml        #   12 market sources config
+│   ├── sources.yaml        #   12 market sources config
+│   ├── phaser_knowledge.yaml  #   Phaser 4 知识库
+│   ├── platforms.yaml      #   多平台部署配置
+│   └── prompts/            #   Prompt 模板
+│       ├── ceo_chat.yaml
+│       └── programmer.yaml
 ├── scripts/
 │   ├── e2e_test.py          #   End-to-end test script
 │   └── setup_local.py       #   Local environment setup
 ├── data/
-│   ├── gcagents.db          #   SQLite database (18 tables)
+│   ├── gcagents.db          #   SQLite database (24 tables)
 │   └── games/              #   Generated game projects
 └── tests/                   # Test suite
-    ├── test_*.py            #   168 tests across 14 files
+    ├── test_*.py            #   ~470 tests across 36 files
     └── conftest.py          #   Pytest configuration
 ```
 
@@ -230,7 +265,7 @@ gcagents/
 ## Development
 
 ```bash
-# Run tests (168 tests across 14 files)
+# Run tests (~470 tests across 36 files)
 pytest tests/
 
 # Lint

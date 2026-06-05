@@ -451,6 +451,13 @@ python3 -m orchestrator.main scan             # 仅执行市场扫描
 - 程序员按机制逐一生成代码（核心系统→游戏玩法→打磨）
 - 无机制规划时退化为整体生成（向后兼容）
 
+**Phaser 知识库** (`config/phaser_knowledge.yaml`)：
+- 1200+ 行综合 Phaser 4 知识库，被 Designer 和 Programmer Agent 加载
+- 11 种 genre 架构映射（platformer, puzzle-match, tower-defense, idle-clicker, shooter, rpg, card-game, racing, runner, arena, strategy, arcade）
+- 每 genre：推荐物理/模式、核心系统、数据文件、典型场景、最小机制、代码组织
+- 常见陷阱（Phaser 3 API in v4、import 错误、scene key 不匹配）
+- 商业模式（广告集成点、留存机制、进度系统）
+
 ### 4. 美术师 (`agents/dev/artist/`)
 
 通过 **ComfyUI + Stable Diffusion XL** 生成游戏美术资产。**ComfyUI 不是游戏引擎**，它是美术资产生成工具——生成的 PNG 图片由 Phaser 游戏引擎加载使用。
@@ -460,6 +467,7 @@ python3 -m orchestrator.main scan             # 仅执行市场扫描
 **核心组件**：
 - `comfyui_client.py` — ComfyUI HTTP API 客户端（queue → poll → download）
 - `sprite_generator.py` — 角色精灵、背景、UI 图标生成器
+- `character_consistency.py` — 角色视觉一致性
 - `workflows.py` — SD XL 工作流定义（含 VAE 连接，兼容 ComfyUI v1.44+）
 
 **资产类型**：
@@ -528,6 +536,12 @@ generate_game_code(gdd, project_dir, config, build_error="")
 - 返回 playtest score（0-1）和详细检查结果
 - 构建成功后自动运行，QA 通过需要 build_ok + playtest_passed
 
+**复杂度评分** (`shared/complexity.py`)：
+- **GDD 评分**（score_gdd）：评估机制数量、场景数量、实体数量、进度/平衡/胜利条件深度、核心循环步骤、商业信号（5 维度：model, ads, IAP, retention, engagement）
+- **代码评分**（score_code）：评估文件数量、代码行数、特性信号（physics/collision/tween/timer/update_loop/score/level）、输入类型、场景数量
+- VN 代码额外加分（检测 VN 数据文件）
+- 最低通过分数：0.45（低于此阈值的游戏被拒绝进入 QA）
+
 ### 7. 构建打包 (`agents/dev/builder/`)
 
 - 执行 `vite build` 生成 `dist/` 目录
@@ -542,6 +556,23 @@ generate_game_code(gdd, project_dir, config, build_error="")
 - 推送到 `{username}/{project_name}:html` 频道
 - 注意：游戏页面需预先在 itch.io 手动创建
 
+### 多平台部署
+
+通过平台适配器模式（Adapter Pattern）支持多平台分发：
+
+| 平台 | 适配器 | 部署方式 | SDK | 广告类型 |
+|---|---|---|---|---|
+| **itch.io** | itch_deployer.py | Butler CLI | 无 | 无 |
+| **CrazyGames** | crazygames_deployer.py | API Upload | CrazySDK v1 | midgame/rewarded/banner |
+| **Poki** | poki_deployer.py | API Upload | PokiSDK v4 | commercialBreak/rewardedBreak |
+| **Newgrounds** | 手动上传 | 浏览器手动 | 无 | 无 |
+
+- 配置：`config/platforms.yaml`
+- 适配器基类：`agents/ops/deployer/base.py`
+- 平台注册表：`agents/ops/deployer/registry.py`
+- 广告 SDK 注入：`shared/ad_sdk.py`（自动注入 SDK 脚本和安全 no-op stubs）
+- 平台 SDK 片段：`shared/constants.py`（PLATFORM_SDK_SNIPPETS, PLATFORM_AD_PATTERNS）
+
 ### 9. 音乐生成 (`agents/dev/music/`)
 
 为游戏生成背景音乐和音效，支持多种后端：
@@ -554,6 +585,8 @@ generate_game_code(gdd, project_dir, config, build_error="")
 - 程序化 BGM 根据 genre 配置不同参数（tempo/scale/octave）：arcade=140bpm、puzzle=90bpm、rpg=80bpm
 - 5 种 SFX：jump、collect、hit、gameover、click（振荡器合成）
 - 输出 `bgm.js` + `sfx.js` 到 `assets/audio/`
+- `mood_bgm.py` — 情绪 BGM 生成
+- `sfx_generator.py` — 音效生成器
 - 在 DEVELOPING 阶段（art → music → develop）自动执行
 
 ### 10. 自动本地化 (`agents/dev/localize/`)
@@ -565,7 +598,39 @@ generate_game_code(gdd, project_dir, config, build_error="")
 - **注入本地化**：生成 `assets/loc/loc.js`，自动注入 `<script>` 标签到 index.html
 - 默认翻译前 5 大市场：日语、韩语、西班牙语、葡萄牙语、德语
 - 支持语言：ja, ko, es, pt, de, fr, ru, ar, hi, th, vi, id, tr, it, pl
+- `character_names.py` — 角色名翻译
+- `ts_extractor.py` — TypeScript 字符串提取
 - 在 BUILDING 阶段后自动执行（build → localize → publishing）
+
+---
+
+## Visual Novel 生产管线
+
+### 概述
+混合 VN + 统计分支游戏生产系统。将 1 个 GDD 分解为 common route + N character routes，
+每个 route 成为独立子项目。
+
+### 核心组件
+| 模块 | 文件 | 用途 |
+|---|---|---|
+| VN Schema | shared/vn_schema.py | GDD 校验（10 必填字段） |
+| VN 持久化 | orchestrator/vn_persistence.py | 6 张 VN 专用表 |
+| VN 路线扩展 | orchestrator/vn_routes.py | 项目分解 + 资产链接 |
+
+### VN GDD 必填字段 (vn_schema.py)
+narrative_premise, character_roster, stat_system, branching_tree, 
+ending_conditions, cg_milestones, scene_flow, dialogue_style, 
+art_direction, music_direction
+
+### 生产流程
+1. GDD 校验 → vn_schema.py 验证 10 必填字段
+2. 项目分解 → common route (40% budget) + N character routes (60% split)
+3. 资产架构 → symlink 共享资源，每 route 独立目录
+4. 独立构建 → 每 route 独立 QA + build
+5. 合并发布 → routes 整合为完整游戏
+
+### VN 复杂度评分
+complexity.py 中 VN 代码评分额外加分（检测 VN 数据文件存在）
 
 ---
 
@@ -1249,7 +1314,7 @@ Dashboard 运行在独立进程（FastAPI + 静态 HTML/CSS/JS），与管道解
 
 系统使用 **SQLite** 数据库存储所有运营数据（路径：`data/gcagents.db`）。
 
-### 表结构（19 张表）
+### 表结构（24 张表：18 基础 + 6 VN 专用）
 
 | 表 | 用途 | 关键字段 |
 |---|---|---|
@@ -1274,6 +1339,12 @@ Dashboard 运行在独立进程（FastAPI + 静态 HTML/CSS/JS），与管道解
 | `domain_events` | 事件溯源（Event Store） | event_id, event_type, timestamp, tick_id, project_id, payload |
 | `agent_mailbox` | Agent 间消息传递 | id, from_agent, to_agent, message_type, payload, priority, read |
 | `itch_stats` | itch.io 统计数据 | game_name, downloads_count, plays_count, last_updated |
+| `vn_routes` | VN 路线定义 | project_id, route_name, route_type, budget_pct, status |
+| `vn_characters` | VN 角色 | project_id, route_id, name, role, personality, stats |
+| `vn_endings` | VN 结局 | project_id, route_id, ending_type, conditions, scene_id |
+| `vn_cgs` | VN CG 里程碑 | project_id, route_id, milestone_name, prompt, status |
+| `vn_stats` | VN 统计系统 | project_id, stat_name, display_name, range_min, range_max |
+| `route_assets` | VN 路线资产映射 | project_id, route_id, asset_type, asset_path, shared |
 
 ### 写入时机
 
@@ -1351,10 +1422,30 @@ CORS 默认仅允许 `http://localhost:8080`；可通过 `DASHBOARD_CORS_ORIGINS
 | `test_nodes.py` | `orchestrator/nodes/` | CEO/CFO/COO 节点 |
 | `test_api_server.py` | `dashboard/web/api_server.py` | API 端点测试 |
 | `test_code_generator.py` | `agents/dev/programmer/code_generator.py` | 代码生成 |
+| `test_vn_persistence.py` | `orchestrator/vn_persistence.py` | VN 持久化 |
+| `test_vn_routes.py` | `orchestrator/vn_routes.py` | VN 路线扩展 |
+| `test_vn_art.py` | `agents/dev/artist/` | VN 美术 |
+| `test_vn_music.py` | `agents/dev/music/` | VN 音乐 |
+| `test_vn_qa.py` | `agents/dev/qa/` | VN QA |
+| `test_vn_qa_integration.py` | `agents/dev/qa/` | VN QA 集成 |
+| `test_vn_code_gen.py` | `agents/dev/programmer/` | VN 代码生成 |
+| `test_vn_code_gen_integration.py` | `agents/dev/programmer/` | VN 代码生成集成 |
+| `test_vn_localize.py` | `agents/dev/localize/` | VN 本地化 |
+| `test_vn_schema.py` | `shared/vn_schema.py` | VN Schema |
+| `test_mechanic_planner_vn.py` | `agents/dev/designer/mechanic_planner.py` | VN 机制规划 |
+| `test_e2e_vn_pipeline.py` | 端到端 | VN 端到端 |
+| `test_planner.py` | `orchestrator/planner.py` | DAG Planner |
+| `test_api_server_endpoints.py` | `dashboard/web/api_server.py` | API 端点 |
+| `test_analytics_dashboard.py` | `dashboard/web/` | 分析 Dashboard |
+| `test_feedback_loop.py` | `agents/ops/analytics/` | 反馈闭环 |
+| `test_ad_sdk.py` | `shared/ad_sdk.py` | 广告 SDK |
+| `test_npm_runner.py` | `shared/npm_runner.py` | NPM Runner |
+| `test_code_generator_extended.py` | `agents/dev/programmer/code_generator.py` | 扩展代码生成 |
+| `integration/test_scheduler_e2e.py` | 集成测试 | 调度器端到端 |
 | `conftest.py` | — | pytest fixtures、临时 SQLite |
 | `__init__.py` | — | 测试包初始化 |
 
-**总计**：15 个测试文件，覆盖 orchestrator、shared、agents、dashboard 所有核心模块。
+**总计**：36 个测试文件（含 2 个集成测试），~470 测试用例
 
 DB 测试使用 `tmp_path` 临时 SQLite，monkeypatch `_get_engine()`，不污染 `data/gcagents.db`。所有异步测试使用 `@pytest.mark.asyncio`。
 
@@ -1401,8 +1492,10 @@ gcagents/
 │   ├── event_store.py      #   SQLite Event Store（append-only，事件溯源）
 │   ├── decision_gate.py    #   决策门控（5 类人类审批）
 │   ├── event_bus.py        #   统一事件发射（log_event + emit）
+│   ├── vn_persistence.py  #   VN 专用持久化（6 张额外表）
+│   ├── vn_routes.py       #   VN 路线扩展与资产链接
 │   ├── state.py            #   全局状态定义（CompanyState, PipelinePhase）
-│   ├── persistence.py      #   SQLite 持久化（19 张表）
+│   ├── persistence.py      #   SQLite 持久化（18 基础表）
 │   ├── prototype_mode.py   #   原型快速模式（5 分钟 demo）
 │   └── graph/
 │       └── pipeline.py     #   经典线性管道（LangGraph，兼容）
@@ -1415,7 +1508,7 @@ gcagents/
 │   │   ├── scanner.py      #     多源扫描
 │   │   ├── analyzer.py    #     增强分析（跨源关联/竞品密度/趋势方向）
 │   │   └── sources/
-│   │       └── fetchers.py #     itch/reddit/steam/youtube/tiktok/...
+│   │       └── fetchers.py #     12 源适配器（itch/reddit/steam/youtube/tiktok/... 全部合并为一个文件）
 │   └── dev/
 │       ├── designer/       #     GDD 生成 + 机制规划
 │       │   ├── agent.py    #       design_game Agent
@@ -1425,6 +1518,7 @@ gcagents/
 │       │   ├── art_agent.py    # art_gen Agent
 │       │   ├── art_node.py     # generate_art 入口
 │       │   ├── art_style.py    # 美术风格一致性（5 种预设）
+│       │   ├── character_consistency.py  # 角色视觉一致性
 │       │   ├── comfyui_client.py  # ComfyUI HTTP 客户端
 │       │   ├── sprite_generator.py  # 角色/背景/UI 生成器
 │       │   └── workflows.py    # SD XL 工作流定义
@@ -1436,18 +1530,30 @@ gcagents/
 │       │   ├── auto_playtest.py  # Playwright 自动化 playtest
 │       │   └── playtest_checks.py  # 8 项验证检查
 │       ├── music/          #     音乐生成（Web Audio 程序化 + Suno API）
-│       │   └── music_generator.py
+│       │   ├── music_generator.py  # 音乐生成器
+│       │   ├── mood_bgm.py  #     情绪 BGM 生成
+│       │   └── sfx_generator.py  # 音效生成器
 │       ├── localize/       #     自动本地化（15 种语言）
 │       │   ├── string_extractor.py  # 字符串提取 + 注入
-│       │   └── translator.py       # LLM 翻译
+│       │   ├── translator.py       # LLM 翻译
+│       │   ├── character_names.py  # 角色名翻译
+│       │   └── ts_extractor.py     # TypeScript 字符串提取
 │       └── builder/        #     Vite 构建
 │           └── build_agent.py
-├── ops/
+├── agents/ops/            #   运维 Agent
 │   ├── deployer/
+│   │   ├── base.py        #     平台适配器基类
+│   │   ├── registry.py    #     多平台注册表
 │   │   ├── itch_deployer.py  # Butler CLI itch.io 部署
-│   │   └── itch_stats.py     # itch.io 统计抓取
-│   └── analytics/
-│       └── feedback_collector.py  # itch.io 评论抓取
+│   │   ├── crazygames_deployer.py  # CrazyGames 部署
+│   │   ├── poki_deployer.py  # Poki 部署
+│   │   ├── itch_stats.py  #     itch.io 统计
+│   │   └── newgrounds_deployer.py  # Newgrounds 部署
+│   ├── analytics/
+│   │   ├── feedback_collector.py  # 反馈收集
+│   │   └── feedback_analytics.py  # 反馈分析
+│   └── optimizer/
+│       └── __init__.py    #     优化器
 ├── dashboard/web/
 │   ├── api_server.py      #   FastAPI 后端（38 个 API 端点 + WebSocket）
 │   ├── index.html         #   前端（项目看板/任务监控/决策卡片/文档查看器/市场趋势）
@@ -1468,6 +1574,11 @@ gcagents/
 │   ├── sandbox.py         #   SubprocessSandbox + ProjectSandbox
 │   ├── code_graph.py      #   TypeScript/JavaScript 依赖图 + PageRank
 │   ├── agent_messaging.py #   SQLite Agent 邮箱
+│   ├── ad_sdk.py          #   广告 SDK 注入（CrazyGames/Poki）
+│   ├── fonts.py           #   CJK/RTL 字体回退
+│   ├── npm_runner.py      #   异步 npm 操作
+│   ├── vn_schema.py       #   VN GDD 校验（10 必填字段）
+│   ├── persistence_metrics.py  # 持久化指标
 │   └── tools.py           #   ToolRegistry + @register 装饰器
 ├── skills/                 # Skills 系统
 │   ├── base.py            #   Skill ABC + SkillRegistry 自注册
@@ -1479,11 +1590,26 @@ gcagents/
 │   └── deploy.py          #   部署工具
 ├── config/
 │   ├── agents.yaml        #   Agent 与模型映射（6 层 tier 配置）
-│   └── sources.yaml       #   12 个市场数据源配置
+│   ├── sources.yaml       #   12 个市场数据源配置
+│   ├── phaser_knowledge.yaml  # Phaser 4 知识库（1200+ 行，11 种 genre）
+│   ├── platforms.yaml    #   多平台部署配置（itch.io/CrazyGames/Poki/Newgrounds）
+│   └── prompts/
+│       ├── ceo_chat.yaml  #   CEO 聊天 Prompt
+│       └── programmer.yaml  # 程序员代码生成 Prompt
+├── game-templates/       #   8 种游戏模板
+│   ├── arcade/           #   街机
+│   ├── puzzle-match/     #   消消乐
+│   ├── idle-clicker/     #   放置点击
+│   ├── shooter/          #   射击
+│   ├── rpg/              #   角色扮演
+│   ├── card-game/        #   卡牌
+│   ├── platformer/       #   平台跳跃
+│   └── tower-defense/     #   塔防
+│   └── visual-novel/     #   视觉小说
 ├── scripts/
 │   ├── e2e_test.py        #   端到端测试
 │   └── setup_local.py     #   本地环境配置
-├── tests/                 # 测试套件（15 个文件）
+├── tests/                 # 测试套件（36 个文件）
 │   ├── conftest.py        #   pytest fixtures
 │   ├── test_scheduler.py  #   调度器测试
 │   ├── test_persistence.py # 持久化测试
@@ -1497,7 +1623,28 @@ gcagents/
 │   ├── test_scanner.py    #   市场扫描测试
 │   ├── test_nodes.py      #   Agent 节点测试
 │   ├── test_api_server.py #   API 服务器测试
-│   └── test_code_generator.py # 代码生成测试
+│   ├── test_code_generator.py # 代码生成测试
+│   ├── test_vn_persistence.py # VN 持久化
+│   ├── test_vn_routes.py  #   VN 路线扩展
+│   ├── test_vn_art.py     #   VN 美术
+│   ├── test_vn_music.py   #   VN 音乐
+│   ├── test_vn_qa.py      #   VN QA
+│   ├── test_vn_qa_integration.py # VN QA 集成
+│   ├── test_vn_code_gen.py #   VN 代码生成
+│   ├── test_vn_code_gen_integration.py # VN 代码生成集成
+│   ├── test_vn_localize.py #   VN 本地化
+│   ├── test_vn_schema.py  #   VN Schema
+│   ├── test_mechanic_planner_vn.py #   VN 机制规划
+│   ├── test_e2e_vn_pipeline.py #   VN 端到端
+│   ├── test_planner.py    #   DAG Planner
+│   ├── test_api_server_endpoints.py #   API 端点
+│   ├── test_analytics_dashboard.py #   分析 Dashboard
+│   ├── test_feedback_loop.py #   反馈闭环
+│   ├── test_ad_sdk.py     #   广告 SDK
+│   ├── test_npm_runner.py #   NPM Runner
+│   ├── test_code_generator_extended.py #   扩展代码生成
+│   └── integration/
+│       └── test_scheduler_e2e.py #   调度器端到端
 ├── data/                  # 运行数据 (gitignored)
 │   ├── gcagents.db        #   SQLite 数据库
 │   └── games/             #   生成游戏项目
@@ -1572,6 +1719,7 @@ gcagents/
 | **v3** | — | **代码质量与安全强化**：修复 `orchestrator_state` 表缺失 bug（管线状态追踪静默失败）；添加 Dashboard `X-API-Key` 鉴权（localhost-only 回退模式 + CORS 收紧）；新增 pytest 测试套件（14 个测试 + 3 个回归测试）；新增 GitHub Actions CI（ruff + mypy + pytest）；新增 README.md 用户入口；ARCHITECTURE.md 更新 |
 | **v4** | — | **Dashboard UX 重构**：CEO-only 交互模式（CFO/COO 转为内部节点，移除独立交互 tab）；文档查看器（所有 Agent 工作文档可通过弹窗查看）；项目看板内联审批按钮（approve/reject/document 直接在项目卡片上操作）；调度器暂停/恢复功能（文件标志 + Dashboard "⏸ 下班" 按钮）；CEO 汇报取代 Scheduler Reports；新增 API：`/api/scheduler/{pause,resume,paused}`、`/api/projects/{id}/documents` |
 | **v5** | 2026-06-04 | **代码质量审查与新系统添加**：<br>• 安全修复：路径遍历漏洞修复（`data/gcagents.db` 使用 Path 安全拼接）<br>• bare-except 清理：所有裸 except 块替换为具体异常类型<br>• 输入验证：`interval` 参数 `Query(ge=1, le=3600)`，预算非负检查<br>• **8 个共享模块**：Event Sourcing (events.py)、Model Router (model_router.py)、Context Manager (context_manager.py)、Verification Framework (verification.py)、Sandbox (sandbox.py)、Code Graph (code_graph.py)、Agent Messaging (agent_messaging.py)、Tool Registry (tools.py)<br>• **4 个编排器模块**：Kanban Board (kanban.py)、DAG Planner (planner.py)、Topology Selector (topology.py)、Event Store (event_store.py)<br>• **Skills/Tools 框架**：Skill ABC + 自注册装饰器、CodeReviewSkill、ToolRegistry + @register<br>• **6 层模型路由**：strong/fast/cheap/code/art/audio，配置于 agents.yaml<br>• **38 个 API 端点**：完整列表覆盖项目管理、任务调度、分析、聊天、财务、决策、记忆、游戏预览等 |
+| **v6** | 2026-06-04 | **文档同步 + Visual Novel 管线**：<br>• 新增 Visual Novel 生产管线（GDD 校验→路线分解→独立构建→合并发布）<br>• 新增多平台部署（itch.io + CrazyGames + Poki + Newgrounds 适配器模式）<br>• 新增 Phaser 4 知识库（config/phaser_knowledge.yaml，11 种 genre）<br>• 新增复杂度评分系统（GDD + 代码双维度，0.45 最低阈值）<br>• 新增广告 SDK 注入（CrazyGames/Poki 广告模式）<br>• 新增 Prompt 模板目录（config/prompts/）<br>• 同步项目结构树、测试文件列表（36 文件 ~470 测试）、数据库表数（24 张） |
 
 ---
 
@@ -1622,4 +1770,4 @@ python3 -m dashboard.web.api_server
 
 ---
 
-*最后更新：v5 (2026-06-04)*
+*最后更新：v6 (2026-06-04)*
