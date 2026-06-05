@@ -9,7 +9,10 @@ dist/
 build/
 *.egg-info/
 data/market/
-data/games/
+data/games/*/node_modules/
+data/games/*/dist/
+data/games/*/*.db
+data/games/*/package-lock.json
 data/builds/
 data/reports/
 .DS_Store
