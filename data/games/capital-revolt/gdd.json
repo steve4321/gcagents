@@ -515,7 +515,7 @@
     ]
   },
   "branching_tree": {
-    "root": "scene_c1_1",
+    "root": "common_start",
     "nodes": {
       "scene_c1_1": {
         "scene_key": "c1_1",

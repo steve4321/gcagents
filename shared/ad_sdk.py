@@ -61,11 +61,10 @@ def get_ad_helper_js(platforms: list[str]) -> str:
     Also sets window.__AD_CONFIG__ with the list of target platforms.
     """
     if not platforms:
-        # No platforms — emit minimal stubs
         return """<script>
     window.__AD_CONFIG__ = [];
-    (window as any).__triggerAdBreak = () => {};
-    (window as any).__triggerHappyTime = () => {};
+    window.__triggerAdBreak = function() {};
+    window.__triggerHappyTime = function() {};
     </script>"""
 
     ad_config = json.dumps(platforms)
@@ -73,7 +72,7 @@ def get_ad_helper_js(platforms: list[str]) -> str:
     window.__AD_CONFIG__ = {ad_config};
     </script>
     <script>
-    (window as any).__triggerAdBreak = () => {{
+    window.__triggerAdBreak = function() {{
         try {{
             if (window.CrazyGames?.CrazySDK) {{
                 const sdk = window.CrazyGames.CrazySDK.getInstance();
@@ -84,7 +83,7 @@ def get_ad_helper_js(platforms: list[str]) -> str:
             }}
         }} catch (e) {{ /* ad not available */ }}
     }};
-    (window as any).__triggerHappyTime = () => {{
+    window.__triggerHappyTime = function() {{
         try {{
             if (window.CrazyGames?.CrazySDK) {{
                 window.CrazyGames.CrazySDK.getInstance().happytime();

@@ -202,8 +202,7 @@ def validate_branching_tree(tree: dict[str, Any]) -> list[str]:
             f"branching_tree.nodes has {len(nodes)} entries, need >= {MIN_BRANCHING_NODES}"
         )
     if root and root not in nodes:
-        errors.append(f"branching_tree.root '{root}' not in nodes")
-        return errors  # cannot continue reachability check without root
+        errors.append(f"branching_tree.root '{root}' not in GDD nodes (LLM will generate fresh nodes; merge function will resolve root)")
 
     for node_id, node in nodes.items():
         if not isinstance(node, dict):
