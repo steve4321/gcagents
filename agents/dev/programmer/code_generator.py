@@ -1260,6 +1260,13 @@ async def _generate_visual_novel(
     route_structure = gdd.get("route_structure", {})
     common_route = route_structure.get("common_route", {})
     character_routes = route_structure.get("character_routes", [])
+    if not character_routes:
+        # No explicit routes — synthesize 6 default routes for scale
+        character_routes = [
+            {"name": f"route_{i}", "heroine": f"heroine_{i}",
+             "theme": f"path {i}", "nodes": 20}
+            for i in range(6)
+        ]
     total_rounds = 2 + len(character_routes) + 1 + 1  # engine + common + routes + endings + scenes
     logger.info(f"VN code gen route-by-route: {game_title} ({total_rounds} rounds, {len(character_routes)} character routes)")
 
@@ -1328,7 +1335,7 @@ Return ONLY a JSON object mapping file paths to file contents."""
 
     # ── Round 2: Common Route Data ────────────────────────────────────
     round_num = 2
-    common_nodes_expected = common_route.get("nodes", 12) if isinstance(common_route, dict) else 12
+    common_nodes_expected = common_route.get("nodes", 30) if isinstance(common_route, dict) else 30
     common_theme = common_route.get("theme", "shared prologue and introduction") if isinstance(common_route, dict) else "shared prologue"
     existing_summary = _summarize_files(accumulated)
     past_rounds_ctx = "\n".join(round_summaries)
@@ -1363,7 +1370,7 @@ Rules:
 Return ONLY a JSON object with "branching" and "dialogue" keys."""
 
     r2_result = await _vn_llm_round(
-        round2_prompt, model, 8192, game_title, "Common Route Data"
+        round2_prompt, model, 16384, game_title, "Common Route Data"
     )
     partial_data_list.append(_extract_partial_data(r2_result))
     _add_round_summary(round_summaries, f"Round {round_num} (Common Route)", {}, node_count=_count_nodes(r2_result))
@@ -1374,7 +1381,7 @@ Return ONLY a JSON object with "branching" and "dialogue" keys."""
         round_num = 3 + idx
         route_name = route.get("name", f"route_{idx}") if isinstance(route, dict) else f"route_{idx}"
         route_heroine = route.get("heroine", "") if isinstance(route, dict) else ""
-        route_nodes = route.get("nodes", 8) if isinstance(route, dict) else 8
+        route_nodes = route.get("nodes", 20) if isinstance(route, dict) else 20
         route_theme = route.get("theme", "") if isinstance(route, dict) else ""
         past_rounds_ctx = "\n".join(round_summaries[-3:])
 
@@ -1397,18 +1404,21 @@ Generate a JSON object with EXACTLY these two keys:
   The route should branch from common route and eventually lead to an ending node.
   End choices should point to ending nodes like "ending_<type>".
 - "dialogue": Dict of dialogue_id -> {{id, scene_id, speaker, text, expression?}}.
-  Generate 8-15 dialogue entries specific to this route's story.
+  Generate 30-50 dialogue entries specific to this route's story.
+  Each dialogue "text" MUST be 200-400 Chinese characters of deep, literary prose.
+  This is a NOVEL — dialogue should reveal character, advance plot, build tension.
 
 Rules:
 - All next_node references should use "{route_name}_*" or "ending_*" patterns.
-- Include at least 2 meaningful choices that affect stats.
+- Include at least 3 meaningful choices that affect stats.
 - Keep total output concise but complete — do NOT truncate the JSON.
-- Deep, character-driven dialogue — not shallow placeholder text.
+- Deep, character-driven dialogue — Chinese literary prose, not shallow placeholder text.
+- Each choice should also have "label" field (display text) and "id" field.
 
 Return ONLY a JSON object with "branching" and "dialogue" keys."""
 
         route_result = await _vn_llm_round(
-            route_prompt, model, 8192, game_title, f"Route: {route_name}"
+            route_prompt, model, 16384, game_title, f"Route: {route_name}"
         )
         partial_data_list.append(_extract_partial_data(route_result))
         _add_round_summary(round_summaries, f"Round {round_num} ({route_name})", {}, node_count=_count_nodes(route_result))
@@ -1443,7 +1453,7 @@ Rules:
 Return ONLY a JSON object mapping file paths to file contents."""
 
     endings_files = await _vn_llm_round(
-        endings_prompt, model, 8192, game_title, "Endings & Data"
+        endings_prompt, model, 16384, game_title, "Endings & Data"
     )
     accumulated.update(endings_files)
     _add_round_summary(round_summaries, f"Round {round_num} (Endings & Data)", endings_files)
@@ -1465,11 +1475,11 @@ Past rounds summary:
 {past_rounds_ctx}
 
 Generate these scene files (return JSON mapping path -> content):
-1. src/game/scenes/BootScene.ts — Load all data/*.json files via this.load.json(), transition to TitleScene.
-2. src/game/scenes/TitleScene.ts — Title screen with game name, press-to-start or click-to-start.
+1. src/game/scenes/BootScene.ts — Load all data/*.json files via this.load.json() using RELATIVE path 'assets/data/<filename>.json' (NOT '/game/data/...' — that's the source path, build output is at assets/data/), transition to TitleScene.
+2. src/game/scenes/TitleScene.ts — Title screen with game name in Chinese and English, press-to-start or click-to-start.
 3. src/game/scenes/MenuScene.ts — NEW GAME / CONTINUE / GALLERY menu with visual polish.
 4. src/game/scenes/NovelScene.ts — FULL implementation integrating BranchingEngine, StatSystem, ChoiceSystem, DialogueSystem.
-   On create(): load branching.json and dialogue.json from registry, initialize systems, start at root node.
+   On create(): load branching.json and dialogue.json from this.cache.json, initialize systems, start at root node.
    On each node: display dialogue via DialogueSystem, then show choices via ChoiceSystem.
    On choice: apply stat deltas, advance BranchingEngine, check endings.
    If ending conditions met, transition to ending display.
