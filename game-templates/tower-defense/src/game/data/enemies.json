@@ -1,0 +1,34 @@
+{
+  "enemies": [
+    {
+      "key": "runner",
+      "name": "Runner",
+      "hp": 30,
+      "speed": 80,
+      "goldReward": 5,
+      "baseDamage": 1,
+      "radius": 10,
+      "color": 16241181
+    },
+    {
+      "key": "brute",
+      "name": "Brute",
+      "hp": 60,
+      "speed": 60,
+      "goldReward": 10,
+      "baseDamage": 2,
+      "radius": 13,
+      "color": 15236667
+    },
+    {
+      "key": "tank",
+      "name": "Tank",
+      "hp": 100,
+      "speed": 40,
+      "goldReward": 15,
+      "baseDamage": 3,
+      "radius": 16,
+      "color": 10184438
+    }
+  ]
+}

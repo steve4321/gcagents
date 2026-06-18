@@ -1,0 +1,67 @@
+{
+  "waves": [
+    {
+      "wave": 1,
+      "enemies": [{ "type": "runner", "count": 5 }],
+      "spawnInterval": 800
+    },
+    {
+      "wave": 2,
+      "enemies": [{ "type": "runner", "count": 8 }],
+      "spawnInterval": 700
+    },
+    {
+      "wave": 3,
+      "enemies": [
+        { "type": "runner", "count": 5 },
+        { "type": "brute", "count": 2 }
+      ],
+      "spawnInterval": 700
+    },
+    {
+      "wave": 4,
+      "enemies": [{ "type": "runner", "count": 10 }],
+      "spawnInterval": 600
+    },
+    {
+      "wave": 5,
+      "enemies": [{ "type": "tank", "count": 3 }],
+      "spawnInterval": 1200
+    },
+    {
+      "wave": 6,
+      "enemies": [
+        { "type": "runner", "count": 8 },
+        { "type": "brute", "count": 3 }
+      ],
+      "spawnInterval": 600
+    },
+    {
+      "wave": 7,
+      "enemies": [
+        { "type": "tank", "count": 4 },
+        { "type": "runner", "count": 5 }
+      ],
+      "spawnInterval": 800
+    },
+    {
+      "wave": 8,
+      "enemies": [{ "type": "brute", "count": 10 }],
+      "spawnInterval": 500
+    },
+    {
+      "wave": 9,
+      "enemies": [
+        { "type": "tank", "count": 5 },
+        { "type": "brute", "count": 5 },
+        { "type": "runner", "count": 5 }
+      ],
+      "spawnInterval": 500
+    },
+    {
+      "wave": 10,
+      "enemies": [{ "type": "tank", "count": 8 }],
+      "spawnInterval": 1000
+    }
+  ]
+}

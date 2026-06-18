@@ -1,0 +1,64 @@
+{
+  "towers": [
+    {
+      "key": "arrow",
+      "name": "Arrow Tower",
+      "cost": 50,
+      "damage": 10,
+      "range": 120,
+      "fireRate": 500,
+      "projectileSpeed": 300,
+      "projectileType": "single",
+      "splashRadius": 0,
+      "slowFactor": 0,
+      "slowDuration": 0,
+      "color": 2855648,
+      "radius": 14,
+      "upgrade": {
+        "cost": 38,
+        "damageMultiplier": 1.5,
+        "rangeMultiplier": 1.2
+      }
+    },
+    {
+      "key": "cannon",
+      "name": "Cannon Tower",
+      "cost": 100,
+      "damage": 30,
+      "range": 100,
+      "fireRate": 1500,
+      "projectileSpeed": 200,
+      "projectileType": "splash",
+      "splashRadius": 40,
+      "slowFactor": 0,
+      "slowDuration": 0,
+      "color": 15158780,
+      "radius": 16,
+      "upgrade": {
+        "cost": 75,
+        "damageMultiplier": 1.5,
+        "rangeMultiplier": 1.2
+      }
+    },
+    {
+      "key": "frost",
+      "name": "Frost Tower",
+      "cost": 75,
+      "damage": 5,
+      "range": 110,
+      "fireRate": 800,
+      "projectileSpeed": 250,
+      "projectileType": "single",
+      "splashRadius": 0,
+      "slowFactor": 0.5,
+        "slowDuration": 1000,
+      "color": 3447003,
+      "radius": 14,
+      "upgrade": {
+        "cost": 56,
+        "damageMultiplier": 1.5,
+        "rangeMultiplier": 1.2
+      }
+    }
+  ]
+}
