@@ -317,8 +317,8 @@ def _parse_gdd(text: str) -> dict:
 
     try:
         return _repair_truncated_json(text)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"GDD JSON repair failed: {e}")
 
     raise ValueError(
         f"Failed to parse GDD JSON (text length={len(text)}, "

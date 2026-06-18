@@ -185,8 +185,8 @@ async def check_gameplay_depth(page: Page) -> dict:
         state = await page.evaluate(
             "() => window.__TEST__ && window.__TEST__.state ? window.__TEST__.state() : null"
         )
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Failed to read __TEST__ state: {e}")
 
     if not state or not isinstance(state, dict):
         return {

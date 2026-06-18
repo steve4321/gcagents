@@ -125,8 +125,8 @@ class LLMClient:
                     f"Budget exceeded for monthly (est ${estimated_cost:.6f}), "
                     f"proceeding anyway (soft enforcement)"
                 )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Budget check failed, skipping enforcement: {e}")
 
         response = None
         for attempt in range(LLM_MAX_RETRIES):

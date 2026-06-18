@@ -107,7 +107,7 @@ async def run_unified_production(
     logger.info("PHASE 4: Integration")
     logger.info("=" * 70)
 
-    _integrate(output_dir, plan, story_result if not isinstance(story_result, Exception) else {})
+    _integrate(output_dir, plan, story_result if not isinstance(story_result, Exception) else {}, bible)
 
     logger.info("=" * 70)
     logger.info("PHASE 5: Build")
@@ -121,6 +121,12 @@ async def run_unified_production(
 
     summary = plan_completion_summary(plan)
     logger.info(f"Plan completion: {summary}")
+
+    validation_result = _validate_game_output(output_dir)
+    if validation_result.get("errors"):
+        logger.warning(f"  Game output validation: {len(validation_result['errors'])} issues found")
+    else:
+        logger.info("  Game output validation: all checks passed")
 
     return {
         "plan": plan,
@@ -276,6 +282,7 @@ async def _run_story_track(
                              if bg.get("chapter") == ch_id],
             "cgs": [cg["id"] for cg in plan.get("art", {}).get("cg", [])
                     if cg.get("chapter") == ch_id],
+            "music": [bgm["id"] for bgm in plan.get("audio", {}).get("bgm", [])],
         }
 
         prompt = build_ir_generation_prompt(
@@ -332,7 +339,8 @@ async def _run_story_track(
     update_plan_status(plan, "data", "story", "completed")
     logger.info(f"  Unified IR: {len(unified_ir['scenes'])} scenes, {len(unified_ir['endings'])} endings")
 
-    renjs_yaml = ir_to_renjs_yaml(unified_ir)
+    valid_music_ids = [bgm["id"] for bgm in plan.get("audio", {}).get("bgm", [])]
+    renjs_yaml = ir_to_renjs_yaml(unified_ir, valid_music_ids=valid_music_ids)
     (story_dir / "Story.yaml").write_text(renjs_yaml, encoding="utf-8")
     logger.info(f"  RenJS Story.yaml: {len(renjs_yaml)} chars")
 
@@ -344,7 +352,39 @@ async def _run_story_track(
     }
 
 
-def _integrate(output_dir: Path, plan: dict, story_result: dict) -> None:
+def _validate_and_create_placeholders(assets_dir: Path, plan: dict) -> None:
+    try:
+        from PIL import Image
+    except ImportError:
+        logger.warning("PIL not available, skipping placeholder generation")
+        return
+
+    for category in ("backgrounds", "characters", "cg"):
+        sub_dir = assets_dir / category
+        if not sub_dir.exists():
+            sub_dir.mkdir(parents=True, exist_ok=True)
+
+        for entry in plan.get("art", {}).get(category, []):
+            expected_path = entry.get("file_path", "")
+            if not expected_path:
+                continue
+            filename = Path(expected_path).name
+            target = sub_dir / filename
+            if target.exists() and target.stat().st_size > 0:
+                continue
+
+            if category == "backgrounds":
+                img = Image.new("RGB", (1024, 768), color=(20, 20, 40))
+            elif category == "characters":
+                img = Image.new("RGBA", (400, 600), color=(30, 30, 50, 200))
+            else:
+                img = Image.new("RGB", (1024, 768), color=(15, 15, 30))
+            target.parent.mkdir(parents=True, exist_ok=True)
+            img.save(target)
+            logger.info(f"  Created placeholder: {category}/{filename}")
+
+
+def _integrate(output_dir: Path, plan: dict, story_result: dict, bible: dict | None = None) -> None:
     """Integration: write Config.yaml, Setup.yaml, GUI.yaml, copy assets to final location."""
     story_dir = output_dir / "story"
     story_dir.mkdir(exist_ok=True)
@@ -353,7 +393,7 @@ def _integrate(output_dir: Path, plan: dict, story_result: dict) -> None:
     (story_dir / "Config.yaml").write_text(config_yaml, encoding="utf-8")
     update_plan_status(plan, "data", "config", "completed")
 
-    setup_yaml = generate_setup_yaml(plan)
+    setup_yaml = generate_setup_yaml(plan, bible=bible)
     (story_dir / "Setup.yaml").write_text(setup_yaml, encoding="utf-8")
     update_plan_status(plan, "data", "setup", "completed")
 
@@ -363,6 +403,9 @@ def _integrate(output_dir: Path, plan: dict, story_result: dict) -> None:
     update_plan_status(plan, "data", "gui", "completed")
 
     logger.info("  Config.yaml + Setup.yaml + GUI.yaml written")
+
+    _validate_and_create_placeholders(output_dir / "assets", plan)
+    logger.info("  Asset validation and placeholder generation done")
 
 
 def _build(output_dir: Path, plan: dict) -> None:
@@ -385,6 +428,10 @@ def _build(output_dir: Path, plan: dict) -> None:
         shutil.copytree(story_src, story_dir, dirs_exist_ok=True)
         logger.info(f"  Copied story files to {story_dir}")
 
+    # RenJS expects storyAccessibility.txt — provide empty placeholder
+    if not (story_dir / "storyAccessibility.txt").exists():
+        (story_dir / "storyAccessibility.txt").write_text("", encoding="utf-8")
+
     assets_src = output_dir / "assets"
     if assets_src.exists():
         assets_dst = build_dir / "assets"
@@ -393,6 +440,7 @@ def _build(output_dir: Path, plan: dict) -> None:
         shutil.copytree(assets_src, assets_dst)
 
         _normalize_asset_filenames(assets_dst, plan)
+        (assets_dst / "gui").mkdir(exist_ok=True)
         logger.info(f"  Copied assets to {assets_dst}")
 
     boot_js = generate_boot_js(plan)
@@ -410,12 +458,8 @@ def _build(output_dir: Path, plan: dict) -> None:
 
 
 def _normalize_asset_filenames(assets_dir: Path, plan: dict) -> None:
-    """Rename ComfyUI-generated files to match the plan's expected IDs.
+    import re
 
-    ComfyUI sprite generator outputs files like `vn_bg_ch1_prologue_00005_.png`
-    but the plan references them as `ch1_prologue.png`. This function creates
-    symlinks or copies with the expected names so the YAML references resolve.
-    """
     for category in ("backgrounds", "characters", "cg"):
         sub_dir = assets_dir / category
         if not sub_dir.exists():
@@ -424,26 +468,36 @@ def _normalize_asset_filenames(assets_dir: Path, plan: dict) -> None:
             expected_id = entry.get("id")
             if not expected_id:
                 continue
-            expected_path = entry.get("file_path", "")
-            expected_filename = Path(expected_path).name
-            target = sub_dir / expected_filename
-            if target.exists():
-                continue
-            prefix = "vn_bg_" if category == "backgrounds" else "vn_"
-            candidates = list(sub_dir.glob(f"{prefix}*"))
-            for cand in candidates:
-                base = cand.stem
-                if "_" in base:
-                    parts = base.split("_")
-                    tail = parts[-1]
-                    if tail.isdigit() or (len(tail) == 8 and tail.isalnum()):
-                        rest = "_".join(parts[1:-1])
-                        if rest == expected_id:
-                            shutil.copy2(cand, target)
+
+            file_paths = entry.get("file_paths", {})
+            if not file_paths:
+                expected_path = entry.get("file_path", "")
+                if expected_path:
+                    file_paths = {"_default": expected_path}
+
+            for _expr, expr_path in file_paths.items():
+                expected_filename = Path(expr_path).name
+                target = sub_dir / expected_filename
+                if target.exists():
+                    continue
+                target_stem = Path(expected_filename).stem
+
+                matched = None
+                for cand in sub_dir.iterdir():
+                    if not cand.is_file() or cand == target:
+                        continue
+                    stem = cand.stem
+                    clean = re.sub(r'_?\d{5,}_?$', '', stem)
+                    for pfx in ("vn_bg_", "vn_"):
+                        if clean.startswith(pfx):
+                            clean = clean[len(pfx):]
                             break
-            else:
-                if candidates:
-                    shutil.copy2(candidates[0], target)
+                    if clean == target_stem or clean == expected_id:
+                        matched = cand
+                        break
+
+                if matched:
+                    shutil.copy2(matched, target)
 
 
 def _generate_loading_screen(vendor_dir: Path) -> None:
@@ -461,6 +515,55 @@ def _generate_loading_screen(vendor_dir: Path) -> None:
             bar.save(bar_path)
     except Exception as e:
         logger.warning(f"Could not generate loading screen images: {e}")
+
+
+def _validate_game_output(output_dir: Path) -> dict:
+    errors = []
+    build_dir = output_dir / "build"
+
+    required_files = [
+        "index.html", "boot.js",
+        "story/Config.yaml", "story/Setup.yaml", "story/Story.yaml", "story/GUI.yaml",
+    ]
+    for f in required_files:
+        if not (build_dir / f).exists():
+            errors.append(f"Missing required file: {f}")
+
+    try:
+        import yaml
+        for yaml_file in ("story/Config.yaml", "story/Setup.yaml", "story/Story.yaml", "story/GUI.yaml"):
+            path = build_dir / yaml_file
+            if path.exists():
+                try:
+                    yaml.safe_load(path.read_text(encoding="utf-8"))
+                except Exception as e:
+                    errors.append(f"YAML parse error in {yaml_file}: {e}")
+
+        setup_path = build_dir / "story" / "Setup.yaml"
+        if setup_path.exists():
+            try:
+                setup = yaml.safe_load(setup_path.read_text(encoding="utf-8"))
+                if setup:
+                    for section_key, label in [("backgrounds", "background"), ("cgs", "CG"), ("music", "music")]:
+                        for asset_id, asset_path in (setup.get(section_key) or {}).items():
+                            if not (build_dir / asset_path).exists():
+                                errors.append(f"Missing {label} file: {asset_path} ({asset_id})")
+                    for char_id, char_data in (setup.get("characters") or {}).items():
+                        for expr, expr_path in (char_data.get("looks") or {}).items():
+                            if not (build_dir / expr_path).exists():
+                                errors.append(f"Missing character file: {expr_path} ({char_id}/{expr})")
+            except Exception:
+                pass
+    except ImportError:
+        errors.append("PyYAML not installed, skipping YAML validation")
+
+    if errors:
+        for err in errors[:10]:
+            logger.warning(f"    - {err}")
+        if len(errors) > 10:
+            logger.warning(f"    ... and {len(errors) - 10} more")
+
+    return {"errors": errors, "error_count": len(errors)}
 
 
 def _generate_package_json(plan: dict) -> dict:

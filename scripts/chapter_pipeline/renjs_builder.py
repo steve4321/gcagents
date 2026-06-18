@@ -22,76 +22,61 @@ def generate_gui_yaml(plan: dict) -> str:
     Uses Phaser's built-in default font ('Arial') so we don't need to
     ship font files. Coordinates are for 1024x768 canvas.
     """
-    return """# RenJS GUI.yaml — auto-generated, compatible with RenJS V2
+    return """# RenJS GUI.yaml — auto-generated
+madeWithRenJSBuilder: true
 name: default
 resolution:
   - 1024
   - 768
+assetsPath: 'assets/gui/'
+assets:
+  images:
+    start_btn:
+      fileName: start_btn.png
+  audio: {}
+  spritesheets: {}
+  fonts: {}
 assetCounter: 1
 config:
+  main:
+    background:
+      id: ch1_mainmenu
+    buttons:
+      - id: start_btn
+        x: 512
+        'y': 400
+        asset: start_btn
+        binding: start
   hud:
-    - id: default
-      type: choices
+    choice:
+      id: default
       x: 512
       'y': 400
-      alignment: centered
+      isBoxCentered: true
+      width: 500
       separation: 15
-      text:
-        style:
-          font: "Georgia, serif"
-          fontSize: 26px
-          fill: "#d4af37"
-          align: left
-          boundsAlignH: center
-          boundsAlignV: middle
-      hover:
-        fill: "#ffffff"
-    - id: default
-      type: messageBox
+      font: Georgia, serif
+      size: 26
+      color: "#d4af37"
+      chosen-color: "#ffffff"
+    message-box:
+      id: default
       x: 40
       'y': 530
-      width: 944
-      height: 200
-      backgroundColor: "rgba(0, 0, 0, 0.85)"
-      text:
-        x: 24
-        'y': 24
-        style:
-          font: "Georgia, serif"
-          fontSize: 22px
-          fill: "#ffffff"
-          align: left
-          wordWrap: true
-          wordWrapWidth: 896
-    - id: default
-      type: nameBox
+      font: Georgia, serif
+      size: 22
+      color: "#ffffff"
+      isTextCentered: false
+      wordWrap: true
+      wordWrapWidth: 896
+    name-box:
+      id: default
       x: 60
       'y': 490
-      text:
-        x: 0
-        'y': 0
-        style:
-          font: "Georgia, serif"
-          fontSize: 24px
-          fill: "#d4af37"
-          align: left
-          boundsAlignH: left
-          boundsAlignV: middle
-    - id: default
-      type: log
-      x: 512
-      'y': 100
-      width: 944
-      height: 400
-      backgroundColor: "rgba(0, 0, 0, 0.8)"
-      text:
-        style:
-          font: "Georgia, serif"
-          fontSize: 20px
-          fill: "#cccccc"
-          align: left
-          wordWrap: true
-          wordWrapWidth: 920
+      font: Georgia, serif
+      size: 24
+      color: "#d4af37"
+      isTextCentered: false
 """
 
 
@@ -160,12 +145,24 @@ gameMeta:
 """
 
 
-def generate_setup_yaml(plan: dict, assets_dir: str = "assets") -> str:
+def generate_setup_yaml(plan: dict, assets_dir: str = "assets", bible: dict | None = None) -> str:
     """Generate Setup.yaml from the production plan's art/audio manifest.
 
     Maps each planned asset to its file path in the game directory.
+    Also includes stats/variables section from the world bible so RenJS
+    can track player stats (Conscience, Prestige, etc.).
     """
     art = plan.get("art", {})
+
+    stats_lines = ["stats:"]
+    if bible and "stats" in bible:
+        for stat in bible.get("stats", []):
+            sname = stat.get("name", "unknown")
+            rng = stat.get("range", [0, 100])
+            stats_lines.append(f'  {sname}:')
+            stats_lines.append(f'    initial: {rng[0] if len(rng) > 0 else 0}')
+            stats_lines.append(f'    min: {rng[0] if len(rng) > 0 else 0}')
+            stats_lines.append(f'    max: {rng[1] if len(rng) > 1 else 100}')
 
     backgrounds_lines = ["backgrounds:"]
     for bg in art.get("backgrounds", []):
@@ -205,6 +202,8 @@ def generate_setup_yaml(plan: dict, assets_dir: str = "assets") -> str:
         sfx_lines.append(f'  {sfx["id"]}: {sfx["file_path"].replace("public/assets/", f"{assets_dir}/")}')
 
     sections = []
+    if len(stats_lines) > 1:
+        sections.append("\n".join(stats_lines))
     if len(backgrounds_lines) > 1:
         sections.append("\n".join(backgrounds_lines))
     if len(characters_lines) > 1:
@@ -379,6 +378,7 @@ const RenJSConfig = {{
   guiConfig: 'story/GUI.yaml',
   storyConfig: 'story/Config.yaml',
   storySetup: 'story/Setup.yaml',
+  storyAccessibility: 'story/storyAccessibility.txt',
   storyText: [
     'story/Story.yaml'
   ],

@@ -85,8 +85,8 @@ async def plan_mechanics(gdd: dict) -> list[dict]:
             past_lessons = "\n\nPast successful mechanic patterns for this genre:\n" + "\n".join(
                 f"- {l.get('summary', l.get('content', ''))[:200]}" for l in lessons
             )
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Failed to load past mechanic lessons: {e}")
 
     prompt = (
         "Analyze this Game Design Document and decompose it "

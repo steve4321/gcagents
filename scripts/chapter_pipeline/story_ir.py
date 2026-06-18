@@ -112,6 +112,7 @@ def build_ir_generation_prompt(
     )
     bg_ids = json.dumps(available_assets.get("backgrounds", []), ensure_ascii=False)
     cg_ids = json.dumps(available_assets.get("cgs", []), ensure_ascii=False)
+    music_ids = json.dumps(available_assets.get("music", []), ensure_ascii=False)
 
     return f"""You are writing Chapter {ch_id} of {total_chapters} of a Visual Novel in STORY IR format.
 
@@ -139,6 +140,7 @@ Backgrounds (use these EXACT IDs in "background" field):
 {bg_ids}
 CGs (use these EXACT IDs in show_cg events):
 {cg_ids}
+Music (use these EXACT IDs in play events): {music_ids}
 
 === STORY IR SCHEMA (return JSON, not YAML) ===
 {{
@@ -183,6 +185,9 @@ CRITICAL RULES:
 7. {('End the chapter with a jump to the first scene of the next chapter' if not is_last else 'End with 2-3 distinct endings based on stat values')}
 8. The first scene ID MUST be "ch<{ch_id}>_start"
 9. Output ONLY the JSON object, no markdown fences, no commentary
+10. Use ONLY music IDs from the available music list in play events. NEVER invent track names.
+11. Character expressions MUST be "neutral" only. NEVER use surprised, worried, happy, angry, sad, scared.
+12. For narrator text (no character), set speaker to "narrator" and expression to empty string "".
 
 Output the JSON starting with {{ and ending with }}"""
 
