@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import json
 import shutil
-import subprocess
 from pathlib import Path
 
 from loguru import logger
@@ -26,6 +25,21 @@ GRID_GENRES = {
 def is_grid_genre(genre: str) -> bool:
     lower = genre.lower().replace("_", "-").replace(" ", "-")
     return lower in GRID_GENRES or any(g in lower for g in GRID_GENRES)
+
+
+def _normalize_genre(genre: str) -> str:
+    return genre.lower().replace("_", "-").replace(" ", "-")
+
+
+def _get_template_dir(genre: str) -> Path | None:
+    if not genre:
+        return None
+    normalized = _normalize_genre(genre)
+    templates_root = Path(__file__).resolve().parents[3] / "game-templates"
+    candidate = templates_root / normalized
+    if (candidate / "src" / "main.ts").exists():
+        return candidate
+    return None
 
 
 _PROMPT_CACHE: dict[str, str] = {}
@@ -77,7 +91,7 @@ async def generate_game_code(
 
     project_dir.mkdir(parents=True, exist_ok=True)
 
-    _scaffold_project(project_dir, gdd)
+    template_used = _scaffold_project(project_dir, gdd)
 
     if art_assets_path:
         _copy_art_assets(art_assets_path, project_dir)
@@ -102,7 +116,11 @@ async def generate_game_code(
             logger.warning(f"VN post-gen verify failed: {vn_verify_err[:300]}")
     else:
         mechanics = gdd.get("mechanics")
-        if mechanics and not build_error:
+        if template_used and not build_error:
+            code_path = await _generate_from_template(
+                gdd, project_dir, config, model, max_tokens, art_assets_path
+            )
+        elif mechanics and not build_error:
             code_path = await _generate_by_mechanics(
                 gdd, project_dir, config, model, max_tokens, art_assets_path
             )
@@ -111,7 +129,7 @@ async def generate_game_code(
                 gdd, project_dir, config, model, max_tokens, build_error, art_assets_path
             )
 
-    build_err = _install_and_build(code_path)
+    build_err = await _install_and_build(code_path)
     self_verify_attempt = 0
     while build_err and self_verify_attempt < MAX_SELF_VERIFY_RETRIES:
         self_verify_attempt += 1
@@ -167,7 +185,7 @@ Fix the TypeScript/build errors. Return a JSON object with ONLY the files you mo
             await asyncio.to_thread(full_path.parent.mkdir, parents=True, exist_ok=True)
             await asyncio.to_thread(full_path.write_text, content, encoding='utf-8')
         logger.info(f"Self-verify fix #{self_verify_attempt}: {len(files)} files")
-        build_err = _install_and_build(code_path)
+        build_err = await _install_and_build(code_path)
 
     if build_err:
         logger.error(
@@ -231,7 +249,7 @@ Fix the runtime errors. Return a JSON object with ONLY the files you modified.""
             await asyncio.to_thread(full_path.parent.mkdir, parents=True, exist_ok=True)
             await asyncio.to_thread(full_path.write_text, content, encoding='utf-8')
 
-        build_err = _install_and_build(code_path)
+        build_err = await _install_and_build(code_path)
         if build_err:
             logger.warning(f"Runtime fix broke build: {build_err[:200]}")
             break
@@ -790,6 +808,272 @@ async def _get_past_lessons(genre: str) -> str:
         return ""
 
 
+_TEMPLATE_DATA_PREFIX = "src/game/data/"
+_TEMPLATE_DATA_SUFFIX = ".json"
+_MAX_DATA_GENERATION_ATTEMPTS = 2
+
+
+def _is_allowed_template_data_path(file_path: str) -> bool:
+    normalized = file_path.replace("\\", "/").lstrip("./")
+    return (
+        normalized.startswith(_TEMPLATE_DATA_PREFIX)
+        and normalized.endswith(_TEMPLATE_DATA_SUFFIX)
+    )
+
+
+def _derive_template_data_schema(
+    data_files: dict[str, str],
+) -> dict[str, dict]:
+    schema: dict[str, dict] = {}
+    for filename, content in data_files.items():
+        try:
+            data = json.loads(content)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(data, dict):
+            continue
+        file_schema: dict = {}
+        for key, value in data.items():
+            if isinstance(value, list) and value:
+                first = value[0]
+                if isinstance(first, dict):
+                    file_schema[key] = {
+                        "type": "array",
+                        "required": sorted(first.keys()),
+                    }
+                else:
+                    file_schema[key] = {"type": "array", "required": []}
+            elif isinstance(value, (int, float, str, bool)):
+                file_schema[key] = {"type": type(value).__name__}
+        schema[filename] = file_schema
+    return schema
+
+
+def _validate_template_data(
+    file_path: str,
+    content: str,
+    schema: dict[str, dict],
+) -> list[str]:
+    errors: list[str] = []
+    filename = Path(file_path).name
+
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError as e:
+        return [f"{filename}: invalid JSON — {e}"]
+
+    if not isinstance(data, dict):
+        return [f"{filename}: top-level must be an object"]
+
+    file_schema = schema.get(filename, {})
+    for key, expected in file_schema.items():
+        if key not in data:
+            errors.append(f"{filename}: missing top-level key '{key}'")
+            continue
+        actual = data[key]
+        if expected.get("type") == "array":
+            if not isinstance(actual, list):
+                errors.append(
+                    f"{filename}.{key}: must be array, got {type(actual).__name__}"
+                )
+                continue
+            if not actual:
+                errors.append(f"{filename}.{key}: array is empty")
+                continue
+            required = expected.get("required", [])
+            if required:
+                first_item = next(
+                    (i for i, item in enumerate(actual) if isinstance(item, dict)),
+                    None,
+                )
+                if first_item is not None:
+                    missing = [
+                        k for k in required if k not in actual[first_item]
+                    ]
+                    if missing:
+                        errors.append(
+                            f"{filename}.{key}[0]: missing fields "
+                            f"{', '.join(missing[:5])}"
+                        )
+    return errors
+
+
+async def _generate_from_template(
+    gdd: dict,
+    project_dir: Path,
+    config: AppConfig,
+    model: str,
+    max_tokens: int,
+    art_assets_path: str = "",
+) -> Path:
+    game_title = gdd.get("title", "game")
+    genre = gdd.get("genre", "arcade")
+
+    data_dir = project_dir / "src" / "game" / "data"
+    template_data_files: dict[str, str] = {}
+    if data_dir.exists():
+        for f in sorted(data_dir.glob("*.json")):
+            template_data_files[f.name] = f.read_text(encoding="utf-8")
+
+    if not template_data_files:
+        logger.warning(
+            "Template has no data JSON files — falling back to all-at-once"
+        )
+        return await _generate_all_at_once(
+            gdd, project_dir, config, model, max_tokens, "", art_assets_path
+        )
+
+    schema = _derive_template_data_schema(template_data_files)
+
+    art_instruction = ""
+    if art_assets_path:
+        art_instruction = (
+            f"\nArt assets available at: {art_assets_path}."
+            " Reference sprites with paths like 'assets/filename.png'."
+        )
+
+    theme = gdd.get("theme", "")
+    if not theme:
+        art_style = gdd.get("art_style", {})
+        if isinstance(art_style, dict):
+            theme = art_style.get("style", "")
+        elif isinstance(art_style, str):
+            theme = art_style
+
+    past_lessons = await _get_past_lessons(genre)
+
+    data_schema_block = "\n\n".join(
+        f"### {name}\n```json\n{content[:3000]}\n```"
+        for name, content in template_data_files.items()
+    )
+
+    cap_tokens = min(max_tokens, 8192)
+
+    base_prompt = f"""You are creating a NEW {genre} game variant using an existing golden template.
+
+The game engine code (.ts files) is ALREADY COMPLETE and MUST NOT be modified.
+You ONLY generate data JSON files in src/game/data/.
+
+Game: {game_title}
+Theme: {theme or "fantasy"}
+Core Loop: {json.dumps(gdd.get('core_loop', []))}
+Balance: {json.dumps(gdd.get('balance', {}))}
+Progression: {gdd.get('progression', '10 waves with increasing difficulty')}
+{art_instruction}
+
+STRICT RULES:
+1. Generate ONLY files in src/game/data/ (paths like "src/game/data/towers.json")
+2. Do NOT generate any .ts files, .html files, or config files
+3. Each JSON file must use the EXACT same top-level keys as the reference schema
+4. Every item in arrays must include ALL required fields from the schema
+5. Keep total response under 6000 tokens
+6. Return ONLY a JSON object mapping file paths to file contents
+
+Reference data schema (from the golden template):
+{data_schema_block}
+
+Create NEW themed data files with the SAME structure but different content:
+- Themed tower names, stats, and visual colors
+- Themed enemy names and stats
+- Themed wave compositions with increasing difficulty
+- Optionally a different path waypoint layout
+{past_lessons}
+
+Return ONLY a JSON object mapping file paths to file contents."""
+
+    data_files: dict[str, str] = {}
+    last_errors: list[str] = []
+
+    for attempt in range(_MAX_DATA_GENERATION_ATTEMPTS):
+        if attempt == 0:
+            prompt = base_prompt
+        else:
+            error_lines = "\n".join(f"- {e}" for e in last_errors[:5])
+            prompt = base_prompt + f"""
+
+PREVIOUS ATTEMPT FAILED VALIDATION:
+{error_lines}
+
+Fix ALL the issues above. Ensure every required field is present in every array item.
+Return ONLY a JSON object mapping file paths to corrected file contents."""
+
+        response = await llm.chat_completion(
+            model=model,
+            messages=[
+                {"role": "system", "content": PROGRAMMER_SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.4,
+            max_tokens=cap_tokens,
+            agent_name="programmer",
+            project_name=game_title,
+        )
+
+        files = _parse_code_files(response[0])
+
+        candidate: dict[str, str] = {}
+        rejected: list[str] = []
+        for file_path, content in files.items():
+            if not _validate_file_path(project_dir, file_path):
+                rejected.append(file_path)
+                continue
+            if not _is_allowed_template_data_path(file_path):
+                rejected.append(file_path)
+                continue
+            candidate[file_path] = content
+
+        if rejected:
+            logger.debug(
+                f"Template variant: rejected {len(rejected)} non-data files"
+            )
+
+        all_errors: list[str] = []
+        for file_path, content in candidate.items():
+            all_errors.extend(_validate_template_data(file_path, content, schema))
+
+        if not all_errors and candidate:
+            for file_path, content in candidate.items():
+                full_path = project_dir / file_path
+                await asyncio.to_thread(
+                    full_path.parent.mkdir, parents=True, exist_ok=True
+                )
+                await asyncio.to_thread(
+                    full_path.write_text, content, encoding="utf-8"
+                )
+                logger.debug(f"Template variant data: {file_path}")
+
+            logger.info(
+                f"Template-based generation: {len(candidate)} data files for {game_title} "
+                f"(attempt {attempt + 1}, {len(rejected)} non-data files rejected)"
+            )
+            return project_dir
+
+        last_errors = all_errors or [
+            "No data files generated — check prompt compliance"
+        ]
+        logger.warning(
+            f"Template variant validation failed (attempt {attempt + 1}/"
+            f"{_MAX_DATA_GENERATION_ATTEMPTS}): {len(all_errors)} issues — "
+            f"{last_errors[0]}"
+        )
+        data_files = candidate
+
+    logger.error(
+        f"Template variant validation failed after "
+        f"{_MAX_DATA_GENERATION_ATTEMPTS} attempts: {last_errors[:3]}"
+    )
+    for file_path, content in data_files.items():
+        full_path = project_dir / file_path
+        await asyncio.to_thread(
+            full_path.parent.mkdir, parents=True, exist_ok=True
+        )
+        await asyncio.to_thread(
+            full_path.write_text, content, encoding="utf-8"
+        )
+
+    return project_dir
+
+
 async def _generate_multi_round(
     gdd: dict,
     project_dir: Path,
@@ -1010,7 +1294,59 @@ def _summarize_files(files: dict[str, str], max_chars: int = 2000) -> str:
     return "\n".join(lines)
 
 
-def _scaffold_project(project_dir: Path, gdd: dict | None = None) -> None:
+def _scaffold_project(project_dir: Path, gdd: dict | None = None) -> bool:
+    genre = gdd.get("genre", "") if gdd else ""
+    template_dir = _get_template_dir(genre)
+    if template_dir:
+        _copy_template_project(template_dir, project_dir, gdd)
+        logger.info(f"Template scaffold: {template_dir.name} → {project_dir.name}")
+        return True
+
+    _scaffold_blank_project(project_dir, gdd)
+    return False
+
+
+_TEMPLATE_SKIP_DIRS = {"node_modules", "dist", ".git", "__pycache__"}
+_TEMPLATE_SKIP_FILES = {"package-lock.json", ".eslintrc.js"}
+
+
+def _copy_template_project(
+    template_dir: Path, project_dir: Path, gdd: dict | None
+) -> None:
+    skip_dirs = _TEMPLATE_SKIP_DIRS
+    skip_files = _TEMPLATE_SKIP_FILES
+
+    for item in template_dir.iterdir():
+        if item.name in skip_dirs or item.name in skip_files:
+            continue
+        dst = project_dir / item.name
+        if item.is_dir():
+            shutil.copytree(item, dst, dirs_exist_ok=True)
+        else:
+            shutil.copy2(item, dst)
+
+    pkg_path = project_dir / "package.json"
+    if pkg_path.exists():
+        pkg = json.loads(pkg_path.read_text())
+        pkg["name"] = project_dir.name
+        pkg_path.write_text(json.dumps(pkg, indent=2))
+
+    index_path = project_dir / "index.html"
+    if index_path.exists() and gdd:
+        import re
+
+        html = index_path.read_text()
+        game_title = gdd.get("title", "Game")
+        html = re.sub(
+            r"<title>[^<]*</title>", f"<title>{game_title}</title>", html
+        )
+        index_path.write_text(html)
+
+    public_dir = project_dir / "public"
+    public_dir.mkdir(exist_ok=True)
+
+
+def _scaffold_blank_project(project_dir: Path, gdd: dict | None = None) -> None:
     package_json = {
         "name": project_dir.name,
         "version": "1.0.0",
@@ -1130,31 +1466,10 @@ def _copy_art_assets(art_assets_path: str, project_dir: Path) -> None:
             logger.debug(f"Copied art asset: {f.name}")
 
 
-def _install_and_build(project_dir: Path) -> str:
-    """Run npm install + build. Returns empty string on success, error message on failure."""
-    try:
-        subprocess.run(
-            ["npm", "install"], cwd=str(project_dir), capture_output=True, timeout=120, check=True
-        )
-        logger.info("npm install completed")
-        result = subprocess.run(
-            ["npm", "run", "build"], cwd=str(project_dir), capture_output=True, timeout=120
-        )
-        if result.returncode != 0:
-            stderr = result.stderr.decode(errors="replace")[:500]
-            logger.warning(f"Build failed: {stderr}")
-            return f"npm build failed: {stderr}"
-        logger.info("Build succeeded")
-        return ""
-    except subprocess.CalledProcessError as e:
-        stderr = e.stderr.decode(errors="replace")[:500] if e.stderr else str(e)
-        return f"npm install failed: {stderr}"
-    except FileNotFoundError:
-        return "npm not found"
-    except Exception as e:
-        return f"Build error: {e}"
-    finally:
-        shutil.rmtree(project_dir / "node_modules", ignore_errors=True)
+async def _install_and_build(project_dir: Path) -> str:
+    from shared import npm_runner
+
+    return await npm_runner.install_and_build(project_dir)
 
 
 def _runtime_verify(project_dir: Path) -> str:
@@ -1640,7 +1955,7 @@ def _parse_code_files(text: str) -> dict[str, str]:
                 result[match.group(1)] = match.group(2)
             if result:
                 return result
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Regex-based code parse failed: {e}")
 
     raise ValueError(f"Failed to parse generated code files (text starts: {text[:200]})")

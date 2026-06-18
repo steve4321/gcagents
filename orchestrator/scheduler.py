@@ -7,6 +7,7 @@ one task from the queue, and generates periodic reports.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -17,6 +18,7 @@ from orchestrator.event_bus import emit
 from orchestrator.persistence import (
     count_completed_tasks,
     count_completed_tasks_by_type,
+    get_active_task_project_ids,
     get_all_projects,
     get_api_usage_summary,
     get_chat_history,
@@ -54,7 +56,7 @@ from orchestrator.task_queue import (
     update_progress,
 )
 from shared.constants import LAYER1_MAX_RETRIES, MAX_INSTRUCTIONS_PER_TICK, QA_CANCEL_THRESHOLD
-from shared.memory import get_memory_store
+from shared.memory import MemoryStore, get_memory_store
 from shared.models import DecisionPoint, ProjectPhase, ProjectState, TaskRecord
 
 _TICK_COUNT = 0
@@ -146,21 +148,15 @@ async def scheduler_tick() -> dict | None:
     policy = await get_company_policy()
     max_concurrent = policy.get("max_dev_projects", 3)
 
+    tasks_to_run = []
     for _ in range(max_concurrent):
-        task_result = await _execute_one_task()
-        if not task_result:
+        task = await dequeue()
+        if not task:
             break
-        await _apply_task_result(task_result)
-        task = task_result["task"]
-        pid = task.project_id
-        if pid != "__system__":
-            await memory.store_short_term(
-                "tick_result",
-                f"Phase: {task.task_type}, Status: {task_result['status']}",
-                pid,
-                tick_id=str(_TICK_COUNT),
-                importance=0.3,
-            )
+        tasks_to_run.append(task)
+
+    if tasks_to_run:
+        await asyncio.gather(*[_exec_and_apply(t, memory) for t in tasks_to_run])
 
     await _generate_reports()
 
@@ -353,7 +349,9 @@ async def _collect_and_route_feedback() -> None:
         result = await collect_feedback()
         collected = result.get("feedback_collected", 0)
         if collected > 0:
-            await emit("scheduler", f"Collected {collected} feedback items", source_agent="scheduler")
+            await emit(
+                "scheduler", f"Collected {collected} feedback items", source_agent="scheduler"
+            )
     except Exception as e:
         logger.warning(f"Feedback collection failed: {e}")
         return
@@ -521,11 +519,15 @@ async def _advance_projects() -> None:
 
     active = dev_projects + live_projects
 
+    active_pids_with_tasks = await get_active_task_project_ids()
+
     for project in active:
-        await _advance_project(project)
+        await _advance_project(project, active_pids_with_tasks)
 
 
-async def _advance_project(project: ProjectState) -> None:
+async def _advance_project(project: ProjectState, active_pids: set[str] | None = None) -> None:
+    if active_pids is None:
+        active_pids = set()
     phase = project.phase
     pid = project.id
 
@@ -550,26 +552,26 @@ async def _advance_project(project: ProjectState) -> None:
         )
 
     if phase == ProjectPhase.SCANNING:
-        if not await has_active_task(pid, "market_scan"):
+        if pid not in active_pids or not await has_active_task(pid, "market_scan"):
             await enqueue(pid, "market_scan", {"project_name": project.name})
 
     elif phase == ProjectPhase.DESIGNING:
-        if not await has_active_task(pid, "design_game"):
+        if pid not in active_pids or not await has_active_task(pid, "design_game"):
             await enqueue(
                 pid, "design_game", {"project_name": project.name, "genre": project.genre}
             )
 
     elif phase == ProjectPhase.DEVELOPING:
         if project.art_status != "done":
-            if not await has_active_task(pid, "art_gen"):
+            if pid not in active_pids or not await has_active_task(pid, "art_gen"):
                 await enqueue(pid, "art_gen", {"project_name": project.name, "gdd": project.gdd})
         elif project.music_status != "done":
-            if not await has_active_task(pid, "generate_music"):
+            if pid not in active_pids or not await has_active_task(pid, "generate_music"):
                 await enqueue(
                     pid, "generate_music", {"project_name": project.name, "gdd": project.gdd}
                 )
         else:
-            if not await has_active_task(pid, "develop"):
+            if pid not in active_pids or not await has_active_task(pid, "develop"):
                 params = {"project_name": project.name, "gdd": project.gdd}
                 if project.art_assets_path:
                     params["art_assets_path"] = project.art_assets_path
@@ -578,17 +580,17 @@ async def _advance_project(project: ProjectState) -> None:
                 await enqueue(pid, "develop", params)
 
     elif phase == ProjectPhase.TESTING:
-        if not await has_active_task(pid, "qa"):
+        if pid not in active_pids or not await has_active_task(pid, "qa"):
             await enqueue(pid, "qa", {"project_name": project.name, "code_path": project.code_path})
 
     elif phase == ProjectPhase.BUILDING:
-        if not await has_active_task(pid, "build"):
+        if pid not in active_pids or not await has_active_task(pid, "build"):
             await enqueue(
                 pid, "build", {"project_name": project.name, "code_path": project.code_path}
             )
 
     elif phase == ProjectPhase.PUBLISHING:
-        if not await has_active_task(pid, "deploy"):
+        if pid not in active_pids or not await has_active_task(pid, "deploy"):
             await update_project_phase(pid, "publishing")
             project = await get_project(pid)
             if project:
@@ -607,11 +609,13 @@ async def _advance_project(project: ProjectState) -> None:
 
 
 async def _execute_one_task() -> dict | None:
-    """Dequeue and execute one task with 3-layer error recovery."""
     task = await dequeue()
     if not task:
         return None
+    return await _execute_dequeued_task(task)
 
+
+async def _execute_dequeued_task(task: TaskRecord) -> dict | None:
     await update_progress(task.id, 0.0)
     task_type = task.task_type
     pid = task.project_id
@@ -666,6 +670,26 @@ async def _execute_one_task() -> dict | None:
         if recovery:
             return recovery
         return {"task": task, "error": error_msg, "status": "failed"}
+
+
+async def _exec_and_apply(task: TaskRecord, memory: MemoryStore) -> dict | None:
+    try:
+        result = await _execute_dequeued_task(task)
+        if result:
+            await _apply_task_result(result)
+            pid = task.project_id
+            if pid != "__system__":
+                await memory.store_short_term(
+                    "tick_result",
+                    f"Phase: {task.task_type}, Status: {result['status']}",
+                    pid,
+                    tick_id=str(_TICK_COUNT),
+                    importance=0.3,
+                )
+        return result
+    except Exception as e:
+        logger.error(f"Task execution error for {task.task_type}: {e}")
+        return None
 
 
 async def _handle_retry_recovery(task: TaskRecord, error_msg: str) -> dict | None:
@@ -833,9 +857,7 @@ async def _get_phase_ticks_batch(project_ids: list[str]) -> dict[str, dict[str, 
     """Single SQL: returns {project_id: {task_type: count}} for all projects."""
     from orchestrator.persistence import count_completed_tasks_batch
 
-    return _aggregate_phase_ticks(
-        await count_completed_tasks_batch(project_ids)
-    )
+    return _aggregate_phase_ticks(await count_completed_tasks_batch(project_ids))
 
 
 def _aggregate_phase_ticks(flat: dict[tuple[str, str], int]) -> dict[str, dict[str, int]]:

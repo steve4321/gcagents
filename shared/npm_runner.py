@@ -30,8 +30,8 @@ async def _run(cmd: list[str], cwd: Path, timeout: int) -> tuple[int, str, str]:
         proc.kill()
         try:
             await proc.communicate()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Process cleanup after kill failed: {e}")
         return -1, "", f"Command timed out after {timeout}s: {' '.join(cmd)}"
     return (
         proc.returncode if proc.returncode is not None else -1,

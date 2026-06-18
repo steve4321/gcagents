@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-import subprocess
+import asyncio
+import os
 from pathlib import Path
 
 from loguru import logger
@@ -44,21 +45,27 @@ class ItchAdapter(PlatformAdapter):
 
         try:
             env = {"BUTLER_API_KEY": config.butler_api_key}
-            result = subprocess.run(
-                [
-                    "butler",
-                    "push",
-                    str(dist),
-                    f"{config.butler_username}/{slug}:{channel}",
-                ],
-                env={**subprocess.os.environ, **env},
-                capture_output=True,
-                text=True,
-                timeout=300,
+            proc = await asyncio.create_subprocess_exec(
+                "butler",
+                "push",
+                str(dist),
+                f"{config.butler_username}/{slug}:{channel}",
+                env={**os.environ, **env},
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
             )
+            try:
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=300)
+            except TimeoutError:
+                proc.kill()
+                await proc.communicate()
+                logger.error("Deploy timed out")
+                return {"error": "Deploy timeout"}
 
-            if result.returncode != 0:
-                detail = (result.stderr or result.stdout or "").strip()[:500]
+            if proc.returncode != 0:
+                detail = (
+                    stderr.decode(errors="replace") or stdout.decode(errors="replace") or ""
+                ).strip()[:500]
                 logger.error(f"Deploy failed: {detail}")
                 return {"error": f"Deploy failed: {detail}"}
 
@@ -66,9 +73,6 @@ class ItchAdapter(PlatformAdapter):
             logger.info(f"Deployed to: {itch_url}")
             return {"platform": self.platform_name, "url": itch_url}
 
-        except subprocess.TimeoutExpired:
-            logger.error("Deploy timed out")
-            return {"error": "Deploy timeout"}
         except FileNotFoundError:
             logger.error("butler CLI not found - install from https://itchio.itch.io/butler")
             return {"error": "butler CLI not installed"}

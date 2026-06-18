@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 
 import httpx
@@ -27,6 +28,23 @@ Reply with a JSON object: {"category": "...", "reason": "...", "summary": "..."}
 Do not include markdown formatting. Pure JSON only.
 
 Comment: {text}"""
+
+_BATCH_CATEGORIZE_PROMPT = """You are categorizing game feedback from players.
+Classify EACH comment into exactly one category:
+- bug: Reports something not working, crash, glitch, or error
+- feature: Requests a new feature, enhancement, or improvement
+- praise: Expresses enjoyment, thanks, or positive sentiment
+- question: Asks a question about the game
+- other: Anything else
+
+For each comment, provide category, a brief reason, and a summary.
+
+Input: A JSON array of {id, text} objects.
+Output: A JSON array of {id, category, reason, summary} objects.
+Output ONLY the JSON array. No markdown, no explanation.
+
+Comments:
+{comments_json}"""
 
 
 def _parse_itch_comments(html: str, base_url: str) -> list[dict]:
@@ -93,6 +111,66 @@ async def _categorize_feedback(text: str, config, project_name: str = "") -> tup
         return "other", str(e), text[:200]
 
 
+async def _categorize_batch(
+    comments: list[dict], config, project_name: str = ""
+) -> dict[str, tuple[str, str, str]]:
+    if not comments:
+        return {}
+
+    if not config.minimax_api_key:
+        return {c["post_id"]: ("other", "no AI key", c["text"][:200]) for c in comments}
+
+    chunk_size = 20
+
+    async def process_chunk(chunk: list[dict]) -> dict[str, tuple[str, str, str]]:
+        input_data = [{"id": c["post_id"], "text": c["text"][:500]} for c in chunk]
+        comments_json = json.dumps(input_data, ensure_ascii=False)
+        try:
+            raw, _ = await llm.chat_completion(
+                model="MiniMax-M3",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": _BATCH_CATEGORIZE_PROMPT.format(comments_json=comments_json),
+                    }
+                ],
+                temperature=0.1,
+                max_tokens=4000,
+                agent_name="feedback_collector",
+                project_name=project_name,
+            )
+            raw = (
+                raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+            )
+            data = json.loads(raw)
+            results = {}
+            for item in data:
+                post_id = str(item.get("id", ""))
+                category = item.get("category", "other")
+                if category not in _FEEDBACK_CATEGORIES:
+                    category = "other"
+                results[post_id] = (
+                    category,
+                    item.get("reason", ""),
+                    item.get("summary", ""),
+                )
+            for c in chunk:
+                if c["post_id"] not in results:
+                    results[c["post_id"]] = ("other", "missing from response", c["text"][:200])
+            return results
+        except Exception as e:
+            logger.warning(f"Batch categorization failed: {e}")
+            return {c["post_id"]: ("other", str(e), c["text"][:200]) for c in chunk}
+
+    chunks = [comments[i : i + chunk_size] for i in range(0, len(comments), chunk_size)]
+    chunk_results = await asyncio.gather(*[process_chunk(ch) for ch in chunks])
+
+    result = {}
+    for chunk_result in chunk_results:
+        result.update(chunk_result)
+    return result
+
+
 async def collect_feedback() -> dict:
     config = load_config()
     projects = await get_live_projects()
@@ -119,9 +197,14 @@ async def collect_feedback() -> dict:
             comments = _parse_itch_comments(resp.text, itch_url)
             logger.info(f"Found {len(comments)} comments on {project['name']}")
 
+            if not comments:
+                continue
+
+            categorized = await _categorize_batch(comments, config, project_name=project["name"])
+
             for comment in comments:
-                category, reason, summary = await _categorize_feedback(
-                    comment["text"], config, project_name=project["name"]
+                category, reason, summary = categorized.get(
+                    comment["post_id"], ("other", "not categorized", comment["text"][:200])
                 )
                 saved = await save_feedback(
                     project_id=project_id,

@@ -1,7 +1,8 @@
 """Kanban-style persistent task board for parallel agent execution.
 
-SQLite-backed with atomic CAS claiming to prevent double-spend.
-Replaces FIFO queue with structured task states and dependency tracking.
+WARNING: This module is NOT wired into the scheduler. The active task
+management path uses orchestrator.task_queue + orchestrator.persistence.
+This module remains as a design artifact for future CAS-based scheduling.
 """
 
 from __future__ import annotations

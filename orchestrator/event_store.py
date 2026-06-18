@@ -105,8 +105,8 @@ class SqliteEventStore:
                     event.timestamp,
                 ),
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"domain_events append failed: {e}")
 
     async def append_batch(self, events: list[Event]) -> None:
         await asyncio.to_thread(self._append_batch_sync, events)

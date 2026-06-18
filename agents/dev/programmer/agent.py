@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import subprocess
+import asyncio
 from pathlib import Path
 
 from loguru import logger
@@ -11,37 +11,50 @@ from shared.config import load_config
 from .code_generator import generate_game_code
 
 
-def _git_init(project_dir: Path) -> None:
-    """Initialize a git repo in the project directory if not already one."""
+async def _run_cmd(cmd: list[str], cwd: Path, timeout: int) -> tuple[int, str, str]:
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        cwd=str(cwd),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except TimeoutError:
+        proc.kill()
+        await proc.communicate()
+        return -1, "", f"Command timed out: {' '.join(cmd)}"
+    return (
+        proc.returncode if proc.returncode is not None else -1,
+        stdout.decode(errors="replace"),
+        stderr.decode(errors="replace"),
+    )
+
+
+async def _git_init(project_dir: Path) -> None:
     if (project_dir / ".git").exists():
         return
-    subprocess.run(
-        ["git", "init"], cwd=str(project_dir), capture_output=True, timeout=10, check=True
+    rc, _, err = await _run_cmd(["git", "init"], project_dir, 10)
+    if rc != 0:
+        raise RuntimeError(f"git init failed: {err}")
+    rc, _, err = await _run_cmd(
+        ["git", "config", "user.email", "bot@gcagents.local"], project_dir, 5
     )
-    subprocess.run(
-        ["git", "config", "user.email", "bot@gcagents.local"],
-        cwd=str(project_dir),
-        capture_output=True,
-        timeout=5,
-    )
-    subprocess.run(
-        ["git", "config", "user.name", "GCAgents Bot"],
-        cwd=str(project_dir),
-        capture_output=True,
-        timeout=5,
-    )
+    if rc != 0:
+        raise RuntimeError(f"git config email failed: {err}")
+    rc, _, err = await _run_cmd(["git", "config", "user.name", "GCAgents Bot"], project_dir, 5)
+    if rc != 0:
+        raise RuntimeError(f"git config name failed: {err}")
     (project_dir / ".gitignore").write_text("node_modules/\ndist/\n*.log\n")
 
 
-def _git_commit(project_dir: Path, message: str) -> None:
-    """Stage all files and commit."""
-    subprocess.run(["git", "add", "-A"], cwd=str(project_dir), capture_output=True, timeout=30)
-    subprocess.run(
-        ["git", "commit", "--allow-empty", "-m", message],
-        cwd=str(project_dir),
-        capture_output=True,
-        timeout=30,
-    )
+async def _git_commit(project_dir: Path, message: str) -> None:
+    rc, _, err = await _run_cmd(["git", "add", "-A"], project_dir, 30)
+    if rc != 0:
+        raise RuntimeError(f"git add failed: {err}")
+    rc, _, err = await _run_cmd(["git", "commit", "--allow-empty", "-m", message], project_dir, 30)
+    if rc != 0:
+        raise RuntimeError(f"git commit failed: {err}")
 
 
 async def develop_game(state: CompanyState) -> dict:
@@ -53,11 +66,10 @@ async def develop_game(state: CompanyState) -> dict:
     config = load_config()
     project_id = state.current_project_id or "unknown"
 
-    # Use project_id as fixed directory name — no more timestamp-suffix sprawl
     project_dir = config.games_output_dir / project_id
 
     project_dir.mkdir(parents=True, exist_ok=True)
-    _git_init(project_dir)
+    await _git_init(project_dir)
 
     build_error = ""
     if state.errors:
@@ -77,16 +89,10 @@ async def develop_game(state: CompanyState) -> dict:
         art_assets_path=state.art_assets_path or "",
     )
 
-    _git_commit(project_dir, commit_msg)
+    await _git_commit(project_dir, commit_msg)
 
-    result = subprocess.run(
-        ["git", "rev-list", "--count", "HEAD"],
-        cwd=str(project_dir),
-        capture_output=True,
-        text=True,
-        timeout=10,
-    )
-    commit_count = int(result.stdout.strip()) if result.returncode == 0 else 1
+    rc, stdout, stderr = await _run_cmd(["git", "rev-list", "--count", "HEAD"], project_dir, 10)
+    commit_count = int(stdout.strip()) if rc == 0 else 1
 
     return {
         "phase": PipelinePhase.TESTING,
