@@ -169,6 +169,9 @@ class ProjectState(BaseModel):
     platform_urls: dict[str, str] = {}
     version: str = "0.0.0"
     awaiting_decision: str | None = None
+    content_version: int = 0
+    last_content_update: datetime | None = None
+    update_mode: str = ""
     created_at: datetime = datetime.now()
     updated_at: datetime = datetime.now()
 

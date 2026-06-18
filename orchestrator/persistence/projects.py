@@ -33,6 +33,9 @@ async def save_project(project: ProjectState) -> str:
                         qa_result=:qa_result, itch_url=:itch_url,
                         platform_urls=:platform_urls,
                         version=:version, awaiting_decision=:awaiting_decision,
+                        content_version=:content_version,
+                        last_content_update=:last_content_update,
+                        update_mode=:update_mode,
                         updated_at=:updated_at
                     WHERE id=:id
                 """),
@@ -55,6 +58,13 @@ async def save_project(project: ProjectState) -> str:
                     "platform_urls": json.dumps(project.platform_urls),
                     "version": project.version,
                     "awaiting_decision": project.awaiting_decision,
+                    "content_version": project.content_version,
+                    "last_content_update": (
+                        project.last_content_update.isoformat()
+                        if project.last_content_update
+                        else None
+                    ),
+                    "update_mode": project.update_mode,
                     "updated_at": now,
                 },
             )
@@ -62,13 +72,13 @@ async def save_project(project: ProjectState) -> str:
             await db.execute(
                 text("""
                     INSERT INTO projects (id, name, genre, phase, progress, proposal, gdd,
-                        code_path, art_assets_path, art_status, music_status, qa_result, itch_url,
-                        platform_urls, version,
-                        awaiting_decision, created_at, updated_at)
+                        code_path, art_assets_path, art_status, music_status, qa_result,
+                        itch_url, platform_urls, version, awaiting_decision, content_version,
+                        last_content_update, update_mode, created_at, updated_at)
                     VALUES (:id, :name, :genre, :phase, :progress, :proposal, :gdd,
-                        :code_path, :art_assets_path, :art_status, :music_status, :qa_result, :itch_url,
-                        :platform_urls, :version,
-                        :awaiting_decision, :created_at, :updated_at)
+                        :code_path, :art_assets_path, :art_status, :music_status, :qa_result,
+                        :itch_url, :platform_urls, :version, :awaiting_decision, :content_version,
+                        :last_content_update, :update_mode, :created_at, :updated_at)
                 """),
                 {
                     "id": project.id,
@@ -89,6 +99,13 @@ async def save_project(project: ProjectState) -> str:
                     "platform_urls": json.dumps(project.platform_urls),
                     "version": project.version,
                     "awaiting_decision": project.awaiting_decision,
+                    "content_version": project.content_version,
+                    "last_content_update": (
+                        project.last_content_update.isoformat()
+                        if project.last_content_update
+                        else None
+                    ),
+                    "update_mode": project.update_mode,
                     "created_at": now,
                     "updated_at": now,
                 },
@@ -229,6 +246,13 @@ def _row_to_project(d: dict) -> ProjectState:
         platform_urls=json.loads(d.get("platform_urls", "{}")) if d.get("platform_urls") else {},
         version=d.get("version", "0.0.0"),
         awaiting_decision=d.get("awaiting_decision"),
+        content_version=d.get("content_version", 0),
+        last_content_update=(
+            _parse_datetime(d.get("last_content_update"))
+            if d.get("last_content_update")
+            else None
+        ),
+        update_mode=d.get("update_mode", ""),
         created_at=_parse_datetime(d.get("created_at")),
         updated_at=_parse_datetime(d.get("updated_at")),
     )

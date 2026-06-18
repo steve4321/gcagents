@@ -96,6 +96,8 @@ async def ensure_tables():
                 changelog TEXT DEFAULT '',
                 feedback_ids TEXT DEFAULT '[]',
                 build_size INTEGER DEFAULT 0,
+                change_type TEXT DEFAULT 'full_gen',
+                affected_files TEXT DEFAULT '[]',
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
             )
         """)
@@ -187,6 +189,9 @@ async def ensure_tables():
                 itch_url TEXT,
                 version TEXT DEFAULT '0.0.0',
                 awaiting_decision TEXT,
+                content_version INTEGER DEFAULT 0,
+                last_content_update TEXT,
+                update_mode TEXT DEFAULT '',
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 updated_at TEXT NOT NULL DEFAULT (datetime('now'))
             )
@@ -338,6 +343,30 @@ async def ensure_tables():
         if "platform_urls" not in existing_cols:
             await db.execute(
                 text("ALTER TABLE projects ADD COLUMN platform_urls TEXT DEFAULT '{}'")
+            )
+        if "content_version" not in existing_cols:
+            await db.execute(
+                text("ALTER TABLE projects ADD COLUMN content_version INTEGER DEFAULT 0")
+            )
+        if "last_content_update" not in existing_cols:
+            await db.execute(
+                text("ALTER TABLE projects ADD COLUMN last_content_update TEXT")
+            )
+        if "update_mode" not in existing_cols:
+            await db.execute(
+                text("ALTER TABLE projects ADD COLUMN update_mode TEXT DEFAULT ''")
+            )
+
+        gv_cols = {
+            row[1] for row in (await db.execute(text("PRAGMA table_info(game_versions)"))).fetchall()
+        }
+        if "change_type" not in gv_cols:
+            await db.execute(
+                text("ALTER TABLE game_versions ADD COLUMN change_type TEXT DEFAULT 'full_gen'")
+            )
+        if "affected_files" not in gv_cols:
+            await db.execute(
+                text("ALTER TABLE game_versions ADD COLUMN affected_files TEXT DEFAULT '[]'")
             )
 
         policy_cols = {
