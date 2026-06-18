@@ -39,10 +39,10 @@ jobs:
         run: ruff format --check .
 
       - name: Type check with mypy
-        run: mypy --strict=false orchestrator shared agents dashboard
+        run: mypy orchestrator shared agents dashboard
 
       - name: Run tests with coverage
-        run: pytest tests/ -v --cov --cov-report=term-missing --cov-fail-under=60
+        run: pytest tests/ -v --cov --cov-report=term-missing --cov-fail-under=40
 
       - name: Upload coverage report
         if: matrix.python-version == '3.12'

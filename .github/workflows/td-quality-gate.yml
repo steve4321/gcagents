@@ -1,0 +1,66 @@
+# TD Quality Gate Workflow
+# Runs the full TD pipeline integration test on every push/PR to master/main.
+# This validates: golden template builds, quality gate passes, end-to-end metrics work.
+
+name: TD Quality Gate
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+  workflow_dispatch:
+
+jobs:
+  td-quality-gate:
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install Python dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Playwright browsers
+        run: python3 -m playwright install chromium --with-deps
+
+      - name: Build golden template
+        working-directory: game-templates/tower-defense
+        run: |
+          npm install
+          npm run build
+
+      - name: Run quality gate unit tests
+        run: |
+          pytest tests/test_quality_gate.py tests/test_template_generation.py -v
+
+      - name: Run TD end-to-end integration tests
+        run: |
+          pytest tests/integration/test_td_e2e_pipeline.py -v
+
+      - name: Run batch production test
+        run: |
+          python3 scripts/batch_test_td_generation.py
+
+      - name: Upload test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: td-quality-gate-logs
+          path: |
+            data/production_metrics.json
+            .pytest_cache/v/cache/
