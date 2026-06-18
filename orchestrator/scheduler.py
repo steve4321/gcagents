@@ -117,7 +117,41 @@ TASK_NODE_MAP = {
     "build": "build",
     "localize": "build",
     "deploy": "deploy",
+    "content_update": "develop",
 }
+
+_GENRE_UPDATE_INTERVALS: dict[str, int] = {
+    "visual-novel": 7,
+    "tower-defense": 30,
+    "puzzle": 21,
+    "puzzle-match": 21,
+    "platformer": 21,
+    "runner": 21,
+    "shooter": 21,
+    "card-game": 14,
+    "idle-clicker": 14,
+    "arcade": 21,
+}
+
+_DEFAULT_UPDATE_INTERVAL = 14
+
+
+def _get_update_interval(genre: str) -> int:
+    normalized = genre.lower().replace("_", "-").replace(" ", "-")
+    return _GENRE_UPDATE_INTERVALS.get(normalized, _DEFAULT_UPDATE_INTERVAL)
+
+
+def _should_trigger_update(last_update: str | None, interval_days: int) -> bool:
+    if not last_update:
+        return True
+    try:
+        last_dt = datetime.fromisoformat(last_update)
+        if last_dt.tzinfo is None:
+            last_dt = last_dt.replace(tzinfo=UTC)
+        elapsed = (datetime.now(UTC) - last_dt).days
+        return elapsed >= interval_days
+    except (ValueError, TypeError):
+        return True
 
 
 async def scheduler_tick() -> dict | None:
@@ -607,6 +641,26 @@ async def _advance_project(project: ProjectState, active_pids: set[str] | None =
                 agent_name="ceo",
             )
 
+    elif phase == ProjectPhase.LIVE:
+        last_update = project.last_content_update
+        last_update_str = last_update.isoformat() if last_update else None
+        interval_days = _get_update_interval(project.genre)
+        if _should_trigger_update(last_update_str, interval_days):
+            if pid not in active_pids or not await has_active_task(pid, "content_update"):
+                logger.info(
+                    f"Scheduler: triggering content update for {project.name} "
+                    f"(interval={interval_days}d)"
+                )
+                await enqueue(
+                    pid,
+                    "content_update",
+                    {
+                        "project_name": project.name,
+                        "mode": "content_update",
+                        "genre": project.genre,
+                    },
+                )
+
 
 async def _execute_one_task() -> dict | None:
     task = await dequeue()
@@ -881,6 +935,7 @@ async def _run_agent(task_type: str, project_id: str, params: dict) -> dict:
         game_code_path=params.get("code_path") or (project.code_path if project else None),
         build_path=params.get("build_path")
         or (str(Path(project.code_path) / "dist") if project and project.code_path else None),
+        mode=params.get("mode", ""),
     )
 
     if params.get("last_qa_failure"):
@@ -929,6 +984,38 @@ async def _run_agent(task_type: str, project_id: str, params: dict) -> dict:
         from agents.dev.music.music_generator import generate_music
 
         return await generate_music(state)
+
+    elif task_type == "content_update":
+        from agents.dev.designer.gdd_generator import generate_content_expansion
+        from shared.config import load_config
+        from shared.content_summary import extract_content_summary
+
+        if not project:
+            return {"phase": PipelinePhase.IDLE, "errors": ["Project not found"]}
+
+        existing_gdd = project.gdd or {}
+        code_path = project.code_path
+
+        content_summary: dict[str, list[str]] = {}
+        if code_path:
+            content_summary = extract_content_summary(Path(code_path))
+
+        config = load_config()
+        expansion = await generate_content_expansion(
+            existing_gdd,
+            content_summary,
+            config,
+        )
+
+        existing_gdd["_content_expansion"] = expansion
+        project.gdd = existing_gdd
+        await save_project(project)
+
+        from agents.dev.programmer.agent import develop_game
+
+        state.mode = params.get("mode", "content_update")
+        state.gdd = existing_gdd
+        return await develop_game(state)
 
     elif task_type in ("develop", "develop_simple"):
         from agents.dev.programmer.agent import develop_game
@@ -1078,7 +1165,7 @@ async def _apply_task_result(task_result: dict) -> None:
         music_status = result.get("music_status", "done")
         await update_project_music_status(pid, music_status)
 
-    elif effective_type == "develop":
+    elif effective_type in ("develop", "content_update"):
         code_path = result.get("game_code_path")
         version = result.get("version", "0.1.0")
         if code_path:
@@ -1091,6 +1178,21 @@ async def _apply_task_result(task_result: dict) -> None:
             if not project or not project.code_path
             else "Code regenerated after QA feedback",
         )
+
+        if task_type == "content_update" or task.params.get("mode") == "content_update":
+            if code_path:
+                project.code_path = code_path
+            project.content_version = (project.content_version or 0) + 1
+            project.last_content_update = datetime.now(UTC)
+            project.update_mode = "content_update"
+            await save_project(project)
+            await emit(
+                "scheduler",
+                f"Content update v{project.content_version} for {project.name}",
+                source_agent="scheduler",
+                project_name=project.name,
+            )
+
         await update_project_phase(pid, "testing")
 
     elif effective_type == "qa":

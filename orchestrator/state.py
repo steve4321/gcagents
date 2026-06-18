@@ -37,3 +37,4 @@ class CompanyState(BaseModel):
     retry_count: int = 0
     retry_feedback: dict | None = None
     project_ids: list[str] = []
+    mode: str = ""

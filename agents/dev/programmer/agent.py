@@ -79,6 +79,7 @@ async def develop_game(state: CompanyState) -> dict:
             build_error = str(state.errors)
 
     is_retry = bool(build_error) or bool(state.retry_feedback)
+    is_update = state.mode in ("update", "content_update")
     commit_msg = "fix: retry build after error" if is_retry else "feat: initial code generation"
 
     code_path = await generate_game_code(
@@ -87,6 +88,7 @@ async def develop_game(state: CompanyState) -> dict:
         config,
         build_error=build_error,
         art_assets_path=state.art_assets_path or "",
+        incremental=is_update,
     )
 
     await _git_commit(project_dir, commit_msg)

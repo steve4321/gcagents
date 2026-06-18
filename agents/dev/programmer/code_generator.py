@@ -86,12 +86,13 @@ async def generate_game_code(
     config: AppConfig,
     build_error: str = "",
     art_assets_path: str = "",
+    incremental: bool = False,
 ) -> Path:
     logger.info(f"Generating Phaser 4 game code for: {gdd.get('title', 'unknown')}")
 
     project_dir.mkdir(parents=True, exist_ok=True)
 
-    template_used = _scaffold_project(project_dir, gdd)
+    template_used = _scaffold_project(project_dir, gdd, skip_if_exists=incremental)
 
     if art_assets_path:
         _copy_art_assets(art_assets_path, project_dir)
@@ -117,8 +118,21 @@ async def generate_game_code(
     else:
         mechanics = gdd.get("mechanics")
         if template_used and not build_error:
+            content_expansion = gdd.get("_content_expansion") if incremental else None
+            target_files = (
+                list(content_expansion.get("target_files", []))
+                if content_expansion
+                else None
+            )
             code_path = await _generate_from_template(
-                gdd, project_dir, config, model, max_tokens, art_assets_path
+                gdd,
+                project_dir,
+                config,
+                model,
+                max_tokens,
+                art_assets_path,
+                content_expansion=content_expansion,
+                target_files=target_files,
             )
         elif mechanics and not build_error:
             code_path = await _generate_by_mechanics(
@@ -898,6 +912,48 @@ def _validate_template_data(
     return errors
 
 
+def _extract_entry_ids(data: dict) -> set[str]:
+    ids: set[str] = set()
+    for _key, value in data.items():
+        if isinstance(value, list):
+            for item in value:
+                if isinstance(item, dict) and "id" in item:
+                    ids.add(str(item["id"]))
+        elif isinstance(value, dict):
+            for _k2, v2 in value.items():
+                if isinstance(v2, list):
+                    for item in v2:
+                        if isinstance(item, dict) and "id" in item:
+                            ids.add(str(item["id"]))
+    return ids
+
+
+def _validate_incremental_merge(
+    old_files: dict[str, str],
+    new_files: dict[str, str],
+) -> list[str]:
+    errors: list[str] = []
+    for fname, old_content in old_files.items():
+        if fname not in new_files:
+            continue
+        try:
+            old_data = json.loads(old_content)
+            new_data = json.loads(new_files[fname])
+        except (json.JSONDecodeError, KeyError):
+            errors.append(f"{fname}: JSON parse error during merge validation")
+            continue
+
+        old_ids = _extract_entry_ids(old_data)
+        new_ids = _extract_entry_ids(new_data)
+        missing = old_ids - new_ids
+        if missing:
+            errors.append(
+                f"{fname}: {len(missing)} existing entries missing from update: "
+                f"{sorted(missing)[:5]}"
+            )
+    return errors
+
+
 async def _generate_from_template(
     gdd: dict,
     project_dir: Path,
@@ -905,6 +961,8 @@ async def _generate_from_template(
     model: str,
     max_tokens: int,
     art_assets_path: str = "",
+    content_expansion: dict | None = None,
+    target_files: list[str] | None = None,
 ) -> Path:
     game_title = gdd.get("title", "game")
     genre = gdd.get("genre", "arcade")
@@ -924,6 +982,11 @@ async def _generate_from_template(
         )
 
     schema = _derive_template_data_schema(template_data_files)
+
+    is_incremental = content_expansion is not None and target_files is not None
+    target_names: set[str] = set()
+    if is_incremental:
+        target_names = {Path(t).name for t in target_files}
 
     art_instruction = ""
     if art_assets_path:
@@ -981,15 +1044,41 @@ Create NEW themed data files with the SAME structure but different content:
 
 Return ONLY a JSON object mapping file paths to file contents."""
 
+    if is_incremental:
+        incremental_prompt = f"""You are ADDING new content to an EXISTING {genre} game.
+
+The game engine code (.ts files) is ALREADY COMPLETE and MUST NOT be modified.
+You ONLY generate data JSON files in src/game/data/.
+
+EXISTING data files (DO NOT remove or modify existing entries):
+{data_schema_block}
+
+NEW CONTENT TO ADD:
+{json.dumps(content_expansion, indent=2, ensure_ascii=False)}
+
+Generate COMPLETE data files for ONLY these files: {target_files}
+Each file must contain BOTH existing entries AND new entries merged together.
+
+STRICT RULES:
+1. PRESERVE all existing entries exactly as they are (same IDs, same stats)
+2. Add new entries with unique IDs that do NOT collide with existing ones
+3. Use the EXACT same JSON structure as the reference schema
+4. Do NOT generate files that are not in the target list
+5. Return ONLY a JSON object mapping file paths to file contents
+"""
+        active_prompt = incremental_prompt
+    else:
+        active_prompt = base_prompt
+
     data_files: dict[str, str] = {}
     last_errors: list[str] = []
 
     for attempt in range(_MAX_DATA_GENERATION_ATTEMPTS):
         if attempt == 0:
-            prompt = base_prompt
+            prompt = active_prompt
         else:
             error_lines = "\n".join(f"- {e}" for e in last_errors[:5])
-            prompt = base_prompt + f"""
+            prompt = active_prompt + f"""
 
 PREVIOUS ATTEMPT FAILED VALIDATION:
 {error_lines}
@@ -1020,6 +1109,9 @@ Return ONLY a JSON object mapping file paths to corrected file contents."""
             if not _is_allowed_template_data_path(file_path):
                 rejected.append(file_path)
                 continue
+            if is_incremental and Path(file_path).name not in target_names:
+                rejected.append(file_path)
+                continue
             candidate[file_path] = content
 
         if rejected:
@@ -1030,6 +1122,14 @@ Return ONLY a JSON object mapping file paths to corrected file contents."""
         all_errors: list[str] = []
         for file_path, content in candidate.items():
             all_errors.extend(_validate_template_data(file_path, content, schema))
+
+        if is_incremental and not all_errors:
+            candidate_by_name = {
+                Path(fp).name: content for fp, content in candidate.items()
+            }
+            all_errors.extend(
+                _validate_incremental_merge(template_data_files, candidate_by_name)
+            )
 
         if not all_errors and candidate:
             for file_path, content in candidate.items():
@@ -1294,7 +1394,15 @@ def _summarize_files(files: dict[str, str], max_chars: int = 2000) -> str:
     return "\n".join(lines)
 
 
-def _scaffold_project(project_dir: Path, gdd: dict | None = None) -> bool:
+def _scaffold_project(
+    project_dir: Path, gdd: dict | None = None, *, skip_if_exists: bool = False
+) -> bool:
+    if skip_if_exists and (project_dir / "src").exists():
+        existing_ts = list((project_dir / "src").rglob("*.ts"))
+        if existing_ts:
+            logger.info(f"Scaffold skipped: {len(existing_ts)} existing .ts files preserved")
+            return True
+
     genre = gdd.get("genre", "") if gdd else ""
     template_dir = _get_template_dir(genre)
     if template_dir:
