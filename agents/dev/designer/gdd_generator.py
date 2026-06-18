@@ -289,6 +289,119 @@ CRITICAL: Return ONLY the raw JSON object. No markdown, no explanation, no pream
     return gdd
 
 
+CONTENT_EXPANSION_PROMPT = """You are a game designer adding new content to an EXISTING game.
+
+You will receive:
+1. The existing game's GDD summary
+2. The existing content inventory (what towers/enemies/waves/items already exist)
+3. Optional player feedback hints
+
+Your job: design NEW content that fits seamlessly with the existing game.
+
+Return a JSON object with this structure:
+{
+  "rationale": "Why this content was chosen (1-2 sentences)",
+  "target_files": ["towers.json", "enemies.json"],
+  "new_content": {
+    "towers.json": {
+      "add_entries": [
+        {
+          "id": "laser_tower",
+          "name": "Laser Tower",
+          "damage": 25,
+          "range": 150,
+          "cost": 120,
+          "fire_rate": 2.0,
+          "description": "Continuous beam damage"
+        }
+      ]
+    },
+    "enemies.json": {
+      "add_entries": [
+        {
+          "id": "fast_scout",
+          "name": "Fast Scout",
+          "hp": 30,
+          "speed": 200,
+          "armor": 0,
+          "reward": 5
+        }
+      ]
+    }
+  },
+  "balance_notes": "Laser tower is high-DPS but expensive. Fast scout counters slow-firing towers."
+}
+
+RULES:
+1. Use the EXACT same field names and structure as existing entries (study the inventory carefully)
+2. All new IDs must be UNIQUE — do not reuse any existing ID
+3. Design content that is BALANCED with existing content (similar power level)
+4. Add 2-5 new entries per file — enough to be meaningful but not overwhelming
+5. Consider player feedback hints if provided
+6. Choose target_files wisely — only include files that benefit from new content
+
+Return ONLY the JSON object, no other text."""
+
+
+async def generate_content_expansion(
+    existing_gdd: dict,
+    existing_content_summary: dict[str, list[str]],
+    config: AppConfig,
+    feedback_hints: list[str] | None = None,
+) -> dict:
+    genre = existing_gdd.get("genre", "unknown")
+    title = existing_gdd.get("title", "Game")
+    summary = existing_gdd.get("summary", "")
+    balance = json.dumps(existing_gdd.get("balance", {}))
+
+    inventory_block = "\n".join(
+        f"- {fname}: {', '.join(ids)}" for fname, ids in existing_content_summary.items()
+    )
+
+    feedback_block = ""
+    if feedback_hints:
+        feedback_block = "\n\nPlayer feedback:\n" + "\n".join(f"- {h}" for h in feedback_hints)
+
+    user_prompt = f"""Add new content to this existing game:
+
+Title: {title}
+Genre: {genre}
+Summary: {summary}
+Balance: {balance}
+
+EXISTING CONTENT INVENTORY:
+{inventory_block}
+{feedback_block}
+
+Design new content that complements the existing game. Return the JSON expansion spec."""
+
+    logger.info(f"Generating content expansion for: {title} ({genre})")
+
+    text, _usage = await llm.chat_completion(
+        model=DEFAULT_ANALYSIS_MODEL,
+        messages=[
+            {"role": "system", "content": CONTENT_EXPANSION_PROMPT},
+            {"role": "user", "content": user_prompt},
+        ],
+        temperature=0.7,
+        max_tokens=8000,
+        agent_name="designer",
+        project_name=title,
+    )
+    result = _parse_gdd(text)
+
+    new_content = result.get("new_content", {})
+    for fname, spec in new_content.items():
+        entries = spec.get("add_entries", []) if isinstance(spec, dict) else []
+        logger.info(f"  {fname}: +{len(entries)} new entries")
+    logger.info(
+        f"Content expansion done: {len(new_content)} files, "
+        f"rationale={result.get('rationale', '')[:80]}"
+    )
+
+    return result
+
+
 def _parse_gdd(text: str) -> dict:
     text = text.strip()
 
