@@ -1,265 +1,279 @@
 {
   "title": "Capital Revolt",
-  "genre": "visual-novel",
-  "summary": "In 资本崩塌 (Capital Revolt), you are a low-level programmer at a 996 tech giant who uncovers evidence of illegal user data theft. Navigate a web of corruption, labor exploitation, and moral compromise as you choose between four distinct paths: union leader, hacker, journalist, or idealist entrepreneur. Your decisions affect five core stats – morality, economy, social influence, mental health, and technical ability – leading to over eight unique endings ranging from becoming the new capitalist to sparking a genuine collective awakening.",
+  "genre": "visual_novel",
+  "summary": "A anti-capitalist visual novel where you, a programmer at a 996 tech company, discover evidence of illegal user data theft. Navigate a web of choices affecting your prestige, conscience, financial status, social influence, and technical skill. Choose from four distinct rebellion paths: union leader, hacker, journalist, or idealistic entrepreneur. Face the power of capital and strive for collective awakening.",
   "core_loop": [
-    "Read dialogue and narrative exposition",
-    "Make a choice from 2-4 options",
-    "Observe stat changes and branching consequences",
-    "Progress through common and route-specific chapters",
-    "Reach an ending based on accumulated stats and flags"
+    "Read narrative scene",
+    "Make a choice from available options",
+    "Observe stat changes and story progression",
+    "Repeat until route diverges",
+    "Reach an ending based on accumulated stats"
   ],
   "mechanics": [
     {
-      "name": "Choice_Resolution",
-      "description": "Player selects a dialogue option; the choice modifies stats, unlocks routes, and advances the narrative.",
+      "name": "Choice_Branching",
+      "description": "Presents the player with multiple choices that alter the story path, stat values, and unlock future routes.",
       "inputs": [
         "mouse_click",
         "keyboard_enter"
       ],
       "outputs": [
-        "updated_stat_values",
-        "dialogue_transition"
+        "next_scene_id",
+        "stat_delta_object"
       ],
       "constraints": [
-        "each_choice_has_up_to_4_options",
-        "no_undo_after_selection"
+        "choices_must_be_mutually_exclusive",
+        "locked_choices_not_visible"
       ],
       "dependencies": [],
       "implementation_order": 0,
-      "complexity": "medium"
-    },
-    {
-      "name": "Stat_Branching",
-      "description": "Stats are tracked across the game; threshold checks at key scenes unlock or lock certain paths and endings.",
-      "inputs": [
-        "stat_values",
-        "game_flags"
-      ],
-      "outputs": [
-        "unlocked_routes",
-        "ending_eligibility"
-      ],
-      "constraints": [
-        "stats_range_0_100",
-        "decay_over_chapters"
-      ],
-      "dependencies": [
-        "Choice_Resolution"
-      ],
-      "implementation_order": 1,
       "complexity": "high"
     },
     {
-      "name": "Route_Selection",
-      "description": "Players commit to a character route after the common chapters; each route has its own story arc and ending conditions.",
+      "name": "Stat_Tracking",
+      "description": "Tracks five core stats (Prestige, Conscience, Money, Social Influence, Tech Ability) ranging 0–100, updated by choices and events.",
       "inputs": [
-        "stat_threshold_checks",
-        "player_choice"
+        "choice_result_event",
+        "game_tick"
       ],
       "outputs": [
-        "route_locked",
-        "route_specific_dialogue"
+        "hud_update",
+        "route_unlock_flag",
+        "ending_condition_check"
       ],
       "constraints": [
-        "can_only_commit_once",
-        "route_unlocks_persist"
+        "stats_capped_0_100",
+        "stat_decay_per_chapter_2_points_prestige_and_money_only"
       ],
       "dependencies": [
-        "Stat_Branching",
-        "Choice_Resolution"
+        "Choice_Branching"
       ],
-      "implementation_order": 2,
+      "implementation_order": 1,
       "complexity": "medium"
     },
     {
-      "name": "Relationship_Tracking",
-      "description": "Each major NPC has an affinity value that influences available dialogue and endings.",
+      "name": "Route_Unlock",
+      "description": "Determines which character route becomes accessible based on stat thresholds and previous major choices.",
       "inputs": [
-        "player_choices",
-        "npc_dialogue_flags"
+        "stat_values",
+        "completed_chapter_id"
       ],
       "outputs": [
-        "affinity_update",
-        "new_scene_unlock"
+        "available_route_list",
+        "route_locked_dialogue"
       ],
       "constraints": [
-        "affinity_range_-50_100",
-        "cumulative_over_routes"
+        "only_one_route_active_per_playthrough",
+        "minimum_stat_requirements_for_each_route"
       ],
       "dependencies": [
-        "Choice_Resolution"
+        "Stat_Tracking"
+      ],
+      "implementation_order": 2,
+      "complexity": "high"
+    },
+    {
+      "name": "Ending_Determination",
+      "description": "Evaluates final stats and chosen route at the end of the game to assign one of multiple endings.",
+      "inputs": [
+        "route_id",
+        "final_stat_values"
+      ],
+      "outputs": [
+        "ending_id",
+        "cg_unlock_flag",
+        "epilogue_scene_id"
+      ],
+      "constraints": [
+        "exactly_one_ending_assigned",
+        "conditions_must_be_unique"
+      ],
+      "dependencies": [
+        "Route_Unlock",
+        "Stat_Tracking"
       ],
       "implementation_order": 3,
       "complexity": "medium"
     },
     {
-      "name": "Ending_Calculation",
-      "description": "At the end of each route, final stats and flags are evaluated to determine which of the 8+ endings is triggered.",
+      "name": "Scene_Management_And_Save",
+      "description": "Manages scene transitions, dialogue history, and save/load functionality across multiple slots.",
       "inputs": [
-        "final_stat_values",
-        "route_played",
-        "achieved_flags"
+        "scene_complete_event",
+        "user_save_input",
+        "user_load_input"
       ],
       "outputs": [
-        "ending_scene_key",
-        "epilogue"
+        "next_scene_data",
+        "save_state_persisted",
+        "loaded_state"
       ],
       "constraints": [
-        "exactly_one_ending_per_playthrough",
-        "ends_game"
+        "max_save_slots_3",
+        "autosave_on_route_divergence"
       ],
       "dependencies": [
-        "Stat_Branching",
-        "Route_Selection",
-        "Relationship_Tracking"
+        "Choice_Branching"
       ],
       "implementation_order": 4,
-      "complexity": "high"
+      "complexity": "medium"
     }
   ],
-  "progression": "The game is divided into a common route (6 chapters) where the player establishes relationships and core stats, followed by a route selection. Each character route has 4 chapters, culminating in a final evaluation that triggers one of the endings. New game+ carries over minor bonuses (e.g., starting stat boosts).",
-  "win_condition": "The game is complete when any ending is reached. Replayability comes from discovering all endings and routes. The 'true' ending (collective awakening) requires specific stat thresholds and flags across all routes.",
+  "progression": "Player starts with a common prologue chapter. After meeting key NPCs, a critical choice determines which route to follow. Each route consists of three chapters with escalating stakes. Final chapter leads to an ending based on accumulated stats.",
+  "win_condition": "Reach any of the 8 endings by completing the story. Full completion (all endings unlocked) is the long-term goal.",
   "monetization": {
     "model": "free_to_play",
     "ad_placement": [
-      "none",
-      "none"
+      "interstitial_between_chapters",
+      "rewarded_video_for_extra_save_slot"
     ],
     "iap_tiers": [
       {
         "name": "supporter_pack",
-        "price_usd": 2.99,
-        "contents": "digital artbook + soundtrack + developer diary"
+        "price_usd": 1.99,
+        "contents": "Unlock concept art gallery and developer commentary"
+      },
+      {
+        "name": "collector_edition",
+        "price_usd": 4.99,
+        "contents": "All endings unlocked, digital soundtrack, and exclusive wallpapers"
       }
     ],
     "retention_hooks": [
-      "multiple_endings",
-      "stat_tracking_and_history",
-      "new_game_plus_bonus"
+      "achievement_system",
+      "ending_collection_gallery"
     ],
     "engagement_mechanics": [
-      "route_selection",
-      "achievement_system",
-      "social_sharing_of_ending_screenshots"
+      "social_sharing_of_ending_results",
+      "stat_display_comparison_with_friends"
     ]
   },
   "art_style": {
-    "theme": "anime-inspired digital art with a gritty, cyberpunk undertone",
+    "theme": "semi-realistic anime with desaturated tones, red/black accents",
     "color_palette": [
-      "#1a1a2e",
-      "#16213e",
-      "#0f3460",
-      "#e94560"
+      "#1a1a1a",
+      "#c0392b",
+      "#ecf0f1",
+      "#2c3e50"
     ],
-    "reference": "Doki Doki Literature Club meets Disco Elysium's muted palette; character portraits have distinct expressions."
+    "reference": "Visual style inspired by Doki Doki Literature Club character art but with a grungy, corporate cyberpunk texture."
   },
   "audio": {
-    "bgm_mood": "atmospheric, melancholic but hopeful",
+    "bgm_mood": "moody and tense, shifting to hopeful rebellion",
     "sfx_list": [
       "click",
+      "choice_made",
       "page_turn",
-      "stat_change_chime",
-      "notification",
-      "ending_jingle"
+      "stat_change",
+      "route_reveal",
+      "ending_fanfare"
     ]
   },
   "scenes": [
     {
       "name": "Boot",
-      "description": "Loads assets, displays logo, shows loading bar"
+      "description": "Loading screen with logo and asset initialization"
     },
     {
-      "name": "Menu",
-      "description": "Main menu with New Game, Continue, Gallery, Settings, Credits"
+      "name": "MainMenu",
+      "description": "Start new game, continue, settings, gallery, achievements"
+    },
+    {
+      "name": "Prologue",
+      "description": "First chapter introducing protagonist and workplace"
     },
     {
       "name": "CommonRoute",
-      "description": "First six chapters of linear story with choices"
-    },
-    {
-      "name": "RouteSelect",
-      "description": "Menu to choose one of four character routes after common route"
+      "description": "Chapters 2-3 with branching points towards character routes"
     },
     {
       "name": "CharacterRoute",
-      "description": "Route-specific chapters leading to ending"
+      "description": "Route-specific chapters (3 per route) with unique narrative"
     },
     {
       "name": "Ending",
-      "description": "Epilogue and credit roll, plus options to save/share"
+      "description": "Epilogue based on ending conditions"
+    },
+    {
+      "name": "SaveLoad",
+      "description": "Save/load interface"
     }
   ],
   "entities": [
     {
-      "name": "Player_Protagonist",
-      "type": "narrative_entity",
+      "name": "Lin_Main",
+      "type": "sprite",
       "behaviors": [
-        "stat_change",
-        "dialogue_choice"
+        "none (protagonist portrait)"
       ]
     },
     {
-      "name": "Li_Wei_UnionLeader",
-      "type": "npc",
+      "name": "Li_Wei_Union",
+      "type": "sprite",
       "behaviors": [
-        "affinity_respond",
-        "route_giver"
+        "expression_change",
+        "route_trigger"
       ]
     },
     {
-      "name": "Chen_Hacker",
-      "type": "npc",
+      "name": "Zhao_Hacker",
+      "type": "sprite",
       "behaviors": [
-        "affinity_respond",
-        "route_giver"
+        "expression_change",
+        "route_trigger"
       ]
     },
     {
-      "name": "Zhang_Reporter",
-      "type": "npc",
+      "name": "Chen_Journalist",
+      "type": "sprite",
       "behaviors": [
-        "affinity_respond",
-        "route_giver"
+        "expression_change",
+        "route_trigger"
       ]
     },
     {
       "name": "Wang_Entrepreneur",
-      "type": "npc",
+      "type": "sprite",
       "behaviors": [
-        "affinity_respond",
-        "route_giver"
+        "expression_change",
+        "route_trigger"
       ]
     }
   ],
   "ui_layout": {
     "hud": [
-      "dialogue_box",
-      "choice_panel",
-      "stat_bar_toggle",
-      "chapter_title"
+      "stat_bars",
+      "chapter_indicator",
+      "choice_panel"
     ],
     "menus": [
-      "pause_menu",
+      "pause",
       "settings",
       "gallery",
-      "route_selection"
+      "achievements",
+      "save_load"
     ]
   },
   "balance": {
     "starting_lives": 1,
-    "difficulty_curve": "Stats start at 50; thresholds for endings become progressively harder to reach unless player focuses on specific stats.",
-    "stat_starting_range": {
-      "morality": 50,
-      "economy": 30,
-      "social_influence": 20,
-      "mental_health": 60,
-      "technical_ability": 70
+    "difficulty_curve": "gradual over 4 chapters per route; later choices require higher stats to succeed",
+    "stat_start_values": {
+      "Prestige": 40,
+      "Conscience": 60,
+      "Money": 50,
+      "Social": 30,
+      "Tech": 70
     },
-    "stat_decay_rate": "morality: -1 per chapter if ignoring; mental_health: -2 per chapter if stressed; others decay -0.5 per chapter",
-    "ending_threshold_variance": "Easy endings (e.g., 'Become New Capitalist') require only one stat >70; hard endings (e.g., 'Collective Awakening') require morality>80, social>70, mental>60 and all other stats above 40."
+    "decay_per_chapter": {
+      "Prestige": -2,
+      "Money": -2,
+      "Conscience": 0,
+      "Social": 0,
+      "Tech": 0
+    },
+    "minimum_stat_for_best_choice": 80
   },
-  "estimated_play_session_minutes": 10,
+  "estimated_play_session_minutes": 30,
   "technical_architecture": {
     "game_pattern": "state_machine",
     "physics_engine": "none",
@@ -269,63 +283,60 @@
         "sub_systems": [
           "AssetLoader"
         ],
-        "uses_physics": false
+        "uses_physics": false,
+        "physics_engine": "none"
       },
-      "MenuScene": {
+      "MainMenuScene": {
         "sub_systems": [
+          "MenuUI",
           "SaveLoadManager"
         ],
-        "uses_physics": false
+        "uses_physics": false,
+        "physics_engine": "none"
       },
-      "CommonRouteScene": {
+      "GameScene": {
         "sub_systems": [
           "DialogueManager",
-          "ChoiceResolver",
-          "StatTracker"
+          "ChoiceManager",
+          "StatManager",
+          "RouteManager",
+          "EndingManager"
         ],
-        "uses_physics": false
+        "uses_physics": false,
+        "physics_engine": "none"
       },
-      "RouteSelectScene": {
+      "EndingScene": {
         "sub_systems": [
-          "RouteUnlockGate"
+          "EpilogueDisplay",
+          "CGUnlocker"
         ],
-        "uses_physics": false
-      },
-      "CharacterRouteScene": {
-        "sub_systems": [
-          "DialogueManager",
-          "ChoiceResolver",
-          "StatTracker",
-          "EndingEvaluator"
-        ],
-        "uses_physics": false
+        "uses_physics": false,
+        "physics_engine": "none"
       }
     },
     "code_organization": "scenes/entities/systems/data",
     "data_driven": {
-      "dialogues": "data/dialogues.json",
-      "choices": "data/choices.json",
-      "stats": "data/stats.json",
-      "routes": "data/routes.json",
+      "chapters": "data/chapters.json",
+      "characters": "data/characters.json",
       "endings": "data/endings.json"
     },
     "reusable_components": [
-      "DialogueBox",
-      "StatBar",
-      "ChoicePanel"
+      "StatBarDisplay",
+      "ChoicePanel",
+      "DialogueBox"
     ]
   },
-  "narrative_premise": "You are Xiao Ming, a skilled but overworked programmer at Megacorp, a company that illegally harvests user data for profit. After discovering a secret project called 'OmniGaze', you must decide whether to expose the truth, collaborate with the system, or lead a revolution from within. Your choices will determine not only your fate but the future of digital society.",
+  "narrative_premise": "In a dystopian tech company that exploits its workers and secretly harvests user data, you play as Lin, a disillusioned programmer. When you stumble upon evidence of massive data laundering, you must choose your path: collaborate for personal gain, fight for justice through labor organizing, leak to the press, build a worker-owned alternative, or sink into complicity. Every decision reshapes your values and the world around you.",
   "player_protagonist": {
-    "name": "Xiao Ming",
+    "name": "Lin Wei",
     "pronouns": "he/him",
-    "portrait_key": "player_default"
+    "portrait_key": "lin_default"
   },
   "character_roster": [
     {
       "name": "Li Wei",
       "role": "heroine",
-      "sprite_set": "public/assets/characters/li_wei",
+      "sprite_set": "characters/li_wei",
       "expression_variants": [
         "neutral",
         "happy",
@@ -333,16 +344,16 @@
         "surprised",
         "angry"
       ],
-      "personality": "Principled altruist, union organizer, always puts collective first.",
+      "personality": "compassionate union organizer",
       "stat_affinities": [
-        "morality",
-        "social_influence"
+        "Conscience",
+        "Social"
       ]
     },
     {
-      "name": "Chen Jie",
+      "name": "Zhao Ming",
       "role": "heroine",
-      "sprite_set": "public/assets/characters/chen_jie",
+      "sprite_set": "characters/zhao_ming",
       "expression_variants": [
         "neutral",
         "happy",
@@ -350,16 +361,16 @@
         "surprised",
         "angry"
       ],
-      "personality": "Cynical anarchist hacker, values technical freedom over order.",
+      "personality": "cynical hacker with a cause",
       "stat_affinities": [
-        "technical_ability",
-        "mental_health"
+        "Tech",
+        "Prestige"
       ]
     },
     {
-      "name": "Zhang Yan",
+      "name": "Chen Xue",
       "role": "heroine",
-      "sprite_set": "public/assets/characters/zhang_yan",
+      "sprite_set": "characters/chen_xue",
       "expression_variants": [
         "neutral",
         "happy",
@@ -367,16 +378,16 @@
         "surprised",
         "angry"
       ],
-      "personality": "Tenacious investigative journalist, truth above all.",
+      "personality": "tenacious investigative journalist",
       "stat_affinities": [
-        "social_influence",
-        "morality"
+        "Social",
+        "Prestige"
       ]
     },
     {
       "name": "Wang Lei",
       "role": "heroine",
-      "sprite_set": "public/assets/characters/wang_lei",
+      "sprite_set": "characters/wang_lei",
       "expression_variants": [
         "neutral",
         "happy",
@@ -384,130 +395,130 @@
         "surprised",
         "angry"
       ],
-      "personality": "Idealistic startup founder, believes in ethical technology.",
+      "personality": "idealistic ex-corporate founder",
       "stat_affinities": [
-        "economy",
-        "technical_ability"
+        "Money",
+        "Tech"
+      ]
+    },
+    {
+      "name": "Manager Hu",
+      "role": "antagonist",
+      "sprite_set": "characters/manager_hu",
+      "expression_variants": [
+        "neutral",
+        "angry",
+        "smug"
+      ],
+      "personality": "ruthless corporate enforcer",
+      "stat_affinities": [
+        "Prestige",
+        "Money"
       ]
     }
   ],
   "route_structure": {
-    "common_route_chapters": 6,
+    "common_route_chapters": 3,
     "character_routes": [
       {
         "key": "union",
-        "name": "The Union Path",
-        "chapters": 4,
-        "unlock": "morality >= 60 AND social_influence >= 50"
+        "name": "Workers' Unity",
+        "chapters": 3,
+        "unlock": "Conscience >= 70 AND Social >= 60"
       },
       {
         "key": "hacker",
-        "name": "The Hacker Path",
-        "chapters": 4,
-        "unlock": "technical_ability >= 70 AND mental_health >= 40"
+        "name": "Digital Liberation",
+        "chapters": 3,
+        "unlock": "Tech >= 80 AND Prestige >= 40"
       },
       {
-        "key": "reporter",
-        "name": "The Reporter Path",
-        "chapters": 4,
-        "unlock": "social_influence >= 60 AND morality >= 50"
+        "key": "journalist",
+        "name": "Expose the Truth",
+        "chapters": 3,
+        "unlock": "Social >= 70 AND Prestige >= 60"
       },
       {
         "key": "entrepreneur",
-        "name": "The Entrepreneur Path",
-        "chapters": 4,
-        "unlock": "economy >= 60 AND technical_ability >= 50"
+        "name": "Ethical Startup",
+        "chapters": 3,
+        "unlock": "Money >= 70 AND Tech >= 60"
       }
     ]
   },
   "stat_system": {
     "stats": [
       {
-        "name": "morality",
+        "name": "Prestige",
         "range": [
           0,
-          100
-        ],
-        "decay": 1,
-        "branching_thresholds": [
-          {
-            "op": ">=",
-            "value": 80,
-            "route": "union"
-          },
-          {
-            "op": "<=",
-            "value": 20,
-            "route": "corruption"
-          }
-        ]
-      },
-      {
-        "name": "economy",
-        "range": [
-          0,
-          100
-        ],
-        "decay": 0.5,
-        "branching_thresholds": [
-          {
-            "op": ">=",
-            "value": 70,
-            "route": "entrepreneur"
-          },
-          {
-            "op": "<=",
-            "value": 30,
-            "route": "impoverished"
-          }
-        ]
-      },
-      {
-        "name": "social_influence",
-        "range": [
-          0,
-          100
-        ],
-        "decay": 0.5,
-        "branching_thresholds": [
-          {
-            "op": ">=",
-            "value": 70,
-            "route": "reporter"
-          },
-          {
-            "op": "<=",
-            "value": 20,
-            "route": "loner"
-          }
-        ]
-      },
-      {
-        "name": "mental_health",
-        "range": [
-          20,
           100
         ],
         "decay": 2,
         "branching_thresholds": [
           {
-            "op": "<=",
-            "value": 30,
-            "route": "burnout"
+            "op": "gte",
+            "value": 60,
+            "route": "journalist"
           }
         ]
       },
       {
-        "name": "technical_ability",
+        "name": "Conscience",
         "range": [
           0,
           100
         ],
-        "decay": 0.5,
+        "decay": 0,
         "branching_thresholds": [
           {
-            "op": ">=",
-            "value": 75,
+            "op": "gte",
+            "value": 70,
+            "route": "union"
+          }
+        ]
+      },
+      {
+        "name": "Money",
+        "range": [
+          0,
+          100
+        ],
+        "decay": 2,
+        "branching_thresholds": [
+          {
+            "op": "gte",
+            "value": 70,
+            "route": "entrepreneur"
+          }
+        ]
+      },
+      {
+        "name": "Social",
+        "range": [
+          0,
+          100
+        ],
+        "decay": 0,
+        "branching_thresholds": [
+          {
+            "op": "gte",
+            "value": 70,
+            "route": "journalist"
+          }
+        ]
+      },
+      {
+        "name": "Tech",
+        "range": [
+          0,
+          100
+        ],
+        "decay": 0,
+        "branching_thresholds": [
+          {
+            "op": "gte",
+            "value": 80,
             "route": "hacker"
           }
         ]
@@ -515,1121 +526,977 @@
     ]
   },
   "branching_tree": {
-    "root": "common_start",
+    "root": "prologue_chapter1",
     "nodes": {
-      "scene_c1_1": {
-        "scene_key": "c1_1",
+      "prologue_chapter1": {
+        "scene_key": "prologue_1",
         "dialogue": [
-          "You enter the office...",
-          "Li Wei greets you."
+          "You wake up in your cubicle. The office hums with tension.",
+          "Manager Hu calls a last-minute meeting."
         ],
         "choices": [
           {
-            "label": "Ask about the project",
-            "next_node": "scene_c1_2",
+            "label": "Attend the meeting",
+            "next_node": "prologue_chapter2_attend",
             "stat_delta": {
-              "morality": 2,
-              "social_influence": 1
-            }
+              "Prestige": 2,
+              "Social": 1
+            },
+            "flag_set": []
           },
           {
-            "label": "Ignore and work",
-            "next_node": "scene_c1_3",
+            "label": "Ignore and stay coding",
+            "next_node": "prologue_chapter2_ignore",
             "stat_delta": {
-              "economy": 1,
-              "mental_health": -1
-            }
+              "Tech": 3,
+              "Conscience": -1
+            },
+            "flag_set": []
           }
         ]
       },
-      "scene_c1_2": {
-        "scene_key": "c1_2",
+      "prologue_chapter2_attend": {
+        "scene_key": "prologue_2a",
         "dialogue": [
-          "Li Wei shows you a cryptic file."
+          "The meeting reveals new surveillance software.",
+          "Li Wei whispers to you: 'We should resist.'"
         ],
         "choices": [
           {
-            "label": "Pursue the truth",
-            "next_node": "scene_c2_1",
+            "label": "Support Li Wei",
+            "next_node": "prologue_chapter3_union_seed",
             "stat_delta": {
-              "morality": 5,
-              "technical_ability": 2
-            }
+              "Social": 3,
+              "Conscience": 2
+            },
+            "flag_set": [
+              "met_LiWei"
+            ]
           },
           {
-            "label": "Stay safe",
-            "next_node": "scene_c1_3",
+            "label": "Stay silent",
+            "next_node": "prologue_chapter3_silent",
             "stat_delta": {
-              "mental_health": 2,
-              "economy": 2
-            }
+              "Prestige": 1,
+              "Conscience": -1
+            },
+            "flag_set": []
           }
         ]
       },
-      "scene_c1_3": {
-        "scene_key": "c1_3",
+      "prologue_chapter2_ignore": {
+        "scene_key": "prologue_2b",
         "dialogue": [
-          "You focus on your task."
+          "You hear rumors about a massive data leak.",
+          "Zhao Ming slides a USB under your keyboard."
         ],
         "choices": [
           {
-            "label": "Work overtime for bonus",
-            "next_node": "scene_c2_2",
+            "label": "Plug in the USB",
+            "next_node": "prologue_chapter3_hacker_seed",
             "stat_delta": {
-              "economy": 5,
-              "mental_health": -3
-            }
+              "Tech": 3,
+              "Money": -1
+            },
+            "flag_set": [
+              "met_ZhaoMing"
+            ]
           },
           {
-            "label": "Leave on time",
-            "next_node": "scene_c2_3",
+            "label": "Hand it to manager",
+            "next_node": "prologue_chapter3_turncoat",
             "stat_delta": {
-              "mental_health": 3,
-              "morality": 1
-            }
+              "Money": 5,
+              "Conscience": -5,
+              "Prestige": 2
+            },
+            "flag_set": []
           }
         ]
       },
-      "scene_c2_1": {
-        "scene_key": "c2_1",
+      "prologue_chapter3_union_seed": {
+        "scene_key": "prologue_3a",
         "dialogue": [
-          "You dig deeper into OmniGaze."
+          "Li Wei introduces you to other workers.",
+          "You now have a choice to join the union."
         ],
         "choices": [
           {
-            "label": "Contact a reporter (Zhang Yan)",
-            "next_node": "scene_c3_1",
+            "label": "Join union preparations",
+            "next_node": "route_union_start",
             "stat_delta": {
-              "social_influence": 3,
-              "morality": 3
-            }
+              "Social": 5,
+              "Conscience": 3
+            },
+            "flag_set": [
+              "union_chosen"
+            ]
           },
           {
-            "label": "Learn to hack on your own",
-            "next_node": "scene_c3_2",
+            "label": "Wait and see",
+            "next_node": "prologue_stalemate",
             "stat_delta": {
-              "technical_ability": 5,
-              "mental_health": -2
-            }
+              "Prestige": 1,
+              "Conscience": -2
+            },
+            "flag_set": []
           }
         ]
       },
-      "scene_c2_2": {
-        "scene_key": "c2_2",
+      "prologue_chapter3_silent": {
+        "scene_key": "prologue_3b",
         "dialogue": [
-          "You earn extra money but feel drained."
+          "No one confronts management.",
+          "You feel complicit."
         ],
         "choices": [
           {
-            "label": "Invest in stocks",
-            "next_node": "scene_c3_3",
+            "label": "Quietly investigate on your own",
+            "next_node": "prologue_chapter3_hacker_seed",
             "stat_delta": {
-              "economy": 7,
-              "mental_health": -1
-            }
+              "Tech": 2,
+              "Conscience": 1
+            },
+            "flag_set": [
+              "investigator"
+            ]
           },
           {
-            "label": "Buy some comfort",
-            "next_node": "scene_c3_4",
+            "label": "Accept the status quo",
+            "next_node": "prologue_chapter3_turncoat",
             "stat_delta": {
-              "mental_health": 3,
-              "economy": -2
-            }
+              "Money": 3,
+              "Conscience": -3
+            },
+            "flag_set": []
           }
         ]
       },
-      "scene_c2_3": {
-        "scene_key": "c2_3",
+      "prologue_chapter3_hacker_seed": {
+        "scene_key": "prologue_3c",
         "dialogue": [
-          "You meet Wang Lei at a cafe."
+          "Zhao Ming reveals a vulnerability in the company's server.",
+          "You can help him leak the data."
         ],
         "choices": [
           {
-            "label": "Discuss ethical tech startups",
-            "next_node": "scene_c3_5",
+            "label": "Collaborate with Zhao",
+            "next_node": "route_hacker_start",
             "stat_delta": {
-              "economy": 2,
-              "technical_ability": 2
-            }
+              "Tech": 5,
+              "Conscience": 2
+            },
+            "flag_set": [
+              "hacker_chosen"
+            ]
           },
           {
-            "label": "Complain about the job",
-            "next_node": "scene_c3_6",
+            "label": "Suggest going to the press instead",
+            "next_node": "route_journalist_start",
             "stat_delta": {
-              "morality": 1,
-              "social_influence": -1
-            }
+              "Social": 4,
+              "Prestige": 2
+            },
+            "flag_set": [
+              "journalist_chosen"
+            ]
+          },
+          {
+            "label": "Report to management",
+            "next_node": "prologue_chapter3_turncoat",
+            "stat_delta": {
+              "Money": 6,
+              "Prestige": 4,
+              "Conscience": -6
+            },
+            "flag_set": [
+              "snitch"
+            ]
           }
         ]
       },
-      "scene_c3_1": {
-        "scene_key": "c3_1",
+      "prologue_chapter3_turncoat": {
+        "scene_key": "prologue_3d",
         "dialogue": [
-          "Zhang Yan agrees to meet."
+          "Management rewards you with a promotion.",
+          "But your conscience burns."
         ],
         "choices": [
           {
-            "label": "Give her all evidence",
-            "next_node": "scene_c4_1",
+            "label": "Accept, become part of the system",
+            "next_node": "route_entrepreneur_start",
             "stat_delta": {
-              "morality": 10,
-              "social_influence": 8,
-              "mental_health": -4
-            }
+              "Money": 10,
+              "Prestige": 5,
+              "Conscience": -10
+            },
+            "flag_set": [
+              "entrepreneur_chosen"
+            ]
           },
           {
-            "label": "Hold back some info",
-            "next_node": "scene_c4_2",
+            "label": "Refuse and expose everything",
+            "next_node": "route_journalist_start",
             "stat_delta": {
-              "morality": 2,
-              "technical_ability": 3
-            }
+              "Conscience": 5,
+              "Social": 3
+            },
+            "flag_set": [
+              "whistleblower"
+            ]
           }
         ]
       },
-      "scene_c3_2": {
-        "scene_key": "c3_2",
+      "prologue_stalemate": {
+        "scene_key": "prologue_3e",
         "dialogue": [
-          "Chen Jie offers to teach you."
+          "Nothing changes. You continue working.",
+          "A news report about a different whistleblower appears."
         ],
         "choices": [
           {
-            "label": "Accept the training",
-            "next_node": "scene_c4_3",
+            "label": "Contact Chen Xue the journalist",
+            "next_node": "route_journalist_start",
             "stat_delta": {
-              "technical_ability": 10,
-              "morality": -3
-            }
+              "Social": 3,
+              "Prestige": 1
+            },
+            "flag_set": [
+              "contact_Chen"
+            ]
           },
           {
-            "label": "Decline and stay ethical",
-            "next_node": "scene_c4_4",
+            "label": "Start your own side project",
+            "next_node": "route_entrepreneur_start",
             "stat_delta": {
-              "morality": 5,
-              "social_influence": 2
-            }
+              "Tech": 2,
+              "Money": 2
+            },
+            "flag_set": [
+              "sideproject"
+            ]
           }
         ]
       },
-      "scene_c3_3": {
-        "scene_key": "c3_3",
+      "route_union_start": {
+        "scene_key": "union_ch1",
         "dialogue": [
-          "The market fluctuates."
+          "You organize the first strike meeting.",
+          "Company threatens retaliation."
         ],
         "choices": [
           {
-            "label": "Take risks",
-            "next_node": "scene_c4_5",
+            "label": "Push for a full strike",
+            "next_node": "union_ch2_strike",
             "stat_delta": {
-              "economy": 10,
-              "mental_health": -5
-            }
+              "Social": 5,
+              "Conscience": 3,
+              "Prestige": 2
+            },
+            "flag_set": []
           },
           {
-            "label": "Play it safe",
-            "next_node": "scene_c4_6",
+            "label": "Negotiate first",
+            "next_node": "union_ch2_negotiate",
             "stat_delta": {
-              "economy": 3,
-              "mental_health": 2
-            }
+              "Prestige": 3,
+              "Money": 1
+            },
+            "flag_set": []
           }
         ]
       },
-      "scene_c3_4": {
-        "scene_key": "c3_4",
+      "union_ch2_strike": {
+        "scene_key": "union_ch2a",
         "dialogue": [
-          "You indulge in luxuries."
+          "The strike sparks media attention.",
+          "Management brings in scabs."
         ],
         "choices": [
           {
-            "label": "Continue escapism",
-            "next_node": "scene_c4_7",
+            "label": "Escalate to occupy the office",
+            "next_node": "union_ch3_occupy",
             "stat_delta": {
-              "mental_health": 5,
-              "economy": -4,
-              "morality": -2
-            }
+              "Social": 4,
+              "Conscience": 3,
+              "Prestige": 2
+            },
+            "flag_set": []
           },
           {
-            "label": "Regret and reflect",
-            "next_node": "scene_c4_8",
+            "label": "Seek legal route",
+            "next_node": "union_ch3_legal",
             "stat_delta": {
-              "morality": 3,
-              "mental_health": 1
-            }
+              "Prestige": 3,
+              "Money": 1
+            },
+            "flag_set": []
           }
         ]
       },
-      "scene_c3_5": {
-        "scene_key": "c3_5",
+      "union_ch2_negotiate": {
+        "scene_key": "union_ch2b",
         "dialogue": [
-          "Wang Lei shares his vision."
+          "Management offers small concessions.",
+          "Workers are divided."
         ],
         "choices": [
           {
-            "label": "Join his startup",
-            "next_node": "scene_c4_9",
+            "label": "Accept the deal",
+            "next_node": "union_ch3_compromise",
             "stat_delta": {
-              "economy": 5,
-              "technical_ability": 5,
-              "social_influence": -2
-            }
+              "Money": 3,
+              "Prestige": 1,
+              "Conscience": -1
+            },
+            "flag_set": []
           },
           {
-            "label": "Stay skeptical",
-            "next_node": "scene_c4_10",
+            "label": "Reject and strengthen strike",
+            "next_node": "union_ch3_occupy",
             "stat_delta": {
-              "morality": 3,
-              "social_influence": 2
-            }
+              "Social": 3,
+              "Conscience": 2
+            },
+            "flag_set": []
           }
         ]
       },
-      "scene_c3_6": {
-        "scene_key": "c3_6",
+      "union_ch3_occupy": {
+        "scene_key": "union_ch3a",
         "dialogue": [
-          "Li Wei overhears and recruits you."
+          "You lead the occupation. The company caves.",
+          "Victory is near."
         ],
         "choices": [
           {
-            "label": "Join union efforts",
-            "next_node": "scene_c4_11",
-            "stat_delta": {
-              "social_influence": 8,
-              "morality": 5
-            }
-          },
-          {
-            "label": "Refuse and stay alone",
-            "next_node": "scene_c4_12",
-            "stat_delta": {
-              "mental_health": 2,
-              "social_influence": -3
-            }
+            "label": "Continue to closing",
+            "next_node": "route_union_ending",
+            "stat_delta": {},
+            "flag_set": []
           }
         ]
       },
-      "scene_c4_1": {
-        "scene_key": "c4_1",
+      "union_ch3_legal": {
+        "scene_key": "union_ch3b",
         "dialogue": [
-          "The investigation goes public."
+          "The lawsuit drags on. Workers lose morale.",
+          "But a settlement is reached."
         ],
         "choices": [
           {
-            "label": "Stand with Zhang Yan",
-            "next_node": "route_reporter",
-            "stat_delta": {
-              "social_influence": 10,
-              "morality": 10
-            }
-          },
-          {
-            "label": "Protect yourself",
-            "next_node": "scene_c5_1",
-            "stat_delta": {
-              "mental_health": 5,
-              "morality": -5
-            }
+            "label": "Continue to closing",
+            "next_node": "route_union_ending",
+            "stat_delta": {},
+            "flag_set": []
           }
         ]
       },
-      "scene_c4_2": {
-        "scene_key": "c4_2",
+      "union_ch3_compromise": {
+        "scene_key": "union_ch3c",
         "dialogue": [
-          "You keep some secrets."
+          "The deal satisfies some, but you've sold out.",
+          "Your conscience weighs heavy."
         ],
         "choices": [
           {
-            "label": "Use leverage for promotion",
-            "next_node": "scene_c5_2",
-            "stat_delta": {
-              "economy": 10,
-              "morality": -10
-            }
-          },
-          {
-            "label": "Delete everything and quit",
-            "next_node": "scene_c5_3",
-            "stat_delta": {
-              "mental_health": 8,
-              "morality": 5
-            }
+            "label": "Continue to closing",
+            "next_node": "route_union_ending",
+            "stat_delta": {},
+            "flag_set": []
           }
         ]
       },
-      "scene_c4_3": {
-        "scene_key": "c4_3",
+      "route_union_ending": {
+        "scene_key": "union_epilogue",
         "dialogue": [
-          "Chen Jie initiates you into hacking."
+          "The union story concludes. Your choices echo."
+        ],
+        "choices": []
+      },
+      "route_hacker_start": {
+        "scene_key": "hacker_ch1",
+        "dialogue": [
+          "You and Zhao mine data.",
+          "An encrypted file reveals ties to government surveillance."
         ],
         "choices": [
           {
-            "label": "Embrace anarchist methods",
-            "next_node": "route_hacker",
+            "label": "Release the data anonymously",
+            "next_node": "hacker_ch2_leak",
             "stat_delta": {
-              "technical_ability": 15,
-              "morality": -5
-            }
+              "Tech": 4,
+              "Conscience": 3,
+              "Prestige": -2
+            },
+            "flag_set": []
           },
           {
-            "label": "Use skills for whistleblowing only",
-            "next_node": "scene_c5_4",
+            "label": "Use data to blackmail the company",
+            "next_node": "hacker_ch2_blackmail",
             "stat_delta": {
-              "morality": 5,
-              "social_influence": 3
-            }
+              "Money": 5,
+              "Tech": 2,
+              "Conscience": -3
+            },
+            "flag_set": []
           }
         ]
       },
-      "scene_c4_4": {
-        "scene_key": "c4_4",
+      "hacker_ch2_leak": {
+        "scene_key": "hacker_ch2a",
         "dialogue": [
-          "You remain ethical but isolated."
+          "The leak goes viral.",
+          "Authorities begin investigating the company."
         ],
         "choices": [
           {
-            "label": "Approach Li Wei",
-            "next_node": "scene_c5_5",
+            "label": "Supply more evidence",
+            "next_node": "hacker_ch3_evidence",
             "stat_delta": {
-              "social_influence": 5,
-              "morality": 5
-            }
+              "Tech": 3,
+              "Conscience": 2,
+              "Prestige": -1
+            },
+            "flag_set": []
           },
           {
-            "label": "Try to expose on your own",
-            "next_node": "scene_c5_6",
+            "label": "Go into hiding",
+            "next_node": "hacker_ch3_hiding",
             "stat_delta": {
-              "technical_ability": 3,
-              "mental_health": -3
-            }
+              "Prestige": -2,
+              "Tech": 2
+            },
+            "flag_set": []
           }
         ]
       },
-      "scene_c4_5": {
-        "scene_key": "c4_5",
+      "hacker_ch2_blackmail": {
+        "scene_key": "hacker_ch2b",
         "dialogue": [
-          "Risks pay off, you become wealthy."
+          "You demand a huge payout.",
+          "But the company hits back with legal threats."
         ],
         "choices": [
           {
-            "label": "Use wealth to fund ethical projects",
-            "next_node": "route_entrepreneur",
+            "label": "Stand firm and release everything",
+            "next_node": "hacker_ch3_evidence",
             "stat_delta": {
-              "economy": 20,
-              "morality": 5
-            }
+              "Tech": 2,
+              "Conscience": 3
+            },
+            "flag_set": []
           },
           {
-            "label": "Become greedy",
-            "next_node": "scene_c5_7",
+            "label": "Accept a buyout and stay silent",
+            "next_node": "hacker_ch3_silence",
             "stat_delta": {
-              "morality": -10,
-              "economy": 10
-            }
+              "Money": 8,
+              "Prestige": -3,
+              "Conscience": -5
+            },
+            "flag_set": []
           }
         ]
       },
-      "scene_c4_6": {
-        "scene_key": "c4_6",
+      "hacker_ch3_evidence": {
+        "scene_key": "hacker_ch3a",
         "dialogue": [
-          "Cautious investing earns modest gains."
+          "You release the entire cache. The company collapses.",
+          "Truth wins."
         ],
         "choices": [
           {
-            "label": "Save for security",
-            "next_node": "scene_c5_8",
-            "stat_delta": {
-              "economy": 5,
-              "mental_health": 3
-            }
-          },
-          {
-            "label": "Donate to social causes",
-            "next_node": "scene_c5_9",
-            "stat_delta": {
-              "morality": 8,
-              "social_influence": 3
-            }
+            "label": "Continue to closing",
+            "next_node": "route_hacker_ending",
+            "stat_delta": {},
+            "flag_set": []
           }
         ]
       },
-      "scene_c4_7": {
-        "scene_key": "c4_7",
+      "hacker_ch3_hiding": {
+        "scene_key": "hacker_ch3b",
         "dialogue": [
-          "You sink into hedonism."
+          "You disappear, but the data dies with you.",
+          "The system remains."
         ],
         "choices": [
           {
-            "label": "Realize emptiness, turn to activism",
-            "next_node": "scene_c5_10",
-            "stat_delta": {
-              "morality": 5,
-              "mental_health": -2
-            }
-          },
-          {
-            "label": "Continue, destructive path",
-            "next_node": "ending_burnout",
-            "stat_delta": {
-              "mental_health": -20
-            }
+            "label": "Continue to closing",
+            "next_node": "route_hacker_ending",
+            "stat_delta": {},
+            "flag_set": []
           }
         ]
       },
-      "scene_c4_8": {
-        "scene_key": "c4_8",
+      "hacker_ch3_silence": {
+        "scene_key": "hacker_ch3c",
         "dialogue": [
-          "You decide to change."
+          "You take the money and live richly, but guilt follows.",
+          "You've betrayed the cause."
         ],
         "choices": [
           {
-            "label": "Join union",
-            "next_node": "scene_c5_11",
-            "stat_delta": {
-              "social_influence": 5,
-              "morality": 3
-            }
-          },
-          {
-            "label": "Focus on tech skills",
-            "next_node": "scene_c5_12",
-            "stat_delta": {
-              "technical_ability": 5,
-              "mental_health": 2
-            }
+            "label": "Continue to closing",
+            "next_node": "route_hacker_ending",
+            "stat_delta": {},
+            "flag_set": []
           }
         ]
       },
-      "scene_c4_9": {
-        "scene_key": "c4_9",
+      "route_hacker_ending": {
+        "scene_key": "hacker_epilogue",
         "dialogue": [
-          "You start the ethical startup."
+          "The hacker story concludes. Your choices ripple."
+        ],
+        "choices": []
+      },
+      "route_journalist_start": {
+        "scene_key": "journalist_ch1",
+        "dialogue": [
+          "Chen Xue helps you write an exposé.",
+          "But the editor is scared to publish."
         ],
         "choices": [
           {
-            "label": "Prioritize ethics over profit",
-            "next_node": "route_entrepreneur",
+            "label": "Leak to rival platform",
+            "next_node": "journalist_ch2_alt_publish",
             "stat_delta": {
-              "morality": 8,
-              "economy": 2
-            }
+              "Prestige": 4,
+              "Social": 3
+            },
+            "flag_set": []
           },
           {
-            "label": "Prioritize profit",
-            "next_node": "scene_c5_13",
+            "label": "Build a coalition of supporters",
+            "next_node": "journalist_ch2_coalition",
             "stat_delta": {
-              "economy": 10,
-              "morality": -5
-            }
+              "Social": 5,
+              "Conscience": 2
+            },
+            "flag_set": []
           }
         ]
       },
-      "scene_c4_10": {
-        "scene_key": "c4_10",
+      "journalist_ch2_alt_publish": {
+        "scene_key": "journalist_ch2a",
         "dialogue": [
-          "You remain doubtful."
+          "The story runs on an independent site.",
+          "Public outrage grows."
         ],
         "choices": [
           {
-            "label": "Seek Li Wei's perspective",
-            "next_node": "scene_c5_14",
+            "label": "Follow up with a protest call",
+            "next_node": "journalist_ch3_protest",
             "stat_delta": {
-              "social_influence": 4,
-              "morality": 3
-            }
+              "Social": 4,
+              "Conscience": 3
+            },
+            "flag_set": []
           },
           {
-            "label": "Investigate on your own",
-            "next_node": "scene_c5_15",
+            "label": "Write a book",
+            "next_node": "journalist_ch3_book",
             "stat_delta": {
-              "technical_ability": 3,
-              "mental_health": -2
-            }
+              "Prestige": 3,
+              "Money": 2
+            },
+            "flag_set": []
           }
         ]
       },
-      "scene_c4_11": {
-        "scene_key": "c4_11",
+      "journalist_ch2_coalition": {
+        "scene_key": "journalist_ch2b",
         "dialogue": [
-          "You join the union."
+          "You build alliances with activists.",
+          "The company tries to bribe you."
         ],
         "choices": [
           {
-            "label": "Organize a strike",
-            "next_node": "route_union",
+            "label": "Refuse the bribe and publish",
+            "next_node": "journalist_ch3_protest",
             "stat_delta": {
-              "social_influence": 15,
-              "morality": 10
-            }
+              "Conscience": 5,
+              "Social": 3,
+              "Prestige": 2
+            },
+            "flag_set": []
           },
           {
-            "label": "Negotiate quietly",
-            "next_node": "scene_c5_16",
+            "label": "Take the money and bury the story",
+            "next_node": "journalist_ch3_silence",
             "stat_delta": {
-              "economy": 3,
-              "mental_health": 2
-            }
+              "Money": 8,
+              "Prestige": -2,
+              "Conscience": -6
+            },
+            "flag_set": []
           }
         ]
       },
-      "scene_c4_12": {
-        "scene_key": "c4_12",
+      "journalist_ch3_protest": {
+        "scene_key": "journalist_ch3a",
         "dialogue": [
-          "You isolate yourself."
+          "You lead a massive protest. The company's reputation is shattered.",
+          "Change is possible."
         ],
         "choices": [
           {
-            "label": "Focus on coding hobby",
-            "next_node": "scene_c5_17",
-            "stat_delta": {
-              "technical_ability": 5,
-              "mental_health": 3
-            }
-          },
-          {
-            "label": "Spiral into depression",
-            "next_node": "ending_burnout",
-            "stat_delta": {
-              "mental_health": -30
-            }
+            "label": "Continue to closing",
+            "next_node": "route_journalist_ending",
+            "stat_delta": {},
+            "flag_set": []
           }
         ]
       },
-      "scene_c5_1": {
-        "scene_key": "c5_1",
+      "journalist_ch3_book": {
+        "scene_key": "journalist_ch3b",
         "dialogue": [
-          "You hide but guilt grows."
+          "Your book becomes a bestseller, but the company survives.",
+          "You educate the public."
         ],
         "choices": [
           {
-            "label": "Eventually confess",
-            "next_node": "ending_confession",
-            "stat_delta": {
-              "morality": 20,
-              "social_influence": -10
-            }
-          },
-          {
-            "label": "Suppress it",
-            "next_node": "ending_become_capitalist",
-            "stat_delta": {
-              "economy": 10,
-              "morality": -20
-            }
+            "label": "Continue to closing",
+            "next_node": "route_journalist_ending",
+            "stat_delta": {},
+            "flag_set": []
           }
         ]
       },
-      "scene_c5_2": {
-        "scene_key": "c5_2",
+      "journalist_ch3_silence": {
+        "scene_key": "journalist_ch3c",
         "dialogue": [
-          "You get promoted, but at a cost."
+          "You take the hush money. The story dies.",
+          "You've become part of the machine."
         ],
         "choices": [
           {
-            "label": "Use position for reform",
-            "next_node": "ending_flawed_reform",
-            "stat_delta": {
-              "morality": 5,
-              "social_influence": 5
-            }
-          },
-          {
-            "label": "Embrace the system",
-            "next_node": "ending_become_capitalist",
-            "stat_delta": {
-              "economy": 20,
-              "morality": -15
-            }
+            "label": "Continue to closing",
+            "next_node": "route_journalist_ending",
+            "stat_delta": {},
+            "flag_set": []
           }
         ]
       },
-      "scene_c5_3": {
-        "scene_key": "c5_3",
+      "route_journalist_ending": {
+        "scene_key": "journalist_epilogue",
         "dialogue": [
-          "You quit and go freelance."
+          "The journalist tale ends. Your words had weight."
+        ],
+        "choices": []
+      },
+      "route_entrepreneur_start": {
+        "scene_key": "entrepreneur_ch1",
+        "dialogue": [
+          "You gather seed money for an ethical startup.",
+          "Wang Lei suggests making it fully open-source."
         ],
         "choices": [
           {
-            "label": "Live simply and ethically",
-            "next_node": "ending_escape",
+            "label": "Open-source everything",
+            "next_node": "entrepreneur_ch2_opensource",
             "stat_delta": {
-              "mental_health": 15,
-              "morality": 5
-            }
+              "Tech": 5,
+              "Social": 2,
+              "Money": -2
+            },
+            "flag_set": []
           },
           {
-            "label": "Miss the money",
-            "next_node": "scene_c5_2",
+            "label": "Keep proprietary for competitive edge",
+            "next_node": "entrepreneur_ch2_proprietary",
             "stat_delta": {
-              "economy": -5,
-              "mental_health": -5
-            }
+              "Money": 5,
+              "Prestige": 3,
+              "Conscience": -2
+            },
+            "flag_set": []
           }
         ]
       },
-      "scene_c5_4": {
-        "scene_key": "c5_4",
+      "entrepreneur_ch2_opensource": {
+        "scene_key": "entrepreneur_ch2a",
         "dialogue": [
-          "You become a vigilante leaker."
+          "The open-source product gains traction.",
+          "Big companies try to buy you out."
         ],
         "choices": [
           {
-            "label": "Stay underground",
-            "next_node": "ending_hacktivist",
+            "label": "Reject buyout, keep it open",
+            "next_node": "entrepreneur_ch3_thriving",
             "stat_delta": {
-              "technical_ability": 10,
-              "morality": 5
-            }
+              "Tech": 3,
+              "Social": 3,
+              "Conscience": 2
+            },
+            "flag_set": []
           },
           {
-            "label": "Go mainstream",
-            "next_node": "route_reporter",
+            "label": "Sell to fund a larger vision",
+            "next_node": "entrepreneur_ch3_sold",
             "stat_delta": {
-              "social_influence": 10,
-              "morality": 3
-            }
+              "Money": 8,
+              "Prestige": 3,
+              "Conscience": -2
+            },
+            "flag_set": []
           }
         ]
       },
-      "scene_c5_5": {
-        "scene_key": "c5_5",
+      "entrepreneur_ch2_proprietary": {
+        "scene_key": "entrepreneur_ch2b",
         "dialogue": [
-          "Li Wei welcomes you."
+          "Your startup grows fast, but acquires debt.",
+          "Investors demand worker surveillance features."
         ],
         "choices": [
           {
-            "label": "Become a union organizer",
-            "next_node": "route_union",
+            "label": "Include the feature for profit",
+            "next_node": "entrepreneur_ch3_corrupt",
             "stat_delta": {
-              "social_influence": 10,
-              "morality": 10
-            }
+              "Money": 6,
+              "Prestige": 2,
+              "Conscience": -5
+            },
+            "flag_set": []
           },
           {
-            "label": "Just be a member",
-            "next_node": "ending_bystander",
+            "label": "Refuse and pivot to ethical model",
+            "next_node": "entrepreneur_ch3_thriving",
             "stat_delta": {
-              "mental_health": 5,
-              "social_influence": 2
-            }
+              "Conscience": 4,
+              "Social": 2
+            },
+            "flag_set": []
           }
         ]
       },
-      "scene_c5_6": {
-        "scene_key": "c5_6",
+      "entrepreneur_ch3_thriving": {
+        "scene_key": "entrepreneur_ch3a",
         "dialogue": [
-          "Your solo exposure fails."
+          "Your ethical startup flourishes, inspiring others.",
+          "A new economy is born."
         ],
         "choices": [
           {
-            "label": "Give up",
-            "next_node": "ending_give_up",
-            "stat_delta": {
-              "mental_health": -10
-            }
-          },
-          {
-            "label": "Join a collective",
-            "next_node": "route_union",
-            "stat_delta": {
-              "social_influence": 8,
-              "morality": 5
-            }
+            "label": "Continue to closing",
+            "next_node": "route_entrepreneur_ending",
+            "stat_delta": {},
+            "flag_set": []
           }
         ]
       },
-      "scene_c5_7": {
-        "scene_key": "c5_7",
+      "entrepreneur_ch3_sold": {
+        "scene_key": "entrepreneur_ch3b",
         "dialogue": [
-          "Greed leads to success."
+          "You sell out, but the money funds a new foundation.",
+          "Mixed legacy."
         ],
         "choices": [
           {
-            "label": "Compete ruthlessly",
-            "next_node": "ending_become_capitalist",
-            "stat_delta": {
-              "economy": 20,
-              "morality": -20
-            }
-          },
-          {
-            "label": "Feel guilty, donate",
-            "next_node": "ending_philanthropist",
-            "stat_delta": {
-              "economy": -10,
-              "morality": 15
-            }
+            "label": "Continue to closing",
+            "next_node": "route_entrepreneur_ending",
+            "stat_delta": {},
+            "flag_set": []
           }
         ]
       },
-      "scene_c5_8": {
-        "scene_key": "c5_8",
+      "entrepreneur_ch3_corrupt": {
+        "scene_key": "entrepreneur_ch3c",
         "dialogue": [
-          "You save money and feel secure."
+          "You implement surveillance, becoming what you hated.",
+          "Profit over ethics."
         ],
         "choices": [
           {
-            "label": "Invest in ethical funds",
-            "next_node": "route_entrepreneur",
-            "stat_delta": {
-              "economy": 5,
-              "morality": 3
-            }
-          },
-          {
-            "label": "Retire early",
-            "next_node": "ending_escape",
-            "stat_delta": {
-              "mental_health": 10
-            }
+            "label": "Continue to closing",
+            "next_node": "route_entrepreneur_ending",
+            "stat_delta": {},
+            "flag_set": []
           }
         ]
       },
-      "scene_c5_9": {
-        "scene_key": "c5_9",
+      "route_entrepreneur_ending": {
+        "scene_key": "entrepreneur_epilogue",
         "dialogue": [
-          "Donating increases your reputation."
+          "The entrepreneur saga ends. Your startup changed the world, or didn't."
         ],
-        "choices": [
-          {
-            "label": "Continue charity work",
-            "next_node": "ending_philanthropist",
-            "stat_delta": {
-              "social_influence": 10,
-              "morality": 10
-            }
-          },
-          {
-            "label": "Join a political campaign",
-            "next_node": "route_reporter",
-            "stat_delta": {
-              "social_influence": 5,
-              "morality": 5
-            }
-          }
-        ]
-      },
-      "scene_c5_10": {
-        "scene_key": "c5_10",
-        "dialogue": [
-          "You find purpose in activism."
-        ],
-        "choices": [
-          {
-            "label": "Organize protests",
-            "next_node": "route_union",
-            "stat_delta": {
-              "social_influence": 12,
-              "morality": 8
-            }
-          },
-          {
-            "label": "Write a blog",
-            "next_node": "route_reporter",
-            "stat_delta": {
-              "social_influence": 5,
-              "technical_ability": 3
-            }
-          }
-        ]
-      },
-      "scene_c5_11": {
-        "scene_key": "c5_11",
-        "dialogue": [
-          "Union work gives meaning."
-        ],
-        "choices": [
-          {
-            "label": "Be a negotiator",
-            "next_node": "route_union",
-            "stat_delta": {
-              "social_influence": 10,
-              "morality": 5
-            }
-          },
-          {
-            "label": "Be a supporter",
-            "next_node": "ending_bystander",
-            "stat_delta": {
-              "mental_health": 5,
-              "morality": 2
-            }
-          }
-        ]
-      },
-      "scene_c5_12": {
-        "scene_key": "c5_12",
-        "dialogue": [
-          "You become a skilled technician."
-        ],
-        "choices": [
-          {
-            "label": "Start a cooperative",
-            "next_node": "route_entrepreneur",
-            "stat_delta": {
-              "economy": 5,
-              "technical_ability": 5,
-              "morality": 3
-            }
-          },
-          {
-            "label": "Work for a non-profit",
-            "next_node": "ending_escape",
-            "stat_delta": {
-              "mental_health": 5,
-              "morality": 3
-            }
-          }
-        ]
-      },
-      "scene_c5_13": {
-        "scene_key": "c5_13",
-        "dialogue": [
-          "Profit focus leads to selling out."
-        ],
-        "choices": [
-          {
-            "label": "Accept buyout",
-            "next_node": "ending_become_capitalist",
-            "stat_delta": {
-              "economy": 30,
-              "morality": -20
-            }
-          },
-          {
-            "label": "Reject and stay ethical",
-            "next_node": "route_entrepreneur",
-            "stat_delta": {
-              "morality": 10,
-              "economy": -10
-            }
-          }
-        ]
-      },
-      "scene_c5_14": {
-        "scene_key": "c5_14",
-        "dialogue": [
-          "Li Wei convinces you to act."
-        ],
-        "choices": [
-          {
-            "label": "Join the union",
-            "next_node": "route_union",
-            "stat_delta": {
-              "social_influence": 10,
-              "morality": 5
-            }
-          },
-          {
-            "label": "Stay an observer",
-            "next_node": "ending_bystander",
-            "stat_delta": {
-              "mental_health": 3
-            }
-          }
-        ]
-      },
-      "scene_c5_15": {
-        "scene_key": "c5_15",
-        "dialogue": [
-          "Investigation shows massive corruption."
-        ],
-        "choices": [
-          {
-            "label": "Share with Zhang Yan",
-            "next_node": "route_reporter",
-            "stat_delta": {
-              "social_influence": 8,
-              "morality": 8
-            }
-          },
-          {
-            "label": "Use for personal gain",
-            "next_node": "scene_c5_2",
-            "stat_delta": {
-              "economy": 10,
-              "morality": -10
-            }
-          }
-        ]
-      },
-      "scene_c5_16": {
-        "scene_key": "c5_16",
-        "dialogue": [
-          "Quiet negotiation yields minor wins."
-        ],
-        "choices": [
-          {
-            "label": "Continue incremental change",
-            "next_node": "ending_flawed_reform",
-            "stat_delta": {
-              "social_influence": 5,
-              "morality": 3
-            }
-          },
-          {
-            "label": "Realize need for radical action",
-            "next_node": "route_union",
-            "stat_delta": {
-              "morality": 5,
-              "social_influence": 5
-            }
-          }
-        ]
-      },
-      "scene_c5_17": {
-        "scene_key": "c5_17",
-        "dialogue": [
-          "Your coding hobby becomes a startup."
-        ],
-        "choices": [
-          {
-            "label": "Stay small and ethical",
-            "next_node": "route_entrepreneur",
-            "stat_delta": {
-              "economy": 3,
-              "technical_ability": 3,
-              "morality": 5
-            }
-          },
-          {
-            "label": "Attract venture capital",
-            "next_node": "scene_c5_13",
-            "stat_delta": {
-              "economy": 10,
-              "morality": -3
-            }
-          }
-        ]
+        "choices": []
       }
     }
   },
   "ending_conditions": [
     {
-      "name": "Collective_Awakening",
+      "name": "New Capitalist",
       "trigger": {
-        "route": "union",
-        "morality:>=": 80,
-        "social_influence:>=": 75,
-        "mental_health:>=": 60
+        "Conscience": {
+          "lte": 20
+        },
+        "Money": {
+          "gte": 80
+        }
       },
-      "epilogue_key": "epilogue_collective",
-      "is_good_ending": 1
-    },
-    {
-      "name": "Become_New_Capitalist",
-      "trigger": {
-        "economy:>=": 80,
-        "morality:<=": 20
-      },
-      "epilogue_key": "epilogue_capitalist",
+      "epilogue_key": "ending_new_capitalist",
       "is_good_ending": 0
     },
     {
-      "name": "Hacktivist_Truth",
+      "name": "Union Victory",
+      "trigger": {
+        "route": "union",
+        "Social": {
+          "gte": 80
+        },
+        "Conscience": {
+          "gte": 70
+        }
+      },
+      "epilogue_key": "ending_union_victory",
+      "is_good_ending": 1
+    },
+    {
+      "name": "Hacker Liberation",
       "trigger": {
         "route": "hacker",
-        "technical_ability:>=": 85,
-        "morality:>=": 60
+        "Tech": {
+          "gte": 90
+        },
+        "Conscience": {
+          "gte": 60
+        }
       },
-      "epilogue_key": "epilogue_hacktivist",
+      "epilogue_key": "ending_hacker_liberation",
       "is_good_ending": 1
     },
     {
-      "name": "Journalistic_Victory",
+      "name": "Journalist Exposure",
       "trigger": {
-        "route": "reporter",
-        "social_influence:>=": 80,
-        "morality:>=": 70
+        "route": "journalist",
+        "Prestige": {
+          "gte": 80
+        },
+        "Social": {
+          "gte": 70
+        }
       },
-      "epilogue_key": "epilogue_reporter",
+      "epilogue_key": "ending_journalist_exposure",
       "is_good_ending": 1
     },
     {
-      "name": "Ethical_Startup",
+      "name": "Ethical Startup",
       "trigger": {
         "route": "entrepreneur",
-        "economy:>=": 70,
-        "morality:>=": 65
+        "Money": {
+          "gte": 60
+        },
+        "Tech": {
+          "gte": 70
+        },
+        "Conscience": {
+          "gte": 50
+        }
       },
-      "epilogue_key": "epilogue_entrepreneur",
+      "epilogue_key": "ending_ethical_startup",
       "is_good_ending": 1
+    },
+    {
+      "name": "Silenced",
+      "trigger": {
+        "Social": {
+          "lte": 20
+        },
+        "Prestige": {
+          "lte": 30
+        }
+      },
+      "epilogue_key": "ending_silenced",
+      "is_good_ending": 0
     },
     {
       "name": "Burnout",
       "trigger": {
-        "mental_health:<=": 20
+        "Tech": {
+          "gte": 90
+        },
+        "Conscience": {
+          "lte": 30
+        }
       },
-      "epilogue_key": "epilogue_burnout",
+      "epilogue_key": "ending_burnout",
       "is_good_ending": 0
     },
     {
-      "name": "Flawed_Reform",
+      "name": "Collective Awakening",
       "trigger": {
-        "social_influence:>=": 50,
-        "morality:>=": 50,
-        "economy:<=": 40
+        "Conscience": {
+          "gte": 85
+        },
+        "Social": {
+          "gte": 85
+        },
+        "Tech": {
+          "gte": 60
+        }
       },
-      "epilogue_key": "epilogue_reform",
-      "is_good_ending": 0
-    },
-    {
-      "name": "Escape_Artist",
-      "trigger": {
-        "mental_health:>=": 80,
-        "social_influence:<=": 30,
-        "economy:>=": 40
-      },
-      "epilogue_key": "epilogue_escape",
-      "is_good_ending": 0
+      "epilogue_key": "ending_collective_awakening",
+      "is_good_ending": 1
     }
   ],
   "cg_milestones": [
     {
-      "scene_id": "scene_c3_1",
-      "cg_key": "cg_meet_reporter",
-      "condition": "player meets Zhang Yan"
+      "scene_id": "prologue_chapter2_attend",
+      "cg_key": "cg_meeting",
+      "condition": "Choose to attend meeting"
     },
     {
-      "scene_id": "scene_c4_11",
-      "cg_key": "cg_union_march",
-      "condition": "player joins union after chapter 4"
-    },
-    {
-      "scene_id": "c3_hacker",
-      "cg_key": "cg_server_room",
-      "description": "Hacking scene in server room"
-    },
-    {
-      "scene_id": "c3_union",
+      "scene_id": "union_ch2_strike",
       "cg_key": "cg_strike",
-      "description": "Strike action scene"
+      "condition": "Choose strike escalation"
+    },
+    {
+      "scene_id": "hacker_ch2_leak",
+      "cg_key": "cg_hack",
+      "condition": "Choose anonymous leak"
+    },
+    {
+      "scene_id": "journalist_ch2_alt_publish",
+      "cg_key": "cg_publish",
+      "condition": "Choose alternative publication"
+    },
+    {
+      "scene_id": "entrepreneur_ch2_opensource",
+      "cg_key": "cg_opensource",
+      "condition": "Choose open-source route"
     }
   ],
   "save_points": [
     {
-      "scene_id": "scene_c1_1",
-      "save_key": "save_01"
+      "scene_id": "prologue_chapter2_attend",
+      "save_key": "save_prologue_choice1"
     },
     {
-      "scene_id": "scene_c2_1",
-      "save_key": "save_02"
+      "scene_id": "prologue_chapter3_union_seed",
+      "save_key": "save_prologue_union"
     },
     {
-      "scene_id": "scene_c3_1",
-      "save_key": "save_03"
+      "scene_id": "prologue_chapter3_hacker_seed",
+      "save_key": "save_prologue_hacker"
     },
     {
-      "scene_id": "scene_c4_1",
-      "save_key": "save_04"
+      "scene_id": "route_union_start",
+      "save_key": "save_route_union_ch1"
     },
     {
-      "scene_id": "route_union",
-      "save_key": "save_route"
+      "scene_id": "route_hacker_start",
+      "save_key": "save_route_hacker_ch1"
     },
     {
-      "scene_id": "scene_c5_1",
-      "save_key": "save_final"
+      "scene_id": "route_journalist_start",
+      "save_key": "save_route_journalist_ch1"
+    },
+    {
+      "scene_id": "route_entrepreneur_start",
+      "save_key": "save_route_entrepreneur_ch1"
     }
   ],
   "vn_schema_version": "1.0"

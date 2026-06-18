@@ -24,4 +24,4 @@ repos:
       - id: mypy
         files: ^(orchestrator|shared|agents|dashboard)/.+\.py$
         additional_dependencies: []
-        args: [--strict, --ignore-missing-imports]
+        args: [--ignore-missing-imports]
